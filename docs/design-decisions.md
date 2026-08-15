@@ -105,10 +105,67 @@ refinement live in OpenCV, and reimplementing them ourselves is riskier than pac
 trade is packaging work versus reimplementation work — we chose packaging, because the algorithms
 already exist.
 
-**Budget real time for this.** Large installer, a separate build per platform, and **frozen
-executables get flagged by Windows antivirus** often enough to be a genuine deployment problem.
-Code-signing the executable is usually the fix — plan for it rather than discovering it during
-handover.
+**Budget real time for this.** Large installer and a separate build per platform.
+
+### Code signing: shipping unsigned
+
+**Decided:** ship **unsigned**, permanently. No code-signing certificate will be obtained.
+
+**What this costs us.** Unsigned software triggers Windows' *"Windows protected your PC"* warning,
+which most people read as *this is malware*. Worse, **malware authors also use PyInstaller** to
+bundle Python into a single executable, so antivirus engines treat that structure as suspicious in
+itself. Our benign inference sidecar looks structurally like something they are trained to catch,
+and it can be **quarantined** rather than merely warned about — after which the app stops working on
+that machine.
+
+**Why we cannot simply fix it:** OV and EV certificates require a **registered business** — the CA
+verifies incorporation documents and calls a listed business number. A student cannot obtain one as
+an individual; only Arun Paint Industries would be eligible. There is no free option Windows trusts
+for closed-source software.
+
+**Mitigations, since prevention is out of reach:**
+
+- The **boot screen** (below) already surfaces service-start failures, so a quarantined sidecar
+  becomes a clear message at launch rather than a mystery mid-consultation.
+- That message must **name the likely cause and the remedy** — a dealer would never guess that their
+  antivirus removed a component, or that it can be restored from quarantine.
+- **Microsoft's false-positive review is free and requires no certificate.** Use it as a remedy if
+  this actually bites in practice.
+
+**Revisit if** dealers report installs failing. The eligible party (the partner) can obtain a
+certificate at any point; verification takes up to two weeks.
+
+### The REST contract
+
+**Decided:** a session-oriented contract, with progress delivered by **server-sent events**.
+
+```
+POST   /sessions              (photo upload) → { session_id }   ← processing starts here
+GET    /sessions/{id}/events                                     ← SSE progress stream
+GET    /sessions/{id}/planes                                     ← wall planes, once ready
+POST   /sessions/{id}/renders { assignments, mode }               ← one per shade change
+DELETE /sessions/{id}
+```
+
+**This shape is what makes encode-once structural rather than a convention people remember.** A
+photo can only enter through `POST /sessions`; every render refers to a `session_id`. There is
+deliberately **no endpoint accepting an image and a shade together**, so re-encoding is not something
+to avoid — it cannot be expressed. ADR-0001's requirement is satisfied by *omitting* an endpoint
+rather than by adding a guard.
+
+`mode` carries realistic-vs-true-colour (§6). Processing begins on upload, not on render request, so
+the expensive work overlaps with the dealer talking to the customer (§13).
+
+**Why SSE for progress:** it is plain HTTP, so it **lifts to a server unchanged** — which the
+one-codebase-two-deployments argument depends on. Progress flows one way only, so WebSocket's
+bidirectionality would be unused capability. And the code reads as *"when a message arrives, show
+it"*, with no timer or change-detection bookkeeping.
+
+**Rejected:** piping progress through Electron's child-process stream. It works only because Python
+is a local child process; a server deployment has no such channel, so it would require a second
+mechanism for the web target and break the shared contract. Polling was a close second — genuinely
+defensible on localhost, where the traffic costs nothing and a 200ms interval is imperceptible — but
+it trades cleaner code for more state to manage.
 
 ### Open: tier definitions
 
@@ -217,9 +274,21 @@ ADE20K **has** `mirror` and `painting`. It has **no class** for switchplate, ele
 pipe — the semantic model will label all three as `wall`, and SAM 2 constrained to the wall region
 has no reason to remove them. **They will be painted over.**
 
-**Open:** either accept this for V1, or add a mechanism (small-object detector, or dealer
-tap-to-exclude). Given the 3-tap budget, accepting it for V1 is likely right — a painted-over
-switchplate is a small, forgivable artefact.
+**Decided:** **accept for V1**, and **add switchplate / socket / pipe as classes when training our
+own model** (task in [handoff/custom-wall-segmentation-model.md](./handoff/custom-wall-segmentation-model.md)).
+
+The timing is favourable: we are already labelling our own photographs of real rooms for the licence
+replacement, so adding a few small classes while someone is already drawing wall boundaries costs
+little — and it makes our model genuinely *better* than the baseline it replaces, not merely legally
+shippable.
+
+**Accepted cost:** V1 demos and early dealer trials will show painted-over switches, which is
+exactly when first impressions form. This is the most customer-visible flaw in the render — nobody
+needs to be told a dark-blue light switch looks wrong.
+
+**Rejected:** a heuristic detector for small bright rectangles. It misfires on picture frames, vents,
+reflections and light patches, and every false positive leaves an unpainted hole in the middle of the
+wall — worse than the original problem.
 
 **The principle still holds:** exclusion is **semantic, not photometric**. The test is "is this wall
 material?", never "does this look like the rest of the wall?" Include shadows, sheen variation and
@@ -302,6 +371,25 @@ minority case degrades safely.
 
 **Open:** the blend curve, and whether the transition is visible on two similar walls landing either
 side of it.
+
+### Noise: clean the light map in proportion to how noisy it is
+
+**Decided:** measure how noisy each wall region actually is and smooth the light map proportionally —
+heavily on dark, underexposed walls, barely at all on well-lit ones.
+
+**The problem this addresses** is not clipping, which is what it looks like. It is **missing
+information**. A dark wall is captured using only a small handful of the camera's brightness levels;
+repainting it cream stretches those few levels across a wide bright range, and the gaps between them
+surface as blotches, banding and speckle. The camera never recorded the detail, so nothing recovers
+it.
+
+**Why proportional rather than uniform:** roller texture and plaster grain live in exactly the same
+fine detail as the noise. Smooth too hard and the wall goes plastic and flat — the look this whole
+design fights. Targeting the smoothing at regions that measurably need it preserves texture
+wherever it was genuinely captured.
+
+**Open:** the noise estimate and the smoothing curve (§12 item 20). A wall that is half in shadow may
+receive uneven treatment.
 
 ### Corners: every pixel belongs to exactly one plane
 
@@ -502,14 +590,45 @@ render, and delete.
 
 **Bundle** (renameable) → **Session** → **Photo** → **WallPlane** → **Render**
 
-**⚠ Sharing has a consequence worth naming.** The moment a render can be shared, photographs of
-customers' homes can leave the shop — which is the exposure ADR-0001 avoided by staying local. It is
-benign in the normal case (sending a customer their own room), but the sharing path needs a
-deliberate design rather than a raw file handoff, and it should generate a JPEG rather than hand out
-the PNG archive.
+**Decided: sharing produces a plain rendered JPEG.** No overlay, no branding, no before-and-after
+composite. The JPEG is generated for sharing rather than handing out the PNG archive, and the
+**shade code goes in the filename** (`AP-2140-Almond-Cream.jpg`) since that costs nothing.
 
-**Open:** where the SQLite file lives on disk, the default auto-clear period, and the sharing
-mechanism itself.
+**Known trade-off, accepted:** a shared render carries no visible record of which shade it was. The
+customer gets home with a picture of their own room in a nice colour and no name for the colour —
+the single most useful thing for closing the sale is absent from the one artifact they take away.
+Messaging apps also frequently strip filenames, so the filename mitigation is partial at best.
+Revisit if dealers report customers returning unable to name their choice.
+
+**⚠ Sharing has a privacy consequence worth naming.** The moment a render can be shared,
+photographs of customers' homes can leave the shop — the exposure ADR-0001 avoided by staying local.
+Benign in the normal case (sending a customer their own room), but it is a deliberate hole in the
+local-only posture, not an oversight.
+
+### Retention: nothing is deleted automatically
+
+**Decided:** **no auto-clear.** Data is removed only when the dealer chooses to remove it.
+
+**The cost, stated plainly:** a 4000×3000 lossless PNG is roughly 10–15 MB. A shop doing ten
+consultations a day at four shades each generates about **500 MB per day — roughly 15 GB per
+month.** A typical shop PC fills within two years of steady use, sooner if business is good, and
+nobody will be watching. The failure mode is the app breaking on a full disk *during a
+consultation*.
+
+**Two requirements that make manual-only viable** — manual deletion is meaningless if the dealer
+cannot see what to delete, or only learns about the problem once it is one:
+
+- **Warn on low disk space well before it is critical**, not at the point of failure.
+- **Provide a storage view** showing which bundles consume the space, so deletion is an informed
+  action rather than guesswork.
+
+Revisit if real usage data shows shops filling disks faster than expected.
+
+### Location
+
+**Decided:** the database and images live in the OS standard **per-user application data
+directory**, not beside the application. Survives reinstalls and upgrades, and needs no admin
+rights to write.
 
 ---
 
@@ -542,7 +661,12 @@ Objectives 1 and 3; the hand-labelled test set must actually be built.
   considered and **deferred** — it is unreliable from a single photo.
 - **Very dark regions produce a noisy light map**, since dividing by small numbers amplifies noise.
   Needs clamping.
-- **Switchplates, sockets and pipes will be painted over** (§5).
+- **Switchplates, sockets and pipes will be painted over** (§5) — the most customer-visible flaw in
+  V1. Fixed when our own model adds them as classes.
+- **The app ships unsigned**, so Windows shows a publisher warning on install and antivirus may
+  quarantine the Python sidecar (§3). Detectable at boot, not preventable.
+- **A shared render carries no visible shade name** (§9) — only in the filename, which messaging
+  apps often strip.
 - **Saturated existing walls lose coloured shadows.** By design — see §6's saturation blend. The
   render stays correct, but loses a touch of realism exactly where the maths runs out of signal.
 - **Cross-brand matching is not possible** (§7). One catalogue at a time.
@@ -560,21 +684,24 @@ Objectives 1 and 3; the hand-labelled test set must actually be built.
 | 2 | **Build our own wall segmentation model** to replace SegFormer (§5) — *decided, planned, [handoff](./handoff/custom-wall-segmentation-model.md)*. First step: verify dataset licences | Commercial deployment | — | — |
 | 3 | Which ORT package ships; DirectML or separate GPU build (§3) | Installer, tier table | — | — |
 | 4 | Tier table: names, detection rules, variants, resolutions (§3) | Implementation | — | — |
-| 5 | REST contract sketch, incl. the encode-session handle that makes re-encoding structurally impossible (§3) | Implementation | — | — |
+| 5 | ~~REST contract~~ — **decided:** session-oriented, SSE progress (§3) | Implementation | — | — |
 | 6 | Per-stage latency budget, and preview resolution for shade browsing vs full-res final render (§13) | Meeting the 30s budget | — | — |
 | 7 | "Same existing paint" grouping threshold (§6) | Render correctness | — | — |
 | 8 | Out-of-gamut mapping policy, and clipping policy for light shades (§6, §11) | Render correctness | — | — |
 | 9 | Switchplate/socket exclusion — accept for V1 or add a mechanism (§5) | Render quality | — | — |
-| 10 | SQLite file location; default auto-clear period (§9) | Implementation | — | — |
-| 11 | Localhost service hardening — ephemeral port, per-launch token, CORS (§13) | Security | — | — |
-| 12 | Failure-mode behaviour (§13) | UX | — | — |
+| 10 | ~~SQLite location; auto-clear~~ — **decided:** per-user app data dir; no auto-clear, with low-disk warning + storage view (§9) | Implementation | — | — |
+| 11 | ~~Localhost hardening~~ — **decided:** OS-assigned port + per-launch secret, boot screen (§13) | Security | — | — |
+| 12 | ~~Failure-mode behaviour~~ — **decided:** never dead-end (§13) | UX | — | — |
 | 13 | Objective 2 accuracy contract — **parked**, see handoff | Post-V1 | — | — |
 | 14 | **Run the floor-tier latency spike** — throwaway script, lowest-spec machine available: SAM 2 tiny encode + semantic pass + full-res render loop. Do this *before* app code | Validates the whole local-first architecture | — | — |
 | 15 | Latency ceiling at which progress messaging is no longer enough, and what we do there (§13) | UX | — | — |
-| 16 | ~~Packaging approach~~ — **decided:** frozen PyInstaller sidecar (§3). Remaining: **code-signing** to avoid antivirus flags | Shipping | — | — |
+| 16 | ~~Packaging & signing~~ — **decided:** frozen PyInstaller sidecar, shipped **unsigned** (§3). Watch for antivirus quarantine reports from dealers | Shipping | — | — |
 | 17 | ~~Store vs regenerate~~ — **decided:** store full-res lossless PNG (§9). Remaining: the **sharing mechanism**, which must emit JPEG and not hand out the archive | Trust, privacy | — | — |
 | 18 | ~~Plane overlap~~ — **decided:** exclusive pixel assignment (§6). Remaining: the assignment rule for contested pixels | Render correctness | — | — |
 | 19 | Saturation blend curve for the light map (§6) | Render quality | — | — |
+| 20 | Noise estimate and smoothing curve for the light map (§6) | Render quality | — | — |
+| 21 | ~~Switchplate/socket exclusion~~ — **decided:** accept in V1, add as classes to our own model (§5) | Render quality | — | — |
+| 22 | ~~Sharing mechanism~~ — **decided:** plain JPEG, shade code in filename (§9) | Product | — | — |
 
 ---
 
@@ -614,14 +741,50 @@ must do something else is undefined — see §12.
 and the semantic model into ORT sessions at launch takes real time. It must not come out of the
 30-second per-photo budget — warm the models at app start.
 
-**Failure behaviour is entirely unspecified.** What the UI does when no wall is detected, when the
-photo is rejected, when a model fails to load, when the Python service dies mid-consultation. For a
-tool whose stated design goal is *the dealer never looks incompetent in front of a customer*, the
-failure path is the whole point.
+### Decided: never dead-end
 
-**The localhost service is unhardened.** Port selection and collision, whether the REST service
-authenticates its Electron client, and CORS are all unaddressed. An unauthenticated localhost
-service is reachable by any local process and by any web page the dealer happens to have open.
+**Decided:** every failure lands somewhere the dealer can still work. No error is ever a full stop.
+
+| Failure | Behaviour |
+|---|---|
+| No wall detected | Fall through to the **manual tap** path — the dealer taps the wall, SAM 2 refines |
+| Photo unusable (dark, blurred, heavy HDR) | Proceed anyway with a quiet quality note; never refuse outright |
+| Python service dies | Restart it quietly and resume |
+| Model fails to load | Surface at boot, not mid-consultation (see boot screen, §3) |
+
+**Why this is cheap:** the fallback already exists. The **correction path** — dealer taps, SAM 2
+refines — is exactly what you want when auto-detection fails. Same screen, same code. "No wall
+found" needs no special failure state; it quietly becomes the manual path the dealer already knows.
+
+**Two things to watch:** the dealer may not realise anything went wrong, so failures still need a
+subtle indication — and silent restarts can mask a fault that keeps recurring, so log them.
+
+### Decided: local service hardening
+
+**Decided:** bind to an **OS-assigned free port**, generate a **fresh secret each launch**, and have
+Electron pass it to the UI so only our own app can call the service.
+
+**The risk this closes:** "localhost" feels private but is not. Any program on the machine can reach
+it — and so can **any website open in the dealer's browser**, since a web page may issue requests to
+localhost. With customer room photographs now stored on that machine (§9), an unprotected service
+would let another tab quietly read them. This is a well-worn attack on local services, not a
+theoretical one. A random port also removes the port-collision failure, which otherwise appears as a
+mysterious broken install on exactly one dealer's PC.
+
+**Considered:** a Windows named pipe, which is unreachable from a browser at all and would remove the
+attack surface rather than guard it, with the HTTP contract unchanged. Rejected as more
+platform-specific plumbing with fewer worked examples to lean on.
+
+### Decided: boot loading screen
+
+**Decided:** the app shows a loading screen at launch until port selection and secret transfer
+complete, with a **minimum of 2 seconds**.
+
+This is also the right place to **warm the models**, which §3 already requires so that loading never
+eats into the per-photo budget. So it is "at least 2 seconds, and however long the models need" —
+and when it clears, the app is genuinely ready rather than merely looking ready. Model loading can
+exceed 2s on a weak machine, so this screen gets the same plain-language progress treatment as the
+per-photo one.
 
 ---
 

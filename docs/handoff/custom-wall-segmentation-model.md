@@ -114,10 +114,15 @@ Ranked by impact on the final render, not by pixel count:
 2. **Furniture and occluders excluded.** Wardrobes, sofas, curtains, hangings.
 3. **Wall vs ceiling separation.** They are often similar in colour and meet at a soft boundary.
 4. **Windows and doors excluded** — recolouring a window is instantly, obviously wrong.
-5. Small fixtures (switchplates, sockets, pipes) are **out of scope** — ADE20K has no such classes
-   and `design-decisions.md` §5 accepts them being painted over in V1. Consider adding them as
-   classes here if our own labelling makes it cheap; it would be a real improvement over the
-   baseline.
+5. **Small fixtures — switchplates, sockets, pipes — are now IN scope for this model.** ADE20K has
+   no such classes, so V1 paints over them (`design-decisions.md` §5 accepts this as a documented
+   limit). **Decided:** add them as classes here. Since we are already labelling our own room
+   photographs, adding a few small classes while someone is drawing wall boundaries costs little —
+   and it makes this model genuinely *better* than the baseline it replaces, not merely legally
+   shippable.
+
+   This is the most customer-visible flaw in the V1 render: nobody needs to be told that a
+   dark-blue light switch looks wrong. Fixing it here is the clearest quality win available.
 
 ---
 
