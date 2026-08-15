@@ -685,7 +685,7 @@ Objectives 1 and 3; the hand-labelled test set must actually be built.
 | 3 | Which ORT package ships; DirectML or separate GPU build (§3) | Installer, tier table | — | — |
 | 4 | Tier table: names, detection rules, variants, resolutions (§3) | Implementation | — | — |
 | 5 | ~~REST contract~~ — **decided:** session-oriented, SSE progress (§3) | Implementation | — | — |
-| 6 | Per-stage latency budget, and preview resolution for shade browsing vs full-res final render (§13) | Meeting the 30s budget | — | — |
+| 6 | ~~Preview vs full-res render~~ — **measured & decided:** browse at ~1 MP, full-res on export only. See [spike results](../spikes/latency/RESULTS.md). Remaining: per-stage budget for the *model* stages (Part 2) | Meeting the 30s budget | — | — |
 | 7 | "Same existing paint" grouping threshold (§6) | Render correctness | — | — |
 | 8 | Out-of-gamut mapping policy, and clipping policy for light shades (§6, §11) | Render correctness | — | — |
 | 9 | Switchplate/socket exclusion — accept for V1 or add a mechanism (§5) | Render quality | — | — |
@@ -710,8 +710,41 @@ Objectives 1 and 3; the hand-labelled test set must actually be built.
 **The real interactive bottleneck is not the encode.** SAM 2's encoder runs once per photo (1–4s on
 a modest CPU). But the full-resolution divide/multiply/composite re-runs **every time the dealer taps
 a new shade** — and that is the loop the customer actually watches. The structure above already fixes
-most of it (`light_map` is computed once; a shade change is one multiply plus a composite), but a
-preview resolution for browsing versus a full-resolution final render still needs deciding.
+most of it (`light_map` is computed once; a shade change is one multiply plus a composite) — but
+**measurement showed that is not enough on its own.**
+
+### Measured: render at ~1 MP while browsing, full resolution only on export
+
+Results: [spikes/latency/RESULTS.md](../spikes/latency/RESULTS.md).
+
+**Full-resolution rendering per tap is not viable.** Measured at **641 ms on a high-end i7**, and
+**1–2.8 s on a realistic shop PC** — every single time the dealer taps a colour, inside a workflow
+budgeted at three taps and thirty seconds. A **~1 MP preview (1280×720) stays between 43 ms and
+195 ms** across the whole hardware range, which feels immediate. 2 MP is borderline: fine on decent
+hardware, sluggish at the pessimistic end.
+
+Full-resolution rendering happens **once, on save or export** — a 1–3 s cost the progress messaging
+above covers comfortably.
+
+**Lookup tables for gamma are mandatory, not an optimisation:**
+
+| Operation | Naive `pow` | Lookup table |
+|---|---|---|
+| Encode to sRGB (**every tap**) | 507 ms | **241 ms** |
+| Linearise from 8-bit (once per photo) | 457 ms | **139 ms** |
+
+The gamma encode is the single most expensive stage of the per-tap path (~38% of it). Linearising
+needs only a **256-entry table**, since real photos arrive as 8-bit — a per-pixel `pow` there is
+pure waste.
+
+**These stages are memory-bandwidth-bound, not CPU-bound.** A single E-core at 3.7 GHz was only
+**1.4× slower** than unrestricted P-cores despite a large clock gap, because each 12 MP float32
+array is 144 MB. Consequences: a shop PC's *slower RAM* matters more than its slower CPU, and **core
+count is nearly irrelevant** — numpy's element-wise operations are single-threaded.
+
+**Untested and worth taking:** crop to the wall's **bounding box** before the per-tap maths. Only
+pixels inside the wall change, so this should cut cost in proportion to wall area — commonly 3× or
+more, and likely the largest saving still on the table.
 
 ### Decided: if it's slow, explain it — don't degrade quality
 
