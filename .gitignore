@@ -1,0 +1,24 @@
+# models are large and are fetched/exported, not committed
+models/*
+!models/README.md
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+out/
+.vite/
+
+# os
+.DS_Store
+Thumbs.db
+
+# local scratch
+.scratch/
