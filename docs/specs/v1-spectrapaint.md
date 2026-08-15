@@ -208,6 +208,68 @@ development only. Replacement is tracked in
 [handoff/custom-wall-segmentation-model.md](../handoff/custom-wall-segmentation-model.md). Do not
 distil from them.
 
+### Electron shell
+
+The Electron **main** process owns everything the renderer must not:
+
+- Spawning and supervising the Python sidecar, including quiet restart on death and logging each
+  restart so a recurring fault is not masked.
+- Holding the service's port and per-launch secret.
+- Native dialogs — opening a Room Photo, choosing an export destination, handing a file to the
+  system share sheet.
+- Reporting disk space for the low-disk warning.
+
+The **renderer** hosts React and does no Node or filesystem work.
+
+**Secret transfer — security-relevant.** `nodeIntegration` stays off and `contextIsolation` stays on.
+A **preload script** uses `contextBridge` to expose a narrow API — an HTTP client that injects the
+secret and the base URL — so the renderer can call the service without ever holding the raw secret
+or being able to reach arbitrary hosts.
+
+**SSE carries a constraint worth knowing up front:** the browser's `EventSource` API **cannot set
+custom headers**, so the progress stream cannot authenticate the way every other request does.
+Resolve by having the preload expose a fetch-based streaming reader (which *can* set headers) rather
+than using `EventSource` directly. Passing the secret as a query parameter is the obvious
+alternative and should be avoided — it leaks into logs.
+
+### React UI
+
+**Screens and surfaces:**
+
+| Surface | Purpose |
+|---|---|
+| Boot | Shown until the service is up, the secret exchanged and models warmed. Minimum 2 seconds; longer if models need it. Plain-language progress. |
+| Bundles | List of **Bundles**, renameable, with delete. Entry point on open. |
+| Consultation | The main working surface: the Room Photo, detected **Wall Planes**, shade selection, before/after. |
+| Catalogue | A panel within Consultation, not a separate screen — search, **Shade Family** grouping, recently used, suggestions. |
+| Storage | Which Bundles consume space, so manual deletion is informed. |
+| Settings | Execution profile override (faster vs better quality). |
+
+**State.** Server state mirrors the session resource and is fetched from the contract rather than
+duplicated; avoid a global store beyond what several surfaces genuinely share (active Bundle, active
+Consultation, Catalogue index). The render result is server-owned — the UI holds the latest image
+and the current assignment map, not a parallel model of the pipeline.
+
+**Preview versus full resolution.** The UI requests a **~1 MP preview** for every Shade change while
+the Dealer browses, and a **full-resolution render only on save or export**. This is the direct
+consequence of the latency measurements; putting the rule in the UI rather than the service keeps
+the contract honest — the service renders what it is asked for.
+
+**Catalogue browsing must be virtualised.** A Fandeck runs to a thousand-plus Shades and rendering
+that many swatches eagerly will stall a floor-tier machine. Every swatch shows its **Shade Code**
+prominently, so the Dealer can pull the physical chip to confirm.
+
+**Wall correction is tap-driven.** Tap to add a missed wall, tap to merge, tap to split. No brush
+tools, no drag-to-draw — the interaction budget does not allow it, and the correction surface
+doubles as the failure fallback when automatic detection finds nothing.
+
+**Every surface needs its loading, empty and error state defined**, not just the happy path. For a
+tool whose design goal is that the Dealer never looks incompetent, these are the states that decide
+whether it succeeds.
+
+**Open:** whether the shop PC is touchscreen. Tap targets, hover affordances and the correction
+interaction all change if it is. Pair this with the Amol Kulkarni conversation.
+
 ### The render engine
 
 ```
@@ -360,9 +422,16 @@ these are fast and deterministic — and colour correctness is **analytically ch
 
 - **The SAM 2 and semantic model adapters.** Exercised through Seam 1. Mocking them would assert
   only that our mocks work.
-- **The React UI.** A conscious gap in V1, accepted so the seam count stays low. All logic lives
-  below the contract, so the UI is thin enough to verify by running it. Revisit if UI logic
-  accumulates.
+- **The React UI.** A conscious gap in V1, accepted to keep the seam count low. The UI holds the
+  latest render and the current assignment map, not a parallel model of the pipeline, so almost all
+  logic sits below the contract and the remaining surface is thin enough to verify by running it.
+
+  **Two pieces of UI logic are genuinely non-trivial, and should be extracted as pure functions and
+  unit-tested if they grow:** the preview-versus-full-resolution rule, and the Wall Plane
+  merge/split state transitions. Both are decision logic wearing UI clothing.
+
+  Revisit this exclusion if UI logic accumulates beyond that. The honest risk is that "thin enough
+  to verify by running it" quietly stops being true and nobody notices.
 
 ### Prior art
 
@@ -401,6 +470,10 @@ seconds — is inferred from what a counter-side consultation looks like, not co
 automation bar, the no-confirmation-step rule and the single-tap correction rule. Confirm with
 Mr. Amol Kulkarni before building far into the UI; several decisions change shape if the real floor
 is a sit-down consultation.
+
+**Confirm alongside the persona question:** whether the shop PC is a **touchscreen**. Tap targets,
+hover affordances and the whole wall-correction interaction change if it is, and it is cheap to ask
+in the same conversation.
 
 **Two limits to communicate rather than hide.** Dark walls repainted in pale Shades cannot recover
 detail the camera never captured. Gloss highlights will be tinted wrongly. Both are better said out
