@@ -10,9 +10,16 @@ Accepted
 
 The one-page report lists React, Electron, Node, Python, REST, PyTorch and SQLite, and states the
 product works "across desktop and web" — but never specifies which machine executes SAM 2
-inference. That omission determines the model variant we can use, the latency budget, where SQLite
+inference. That omission governs the model variant we can use, the latency budget, where SQLite
 lives, whether the tool works without internet, and whether customer room photographs leave the
-dealership.
+dealership. (This ADR settles the compute location; the concrete floor-tier variant and the SQLite
+file location remain open — see `design-decisions.md` §12.)
+
+The report's Objective 1 also opens "Provide a **centralized** platform for paint dealers." We read
+"centralized" as **one shared catalogue, one product, one consistent experience across dealers** —
+not shared compute. Catalogue data is centrally authored and distributed as a versioned file;
+inference is not. Nothing in the objective requires a customer's room photograph to travel to a
+server.
 
 Relevant technical facts:
 
@@ -40,16 +47,36 @@ two products.
 
 Execution adapts to available hardware rather than assuming a fixed tier:
 
-- Device selection via ONNX Runtime execution provider list
-  (`["CUDAExecutionProvider", "CPUExecutionProvider"]`), so GPU use is opportunistic and fallback is
-  automatic with no branching in our code.
+- Device selection via an ONNX Runtime execution provider list, so GPU use is opportunistic and
+  fallback is automatic with no branching in our *code*. **It is, however, a branching decision in
+  our *packaging*** — see the caveat below.
 - Model variant selected per tier by loading a different `.onnx` file into an identical call site
   (variant signatures are the same; only weights differ).
 - Int8 dynamic quantization of the encoder available for the floor tier.
 - The floor tier is a CPU-only office PC with no discrete GPU.
 
-Only the SAM 2 encoder is hardware-sensitive; relighting and compositing are OpenCV/numpy work that
-is CPU-bound and cheap regardless. The adaptivity concern is therefore confined to one component.
+### Caveat: execution providers are a packaging branch
+
+`CUDAExecutionProvider` is **not** present in the standard `onnxruntime` wheel. It requires
+`onnxruntime-gpu`, which pulls CUDA/cuDNN at hundreds of megabytes — directly undercutting the
+installer-size argument that justified dropping PyTorch in the first place. CUDA is also
+NVIDIA-only, whereas our stated floor tier is a Windows office PC with **integrated** graphics,
+where the relevant provider would be **DirectML**.
+
+Until resolved, assume a **CPU-only shipping build**. Which ORT package ships, and whether GPU
+support is a separate build, is open (`design-decisions.md` §12, item 3).
+
+### Caveat: more than one component is hardware-sensitive
+
+An earlier version of this ADR claimed only the SAM 2 encoder is hardware-sensitive. That is no
+longer true. The pipeline also runs an **ADE20K semantic segmentation model** and a
+**full-resolution edge-aware boundary-refinement pass**, both of which consume real CPU and neither
+of which was in the original latency analysis.
+
+Relighting and compositing genuinely are cheap *per operation* — but the full-resolution
+divide/multiply/composite **re-runs on every shade the dealer taps**, which is the interactive loop
+the customer actually watches, and is a more likely bottleneck than the once-per-photo encode. A
+per-stage latency budget is still owed (`design-decisions.md` §12, item 6).
 
 To prevent silent quality drift, the active **execution profile is auto-detected as a default,
 overridable by the dealer, and stamped into every saved render and every benchmark measurement.**
@@ -64,10 +91,15 @@ boundary accuracy — stays roughly constant across tiers.
 ### Positive
 
 - Works with no internet connection; a dropped link cannot kill an in-store consultation.
-- Customer room photographs never leave the premises. Privacy, consent flows and data-retention
-  policy stay out of scope entirely.
+- Customer room photographs never leave the premises. This **reduces exposure substantially and
+  defers the server-side privacy work** — it does not eliminate the obligation. A dealer storing
+  identifiable photographs of customers' homes still has retention and consent duties (India's DPDP
+  Act 2023 applies to a business processing customer data), and the web target this ADR
+  deliberately preserves would reintroduce the full set. Logged as a known future cost.
 - No GPU hosting cost, which matters for a project whose funding has an expiry date.
-- No cold-start latency.
+- No *server* cold-start latency. Note there is still a real **local** cold start: loading the
+  encoder and the semantic model into ORT sessions at launch. Models must be warmed at app start so
+  this never comes out of the per-photo budget.
 - The demo runs on any machine, including an examiner's laptop.
 - Benchmarks remain comparable because the profile is recorded alongside every number.
 

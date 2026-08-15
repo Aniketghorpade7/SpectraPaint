@@ -111,10 +111,13 @@ Ballpark ΔE00 figures — indicative, to be replaced by measured results from o
 | + per-device profile + DNG | 3–5 | Correct shade usually within top-3 |
 | + fandeck in frame | 1–2 | Genuine shade match |
 
-Perceptual and industrial reference points:
-- ΔE00 ≈ 1 — just-noticeable difference side-by-side
-- ΔE00 ≈ 2–3 — noticeable to a trained eye
-- Paint-industry batch-match tolerance — typically ΔE ≤ 1
+Perceptual and industrial reference points. **All figures are ΔE00** — older ΔE formulas disagree
+materially at these magnitudes, so the formula must always be stated:
+
+- **Below ΔE00 1** — trained observers can still discriminate under ideal side-by-side viewing
+- **ΔE00 ≈ 1** — the usual just-noticeable-difference threshold, side-by-side
+- **ΔE00 ≈ 2–3** — clearly noticeable side-by-side; borderline when the two are seen apart
+- **Paint-industry batch-match tolerance** — typically around ΔE00 ≤ 1
 
 **Consequence:** without an in-frame reference we cannot honestly claim shade-match accuracy. We
 *can* claim **shortlist accuracy**, which also happens to match how dealers already work — they
