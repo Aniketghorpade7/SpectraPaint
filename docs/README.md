@@ -11,6 +11,16 @@ Start here.
 3. **[adr/](./adr/)** — Architecture Decision Records for the choices that are expensive to reverse.
 4. **[handoff/](./handoff/)** — work deliberately parked, written up so it can be resumed cold.
 
+## Before writing code
+
+| Document | Why |
+|---|---|
+| **[conventions.md](./conventions.md)** | Coding rules. Above all: **use the glossary vocabulary in the code** — synonyms are how a codebase becomes unreadable, and tickets worked in isolated contexts drift fast. |
+| **[ui-guidelines.md](./ui-guidelines.md)** | Minimal UI rules. The one that is not about taste: **neutral grey chrome, nothing saturated near the render** — a colour looks different depending on what surrounds it, and this app exists for colour judgement. |
+| **[specs/v1-spectrapaint.md](./specs/v1-spectrapaint.md)** | What V1 is, end to end, with the two test seams. |
+
+Both are linked from every ticket, since neither loads automatically.
+
 ## Architecture Decision Records
 
 | # | Title | Status |
