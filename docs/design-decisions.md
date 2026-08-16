@@ -632,6 +632,59 @@ rights to write.
 
 ---
 
+## 9b. Continuous integration
+
+**Decided:** GitHub Actions, **split by seam**, with a pull-request merge gate.
+
+**Why CI is load-bearing here rather than hygiene:** V1 is broken into fifteen tickets worked in
+**isolated fresh contexts**. No agent working one ticket can see what another built. A solo human
+developer remembers what they broke; independent agents do not. **CI is the only integration memory
+this project has.**
+
+### Two lanes, because the seams have opposite cost profiles
+
+| | Seam 2 — render engine | Seam 1 — REST contract |
+|---|---|---|
+| Needs | numpy only | SAM 2 + semantic model, GB of weights |
+| Runtime | Seconds | Minutes |
+| Runs | **Every push** | **Pull requests into `main`, and nightly** |
+
+The repository is private, so Actions minutes are metered (roughly 2,000/month on Free, 3,000 on
+Pro — the **GitHub Student Developer Pack grants Pro**). Running the model lane on every push would
+exhaust that mid-month and produce a pipeline slow enough that people stop waiting for it.
+
+### Merge gate
+
+Branch per ticket → pull request → **green pipeline plus human review** before merge.
+
+The pull request is the **only point where a human reads agent-written code before it lands**. The
+diff is also a far better review surface than a terminal. The risk to watch is rubber-stamping: an
+unread approval turns the gate into decoration.
+
+### Model weights in CI
+
+**Actions cache, keyed on model version, populated from the original upstream source.** The nightly
+slow-lane run keeps the cache warm, so pull-request runs almost always hit it.
+
+**Do not mirror the SegFormer weights into a GitHub Release.** Downloading non-commercially-licensed
+checkpoints for development is one thing; **redistributing them is another**, and this project has
+already had to be careful about exactly that licence. Mirroring is fine once our own model exists.
+
+### Two jobs worth more here than in a typical project
+
+- **Performance regression gate.** Measurement established that the per-shade render is the
+  bottleneck (§13). A 3× regression there would kill the product and **no functional test would
+  notice**. `spikes/latency/bench_render_loop.py` needs only numpy, so it can run on every push and
+  fail past a threshold.
+- **Licence gate.** Fail the build when an unapproved licence appears among dependencies or shipped
+  weights. This guards a constraint the project has already nearly tripped over (§5).
+
+**Useful coincidence:** the standard private-repo runner is 2-core / 7 GB — roughly **floor-tier
+hardware**. Since the benchmark needs no models, CI doubles as a continuous floor-tier performance
+check, which the whole local-first bet depends on.
+
+---
+
 ## 10. Evaluation
 
 Parking shade reading removed the headline metric, so the results chapter rests on four measurements
