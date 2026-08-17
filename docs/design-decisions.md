@@ -715,7 +715,41 @@ file has been committed to the repository at all. That last check is the one tha
 mechanism preventing the non-commercial SegFormer checkpoint from being mirrored or shipped (§5).
 
 **`main` is protected** — no direct pushes, a green pipeline and a human review required to merge.
-The branch-per-ticket workflow is written up in [conventions.md](./conventions.md) §7b.
+The branch-per-ticket workflow, the required check names and why administrators are deliberately
+not enforced are in [conventions.md](./conventions.md) §7b.
+
+The protection itself is repository settings rather than a file in the repository, so it is applied
+once, by hand, by someone with admin rights:
+
+```bash
+gh api -X PUT repos/OWNER/SpectraPaint/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Checks (ubuntu-latest)",
+      "Checks (windows-latest)",
+      "Performance gate",
+      "Seam 1 — REST contract, with models"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": true
+}
+JSON
+```
+
+`strict` means a branch must be up to date with `main` before it merges — with tickets worked in
+isolated contexts, two individually-green branches breaking each other is the exact failure this
+pipeline exists to catch, and it can only be caught by testing them combined.
 
 **Useful coincidence:** the standard private-repo runner is 2-core / 7 GB — roughly **floor-tier
 hardware**. Since the benchmark needs no models, CI doubles as a continuous floor-tier performance

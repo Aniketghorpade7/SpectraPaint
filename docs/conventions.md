@@ -132,6 +132,22 @@ request is the **only point where a human reads agent-written code before it lan
 The risk worth naming is rubber-stamping. An approval clicked without reading turns the gate into
 decoration, and a decorative gate is worse than none, because it is trusted. Read the diff.
 
+The required checks, by the exact names the merge gate matches on:
+
+```
+Checks (ubuntu-latest)
+Checks (windows-latest)
+Performance gate
+Seam 1 — REST contract, with models
+```
+
+**Administrators are not enforced, deliberately.** GitHub will not let an author approve their own
+pull request, so on a repository with one human that rule would make merging impossible rather than
+careful. The admin bypass is the escape hatch that keeps the requirement honest for everyone else.
+It is a hatch, not a habit: the reason the human review exists is that the pull request is the only
+place agent-written code gets read before it lands, and merging past a red pipeline throws away the
+only integration memory the project has.
+
 **When CI fails, fix the cause.** Do not add a licence to `tools/approved-licences.toml`, re-record
 `spikes/latency/perf-baseline.json`, or mark a test skipped to get to green. Each of those is a
 legitimate change when the reasoning is sound and stated in the commit — and a quiet way to disable
