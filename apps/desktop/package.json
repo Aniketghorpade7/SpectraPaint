@@ -1,0 +1,19 @@
+{
+  "name": "@spectrapaint/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "out/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:preload",
+    "build:preload": "esbuild src/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=out/preload.js",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && cross-env SPECTRAPAINT_DEV=1 electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "cross-env": "^10.1.0",
+    "electron": "^43.4.0",
+    "esbuild": "^0.28.2"
+  }
+}

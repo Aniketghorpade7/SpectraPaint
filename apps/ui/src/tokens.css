@@ -1,0 +1,63 @@
+/*
+ * The whole token set. See docs/ui-guidelines.md — anything beyond this is out of scope for V1.
+ *
+ * Greys only. No accent colour anywhere near the render: a colour looks different depending on
+ * what surrounds it, and this app exists for colour judgement. The only saturated colour on
+ * screen should be the paint and the Shade swatches.
+ */
+
+:root {
+  /* Greys — one scale, seven steps, page background through near-black text. */
+  --grey-0: #1a1a1a; /* page background */
+  --grey-1: #232323; /* panel surface */
+  --grey-2: #2e2e2e; /* raised panel surface */
+  --grey-3: #3d3d3d; /* borders */
+  --grey-4: #6b6b6b; /* disabled, hairlines */
+  --grey-5: #a8a8a8; /* secondary text */
+  --grey-6: #ececec; /* primary text */
+
+  /* Spacing — multiples of 4px. Nothing else. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Text — three sizes, one weight step for emphasis. System font stack. */
+  --text-small: 13px;
+  --text-body: 15px;
+  --text-heading: 20px;
+  --weight-normal: 400;
+  --weight-emphasis: 600;
+
+  /* The Dealer works fast at a counter, possibly on a touchscreen. */
+  --tap-target-min: 44px;
+
+  --font-stack: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--grey-0);
+  color: var(--grey-6);
+  font-family: var(--font-stack);
+  font-size: var(--text-body);
+  font-weight: var(--weight-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  min-height: var(--tap-target-min);
+  font: inherit;
+}
