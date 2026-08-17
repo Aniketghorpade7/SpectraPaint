@@ -130,8 +130,10 @@ uv run --with "numpy>=2,<3" python spikes/latency/bench_render_loop.py --check
 ```
 
 The second is the performance regression gate: it measures the per-shade render — the loop the
-Customer watches — against a budget recorded in `spikes/latency/perf-baseline.json`. On a
-development machine it should pass comfortably; the budget is set from a 2-core CI runner.
+Customer watches — against a budget recorded in `spikes/latency/perf-baseline.json`. That budget is
+calibrated to a 2-core CI runner, so **a busy or slower development machine can exceed it with
+nothing actually wrong**. CI is the arbiter; locally it is a smoke check, useful mainly for seeing a
+large regression before you push.
 
 Prose in `*.md` is hand-wrapped and excluded from prettier on purpose.
 

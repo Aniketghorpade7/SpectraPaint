@@ -1,25 +1,31 @@
 {
-  "recorded": "bootstrap",
-  "hardware": "bootstrap",
-  "numpy": "bootstrap",
-  "python": "bootstrap",
+  "recorded": "2026-08-17",
+  "hardware": "GitHub Actions ubuntu-latest, 2-core / 7 GB",
+  "numpy": "2.5.2",
+  "python": "3.12.3",
   "threshold_multiplier": 2.0,
+  "method": "Median of three consecutive runs of the same commit on the standard private-repo runner. Each figure is itself a median of nine timed repeats after two warm-ups. The observed spread between runs was 15-20 percent, which is what the budget has to tolerate without crying wolf.",
+  "why_this_threshold": "Twice the baseline. Run-to-run noise is under 25 percent, so 2x does not fire by accident, and the regression that actually matters -- a 3x on the per-shade render, which would make the product unusable while every functional test stayed green -- trips it decisively. See docs/design-decisions.md sections 9b and 13.",
+  "why_these_resolutions": "The preview resolutions are what the Dealer browses shades at; full resolution is a once-per-save cost and is not on the interactive path. See RESULTS.md.",
+  "note": "The runner is roughly floor-tier shop hardware, so these numbers double as a continuous check on the machine class the local-first architecture assumes. They are not a claim about a Dealer's PC -- RESULTS.md brackets that at 60-200ms for 0.9 MP.",
   "gates": [
     {
       "resolution": "0.9 MP (1280x720) preview",
       "width": 1280,
       "height": 720,
       "stage": "TAP_TOTAL_lut",
-      "baseline_ms": 999,
-      "budget_ms": 999
+      "baseline_ms": 34.0,
+      "budget_ms": 68.0,
+      "observed_ms": [36.8, 34.0, 32.0]
     },
     {
       "resolution": "2 MP (1632x1224) preview",
       "width": 1632,
       "height": 1224,
       "stage": "TAP_TOTAL_lut",
-      "baseline_ms": 999,
-      "budget_ms": 999
+      "baseline_ms": 70.8,
+      "budget_ms": 141.6,
+      "observed_ms": [80.5, 70.8, 66.8]
     }
   ]
 }

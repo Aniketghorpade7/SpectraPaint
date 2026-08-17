@@ -268,8 +268,9 @@ def run_check(baseline_path):
     print()
     print(
         "The per-shade render is the interactive bottleneck (design-decisions.md section 6\n"
-        "and 9b). Either the change made it slower, or the runner was unusually contended --\n"
-        "re-run before assuming the latter.\n"
+        "and 9b). Either the change made it slower, or the machine was busy -- re-run before\n"
+        "assuming the latter. The budget is calibrated to a 2-core CI runner, so a contended\n"
+        "or slower development machine can exceed it with nothing wrong; CI is the arbiter.\n"
         "\n"
         "If the cost is deliberate and justified, re-record the baseline:\n"
         "    python spikes/latency/bench_render_loop.py --json\n"
