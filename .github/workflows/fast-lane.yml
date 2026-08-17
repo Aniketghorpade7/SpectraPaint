@@ -53,11 +53,13 @@ jobs:
         working-directory: services/inference
         run: uv sync --python 3.12
 
-      - name: Lint and format the service
+      - name: Lint and format the Python
         working-directory: services/inference
+        # Checked from the repository root, so tools/ and spikes/ are covered too — the CI gates
+        # and the benchmark are Python that agents edit, and unlinted code is where drift hides.
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          uv run ruff check ../..
+          uv run ruff format --check ../..
 
       - name: Service tests
         working-directory: services/inference
@@ -65,3 +67,48 @@ jobs:
         # makes this matrix worth paying for: a Windows-only handshake or process-teardown fault
         # shows up here rather than on a Dealer's machine.
         run: uv run pytest -m "not models" -q
+
+      - name: Licence gate
+        # Linux only: dependency licences do not vary by runner, and the second run would be
+        # minutes spent to learn the same thing twice.
+        if: runner.os == 'Linux'
+        working-directory: services/inference
+        # Run from the service directory so its environment is the one being inspected — the gate
+        # reads Python licences from the interpreter it runs under.
+        run: uv run python ../../tools/licence_gate.py
+
+  performance:
+    name: Performance gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # A separate job on purpose. It needs nothing but numpy, so it does not wait behind npm, and a
+    # runner doing nothing else gives a measurement worth comparing against a recorded baseline.
+    #
+    # The standard private-repo runner is 2-core / 7 GB — roughly floor-tier shop hardware — so this
+    # doubles as a continuous check on the machine class the local-first architecture assumes
+    # (design-decisions.md §9b).
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Per-shade render regression gate
+        id: gate
+        # numpy is pinned to a major range: the baseline was recorded against numpy 2, and a major
+        # version change is a reason to re-record rather than to trust the comparison.
+        run: >
+          uv run --python 3.12 --with "numpy>=2,<3"
+          python spikes/latency/bench_render_loop.py --check
+
+      - name: Measurements for re-recording the baseline
+        # Only when the gate failed, and only because the first question then is always "what are
+        # the numbers on this runner today?" This prints them ready to paste.
+        if: failure() && steps.gate.outcome == 'failure'
+        run: >
+          uv run --python 3.12 --with "numpy>=2,<3"
+          python spikes/latency/bench_render_loop.py --json

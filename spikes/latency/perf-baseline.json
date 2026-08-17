@@ -1,0 +1,25 @@
+{
+  "recorded": "bootstrap",
+  "hardware": "bootstrap",
+  "numpy": "bootstrap",
+  "python": "bootstrap",
+  "threshold_multiplier": 2.0,
+  "gates": [
+    {
+      "resolution": "0.9 MP (1280x720) preview",
+      "width": 1280,
+      "height": 720,
+      "stage": "TAP_TOTAL_lut",
+      "baseline_ms": 999,
+      "budget_ms": 999
+    },
+    {
+      "resolution": "2 MP (1632x1224) preview",
+      "width": 1632,
+      "height": 1224,
+      "stage": "TAP_TOTAL_lut",
+      "baseline_ms": 999,
+      "budget_ms": 999
+    }
+  ]
+}

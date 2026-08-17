@@ -120,7 +120,23 @@ uv run ruff format --check .
 uv run pytest
 ```
 
+**The two gates** CI also runs, if you want to check before pushing:
+
+```bash
+cd services/inference
+uv run python ../../tools/licence_gate.py     # dependency and model-weight licences
+cd ../..
+uv run --with "numpy>=2,<3" python spikes/latency/bench_render_loop.py --check
+```
+
+The second is the performance regression gate: it measures the per-shade render — the loop the
+Customer watches — against a budget recorded in `spikes/latency/perf-baseline.json`. On a
+development machine it should pass comfortably; the budget is set from a 2-core CI runner.
+
 Prose in `*.md` is hand-wrapped and excluded from prettier on purpose.
+
+`main` is protected: work on a branch per ticket and open a pull request. See
+[conventions.md §7b](./docs/conventions.md).
 
 ---
 
@@ -134,6 +150,7 @@ data/catalogue/      Shade data
 models/              ONNX weights (fetched, never committed)
 docs/                Decisions, spec, conventions, ADRs
 spikes/              Throwaway measurement code
+tools/               CI gates and repository tooling
 ```
 
 Each directory has a `README.md` stating what belongs in it. Read it before adding files.

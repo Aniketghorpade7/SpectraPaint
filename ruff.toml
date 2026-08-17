@@ -1,0 +1,19 @@
+# One ruff configuration for every Python file in the repository.
+#
+# It lives at the root rather than in services/inference/pyproject.toml because Python is not only
+# in the service: tools/ holds the CI gates and spikes/ holds measurement code, and both are edited
+# by agents working isolated tickets. Config that only covers the service leaves those two
+# unlinted, which is exactly where drift goes unnoticed.
+
+line-length = 100
+target-version = "py312"
+
+# Where first-party packages live. Without this, ruff run from the root cannot tell that
+# `spectrapaint` is ours and sorts it in with third-party imports.
+src = [".", "services/inference"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[lint.isort]
+known-first-party = ["spectrapaint"]
