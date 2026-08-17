@@ -1,0 +1,97 @@
+"""Process entry point: bind a port, announce it, serve.
+
+Run as ``python -m spectrapaint``. Electron spawns this as a child process, reads the handshake
+line from stdout to learn the port, and supervises the process for the rest of the launch.
+
+Two things are deliberately not configurable:
+
+* **The host.** Always loopback. A flag would eventually get set to 0.0.0.0 by someone debugging,
+  and a service holding Customer room photographs would be on the network.
+* **Where the secret comes from.** Always the environment, never argv — command lines are readable
+  by any other process on the machine (``ps`` on Linux, Task Manager or WMI on Windows), which
+  would defeat the point of having a secret at all.
+"""
+
+import json
+import os
+import socket
+import sys
+
+import uvicorn
+
+from spectrapaint.api.app import create_app
+
+HOST = "127.0.0.1"
+SECRET_ENV_VAR = "SPECTRAPAINT_SECRET"
+
+# Electron scans stdout for this prefix. A sentinel rather than bare JSON, so that a stray log line
+# can never be mistaken for the handshake.
+HANDSHAKE_PREFIX = "SPECTRAPAINT_HANDSHAKE "
+
+EXIT_NO_SECRET = 2
+
+
+def bind_listening_socket() -> socket.socket:
+    """Take an OS-assigned free port on loopback, and start listening immediately.
+
+    Binding to port 0 removes port collision as a failure mode — otherwise it surfaces as an
+    install that works on most machines and mysteriously does not on one (docs/design-decisions.md
+    §13).
+
+    Listening *before* the handshake is announced is what removes the startup race: connections
+    Electron makes after reading the port queue in the backlog even if the server has not finished
+    starting, so there is no window in which a correct client can be refused.
+
+    SO_REUSEADDR is deliberately not set. On Windows it does not mean what it means on Linux — it
+    permits binding a port another process already holds, which is a hijacking risk for a service
+    guarding Customer photographs.
+    """
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind((HOST, 0))
+    listener.listen()
+    return listener
+
+
+def handshake_line(port: int, pid: int) -> str:
+    """The one line Electron parses. Keep it a single line, and keep the secret out of it."""
+
+    return HANDSHAKE_PREFIX + json.dumps({"port": port, "pid": pid})
+
+
+def announce(line: str) -> None:
+    # Unbuffered, or the parent waits on a line sitting in a pipe buffer and times out the launch.
+    print(line, flush=True)
+
+
+def read_secret() -> str:
+    secret = os.environ.get(SECRET_ENV_VAR, "")
+    if not secret:
+        print(
+            f"{SECRET_ENV_VAR} is not set. The service will not run unauthenticated.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(EXIT_NO_SECRET)
+    return secret
+
+
+def main() -> None:
+    secret = read_secret()
+    listener = bind_listening_socket()
+    port = listener.getsockname()[1]
+
+    announce(handshake_line(port, os.getpid()))
+
+    config = uvicorn.Config(
+        create_app(secret),
+        log_level="info",
+        # Every request would otherwise be logged with its path; the Dealer's machine has no use
+        # for that, and Electron already logs the lifecycle events that matter.
+        access_log=False,
+    )
+    uvicorn.Server(config).run(sockets=[listener])
+
+
+if __name__ == "__main__":
+    main()

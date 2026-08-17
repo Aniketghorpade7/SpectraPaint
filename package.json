@@ -1,0 +1,31 @@
+{
+  "name": "spectrapaint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paint visualisation for dealers, on the customer's own room photo.",
+  "workspaces": [
+    "apps/ui",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "start": "npm run start --workspace @spectrapaint/desktop",
+    "dev": "npm run dev --workspace @spectrapaint/desktop",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm run format && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,50 @@
+/* The handful of components the tickets need. Greys only — see docs/ui-guidelines.md. */
+
+.button {
+  min-height: var(--tap-target-min);
+  padding: 0 var(--space-6);
+  background: var(--grey-2);
+  color: var(--grey-6);
+  border: 1px solid var(--grey-3);
+  border-radius: 4px;
+  font-size: var(--text-body);
+  font-weight: var(--weight-emphasis);
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--grey-3);
+}
+
+/* Weight and border carry emphasis, never hue: a saturated control near a render would shift how
+   the Customer perceives the paint. */
+.button:focus-visible {
+  outline: 2px solid var(--grey-5);
+  outline-offset: 2px;
+}
+
+.button[disabled] {
+  color: var(--grey-4);
+  cursor: default;
+}
+
+.progress-message {
+  margin: 0;
+  color: var(--grey-5);
+  font-size: var(--text-body);
+}
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: 46ch;
+  text-align: center;
+}
+
+.error-state__message {
+  margin: 0;
+  color: var(--grey-6);
+  font-size: var(--text-body);
+}

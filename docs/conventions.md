@@ -34,7 +34,7 @@ Spelling: **`colour`** in prose and domain names, **`color`** only where a libra
 
 | | Choice | Why |
 |---|---|---|
-| Python | **3.12** | 3.14 lacks reliable ML wheels — established during the latency spike. `pyenv` already has 3.12.10 |
+| Python | **3.12** | 3.14 lacks reliable ML wheels — established during the latency spike. `pyenv` has 3.12.10; on Windows use the python.org installer or `uv` — the version is the constraint, not how it is installed |
 | Service | **FastAPI** | Native streaming responses for the progress stream, and the contract is small |
 | Python lint/format | **ruff** | One tool for both |
 | Python tests | **pytest** | |
@@ -44,6 +44,11 @@ Spelling: **`colour`** in prose and domain names, **`color`** only where a libra
 | Models at runtime | **ONNX Runtime** | PyTorch stays in the export toolchain only — see [ADR-0001](./adr/0001-local-first-inference-over-localhost-rest.md) |
 
 Assume a **CPU-only** build until the packaging question in `design-decisions.md` §12 is settled.
+
+**The target is Windows; contributors develop on Linux or Windows** (`design-decisions.md` §9c).
+Anything a contributor is expected to run must work on both — no bash-only scripts, no `rm -rf` or
+bare `VAR=x cmd` in npm scripts, no hardcoded path separators. Paths come from `app.getPath()` and
+`platformdirs`, never from string concatenation.
 
 ## 3. Where code goes
 
@@ -74,12 +79,16 @@ seam 2 precisely because it is pure — anything impure that leaks in destroys t
 
 ## 6. Tests
 
-Two seams only, and both are described fully in
+Two seams, and both are described fully in
 [specs/v1-spectrapaint.md](./specs/v1-spectrapaint.md).
 
 - **Seam 1 — the REST contract.** Integration. Behaviour and lifecycle. Slow; keep it few.
 - **Seam 2 — the render engine.** Pure function, synthetic inputs with analytically known answers.
   Fast; keep it thorough.
+
+Plus a **small `vitest` suite for shell logic neither seam can reach** — pure functions only, and
+only where a silent regression would be expensive and invisible (`design-decisions.md` §9d). If a
+test there needs a DOM, a mock or a running Electron, it belongs in seam 1 instead.
 
 **Test external behaviour, never implementation.** A test must survive swapping the semantic model,
 retuning the smoothing curve, or restructuring internals. The light map, base colour grouping and

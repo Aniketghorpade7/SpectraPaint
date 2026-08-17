@@ -679,9 +679,98 @@ already had to be careful about exactly that licence. Mirroring is fine once our
 - **Licence gate.** Fail the build when an unapproved licence appears among dependencies or shipped
   weights. This guards a constraint the project has already nearly tripped over (§5).
 
+### Status
+
+The **fast lane exists** as `.github/workflows/fast-lane.yml`, added with the walking skeleton (#1)
+because a skeleton with no CI is a skeleton nobody can safely build on. It runs lint, typecheck,
+format, the shell tests (§9d) and the model-free service tests on **both** Linux and Windows.
+
+Tests needing weights are marked `models` in pytest and excluded from the fast lane, so the slow
+lane has a seam to attach to. **Still owed, and owned by #16:** the slow lane itself, the nightly
+run, the weight cache, the performance regression gate and the licence gate.
+
 **Useful coincidence:** the standard private-repo runner is 2-core / 7 GB — roughly **floor-tier
 hardware**. Since the benchmark needs no models, CI doubles as a continuous floor-tier performance
 check, which the whole local-first bet depends on.
+
+---
+
+## 9c. Development platforms
+
+**Decided:** the shipping target is **Windows**. Development happens on **both Linux and Windows** —
+contributors use either. The **packaged artifact is only ever validated on Windows**.
+
+Recording this because none of it is derivable from the code, and a ticket worked in a fresh context
+would otherwise assume the development machine and the target machine are the same thing.
+
+### What this costs
+
+Three failure modes pass on Linux and break on Windows, and all three land in the walking skeleton
+(§13, ticket #1):
+
+| Failure | Why Linux cannot catch it |
+|---|---|
+| **Orphaned sidecar on quit** | `SIGTERM` does not exist on Windows; `child.kill()` maps to `TerminateProcess` and a Python child can outlive the parent still holding the port. Needs a Windows branch — `taskkill /pid <n> /T /F` or a job object |
+| **Antivirus quarantine** | Defender's reaction to an unsigned PyInstaller binary (§3) is unobservable off Windows, and it is the most likely reason an install dies in a shop |
+| **Frozen binary correctness** | PyInstaller does not cross-compile. A Linux build proves nothing about the shipped artifact |
+
+A Windows firewall prompt on first bind is a fourth, usually avoided by binding explicitly to
+`127.0.0.1` rather than `0.0.0.0` — which the security decision (§13) already requires.
+
+### Consequences
+
+- **The fast lane runs on `ubuntu-latest` and `windows-latest` both** (§9b). This is the mechanism
+  that catches process teardown and path handling permanently, rather than whenever someone
+  remembers to check. The slow lane stays single-OS — model weights on two runners is not worth the
+  metered minutes.
+- **Tooling must be cross-platform.** No bash-only scripts in the contributor path, no `rm -rf` or
+  bare `VAR=x cmd` in npm scripts, no hardcoded path separators. If a task genuinely needs a shell,
+  it belongs in CI or in a Python script, not in a step a Windows contributor is expected to run.
+- **Paths come from libraries, never composed by hand** — `app.getPath('userData')` in Electron and
+  `platformdirs` in Python. This is what makes the §9 per-user app-data location work on both
+  without branching.
+- **`.gitattributes` normalises line endings**, so a Windows checkout does not produce a diff of the
+  entire repository.
+- **Python 3.12 is the requirement; `pyenv` is not.** conventions.md names `pyenv` because that is
+  what the latency spike used — Windows contributors should use the python.org installer or `uv`.
+  The version is the constraint; how it is installed is not.
+
+### Manual Windows verification
+
+CI does not cover the packaged installer, Defender, or the boot screen's quarantine message. Those
+need a real Windows machine or VM, checked at a handful of points — after packaging lands, and
+before any milestone demo. Not part of the per-ticket loop.
+
+---
+
+## 9d. A third, deliberately small test suite for the shell
+
+**Decided:** keep the two seams as the project's testing story, and add a **small `vitest` suite**
+covering only shell logic that neither seam can reach.
+
+**Why an exception was needed at all.** The two seams are the REST contract and the render engine.
+The walking skeleton (#1) is neither: the path validator that stops the renderer reaching arbitrary
+hosts, the boot failure messages, and the rule for when the boot screen gives way all live in the
+Electron and React layers. Under a strict two-seam reading they would ship with no automated cover
+at all.
+
+**What qualifies for it.** Pure functions where a silent regression is expensive and invisible:
+
+| Covered | Why it earns a test |
+|---|---|
+| `contract-path.ts` | If the check loosens, the renderer can reach any host and *nothing else in the app notices* |
+| `boot-messages.ts` | Asserts every failure says something, names no technique, and that the antivirus-quarantine wording survives an edit |
+| `useBoot.ts` readiness rule | The 2-second floor and "wait for the service" rule, without a DOM |
+
+**What does not.** No component rendering, no DOM harness, no Electron integration test, no mocking
+of the sidecar. Those would be slow, brittle, and would duplicate what seam 1 already proves.
+Anything that needs a real service is a seam-1 test.
+
+**The guard against drift:** these are *pure functions only*. The moment a test needs a DOM, a mock
+or a running Electron, it belongs in seam 1 instead — or it is testing implementation, which
+conventions §6 already forbids.
+
+Run with `npm test` at the repository root.
 
 ---
 

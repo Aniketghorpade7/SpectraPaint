@@ -1,0 +1,16 @@
+.boot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-6);
+  height: 100%;
+  padding: var(--space-8);
+}
+
+.boot__title {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-emphasis);
+  letter-spacing: 0.01em;
+}

@@ -1,0 +1,50 @@
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+
+import type {
+  BootStatus,
+  ServiceRequest,
+  ServiceResponse,
+  SpectraPaintBridge,
+} from './bridge-types';
+import {
+  BOOT_STATUS_CHANNEL,
+  BOOT_STATUS_GET_CHANNEL,
+  BOOT_STATUS_RETRY_CHANNEL,
+  SERVICE_REQUEST_CHANNEL,
+} from './channels';
+
+/**
+ * The only path between the renderer and everything else.
+ *
+ * `contextIsolation` is on and `nodeIntegration` is off, so this is the entire surface the React
+ * app can see. Four methods, deliberately: enough to call the contract and follow boot progress,
+ * and nothing that hands out the secret, the port, a filesystem handle or an arbitrary fetch.
+ *
+ * Note what is *not* here: no `getSecret()`, and no `baseUrl`. Exposing either would put the
+ * secret one `console.log` away from a screenshot, and would break the moment a restart moves the
+ * port.
+ */
+
+const bridge: SpectraPaintBridge = {
+  request<T>(request: ServiceRequest): Promise<ServiceResponse<T>> {
+    return ipcRenderer.invoke(SERVICE_REQUEST_CHANNEL, request) as Promise<ServiceResponse<T>>;
+  },
+
+  onBootStatus(listener: (status: BootStatus) => void): () => void {
+    const handler = (_event: IpcRendererEvent, status: BootStatus) => listener(status);
+    ipcRenderer.on(BOOT_STATUS_CHANNEL, handler);
+    return () => {
+      ipcRenderer.off(BOOT_STATUS_CHANNEL, handler);
+    };
+  },
+
+  bootStatus(): Promise<BootStatus> {
+    return ipcRenderer.invoke(BOOT_STATUS_GET_CHANNEL) as Promise<BootStatus>;
+  },
+
+  retryBoot(): Promise<void> {
+    return ipcRenderer.invoke(BOOT_STATUS_RETRY_CHANNEL) as Promise<void>;
+  },
+};
+
+contextBridge.exposeInMainWorld('spectrapaint', bridge);

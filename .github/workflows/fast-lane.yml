@@ -1,0 +1,67 @@
+name: Fast lane
+
+# Runs on every push. Kept to work that needs no model weights, so it stays in seconds and stays
+# inside the metered Actions minutes of a private repository — see docs/design-decisions.md §9b.
+#
+# Both operating systems, deliberately: the shipping target is Windows while development happens on
+# Linux, and three failure modes pass on one and break on the other (§9c). This matrix is the only
+# thing that catches them without a Windows machine to hand.
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+# A superseded run has nothing to tell us, and its minutes are billed either way.
+concurrency:
+  group: fast-lane-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # Do not cancel Windows because Linux failed, or vice versa: which platform broke is the
+      # information worth having.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint, typecheck, format and shell tests
+        run: npm run check
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/inference/uv.lock
+
+      - name: Install the service
+        working-directory: services/inference
+        run: uv sync --python 3.12
+
+      - name: Lint and format the service
+        working-directory: services/inference
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Service tests
+        working-directory: services/inference
+        # The lifecycle tests spawn the real service and talk to it over a socket, which is what
+        # makes this matrix worth paying for: a Windows-only handshake or process-teardown fault
+        # shows up here rather than on a Dealer's machine.
+        run: uv run pytest -m "not models" -q

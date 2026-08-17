@@ -1,0 +1,35 @@
+[project]
+name = "spectrapaint-inference"
+version = "0.1.0"
+description = "SpectraPaint inference service — all image and model work, over HTTP on localhost."
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx2",  # starlette's TestClient; plain httpx is deprecated there
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+# The fast lane runs `-m "not models"` on every push. Mark a test `models` when it needs weights,
+# and it becomes slow-lane only — see docs/design-decisions.md §9b.
+markers = [
+    "models: needs model weights; pull-request and nightly lanes only",
+]

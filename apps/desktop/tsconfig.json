@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // node16 emits CommonJS here (this package has no "type": "module") and, unlike the older
+    // "node" resolution, is not deprecated in TypeScript 7.
+    "module": "node16",
+    "moduleResolution": "node16",
+    "verbatimModuleSyntax": false,
+    "outDir": "out",
+    "rootDir": "src",
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
