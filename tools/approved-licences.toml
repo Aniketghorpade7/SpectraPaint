@@ -1,0 +1,53 @@
+# The licence policy, in one reviewable place.
+#
+# tools/licence_gate.py fails the build when a dependency or a model weight carries a licence that
+# is not listed here. Adding a licence to this file is a deliberate, reviewable act — which is the
+# point. This project has already come close to shipping a non-commercially-licensed model
+# (design-decisions.md §5), and the gate exists so that near-miss cannot happen quietly.
+#
+# SpectraPaint is a commercially deployed desktop application, distributed to dealerships as a
+# binary. That is the lens for every judgement below.
+
+# Permissive, no meaningful obligation beyond attribution. Safe to ship in a commercial binary.
+approved = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BlueOak-1.0.0",
+  "CC-BY-4.0",     # attribution required. Reached us as caniuse-lite, a build-time browser-support
+                   # database — data consumed by the build, never code we ship. If a CC-BY package
+                   # ever ends up inside the shipped binary, it needs an attribution notice.
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",       # weak copyleft, file-level. Fine as an unmodified dependency; if we ever patch
+                   # an MPL file, that file's source must be published.
+  "PSF-2.0",       # CPython itself
+  "Python-2.0",
+  "Unlicense",
+  "Zlib",
+]
+
+# Licences that are acceptable for development and demonstration only, and must never reach a
+# Dealer's machine. A weight or dependency listed here fails the gate the moment it is marked
+# shipped.
+development_only = [
+  "NVIDIA Source Code License-NC",
+]
+
+# Packages whose declared metadata is absent, ambiguous or plain wrong upstream, checked by hand.
+# Each entry needs a reason and a licence that someone actually looked at. Keep this list short —
+# it is a list of things the automated gate is no longer watching.
+[[exception]]
+name = "spectrapaint"
+ecosystem = "python"
+licence = "proprietary"
+reason = "Our own service package."
+
+[[exception]]
+name = "spectrapaint-inference"
+ecosystem = "python"
+licence = "proprietary"
+reason = "Our own service package."

@@ -1,0 +1,85 @@
+name: Slow lane
+
+# Seam 1 — the REST contract, with the real models. Gigabytes of weights and minutes of runtime,
+# so it does not run on every push: pull requests into `main`, plus a nightly run. See
+# docs/design-decisions.md §9b.
+#
+# Single OS, deliberately. The fast lane covers Linux and Windows because process teardown and path
+# handling differ; model inference does not differ enough to be worth the metered minutes twice.
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # 02:30 UTC nightly. The point is not the tests — the fast lane has usually already said what is
+    # broken. The point is the cache: a nightly run on `main` writes a cache that every later pull
+    # request can restore, because GitHub only lets a branch read caches from its own ref or the
+    # default branch. Without this, the first pull request of the day pays the full download.
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: slow-lane-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Seam 1 — REST contract, with models
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/inference/uv.lock
+
+      - name: Work out the weight cache key
+        id: weights
+        # Keyed on the pinned model versions themselves, not on the manifest file: editing a
+        # comment in the manifest should not throw away gigabytes of warm cache.
+        run: echo "key=$(python3 tools/fetch_models.py --cache-key)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the model weights
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-weights-${{ steps.weights.outputs.key }}
+          # No restore-keys on purpose. A partial match here would mean weights from a different
+          # pinned version, which is worse than a slow download — it would test the wrong model.
+
+      - name: Fetch the model weights from upstream
+        if: steps.cache.outputs.cache-hit != 'true'
+        # From the publisher, never from a mirror of ours. The SegFormer checkpoint is under a
+        # non-commercial research licence: downloading it for development is fine, re-hosting it
+        # would be redistribution (§9b, and docs/handoff/custom-wall-segmentation-model.md).
+        run: python3 tools/fetch_models.py
+
+      - name: Verify the weights match the manifest
+        # Runs on a cache hit too. A cache entry is not evidence: this asserts that what we are
+        # about to test with is the file whose licence and version were reviewed.
+        run: python3 tools/fetch_models.py --verify
+
+      - name: Install the service
+        working-directory: services/inference
+        run: uv sync --python 3.12
+
+      - name: Seam 1 contract tests
+        working-directory: services/inference
+        # Exit code 5 is "no tests collected". Tests that need weights are marked `models`, and
+        # until the segmentation tickets land there are none — that is a legitimately empty lane,
+        # not a failure. Any other non-zero code is a real failure.
+        run: |
+          set +e
+          uv run pytest -m models -q
+          status=$?
+          set -e
+          if [ $status -eq 5 ]; then
+            echo "No tests marked 'models' yet — the lane is wired up and waiting for them."
+            exit 0
+          fi
+          exit $status

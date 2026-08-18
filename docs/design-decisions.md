@@ -681,13 +681,75 @@ already had to be careful about exactly that licence. Mirroring is fine once our
 
 ### Status
 
-The **fast lane exists** as `.github/workflows/fast-lane.yml`, added with the walking skeleton (#1)
-because a skeleton with no CI is a skeleton nobody can safely build on. It runs lint, typecheck,
-format, the shell tests (§9d) and the model-free service tests on **both** Linux and Windows.
+Complete as of #16. What runs, and where:
 
-Tests needing weights are marked `models` in pytest and excluded from the fast lane, so the slow
-lane has a seam to attach to. **Still owed, and owned by #16:** the slow lane itself, the nightly
-run, the weight cache, the performance regression gate and the licence gate.
+| Workflow | Triggers | Does |
+|---|---|---|
+| `fast-lane.yml` — *Checks* | Every push, and PRs into `main`. Linux **and** Windows | Lint, typecheck, format, shell tests (§9d), model-free service tests. Licence gate on Linux only |
+| `fast-lane.yml` — *Performance gate* | Every push. Linux | Per-shade render regression gate. A separate job, so it measures on a runner doing nothing else |
+| `slow-lane.yml` | PRs into `main`, nightly at 02:30 UTC, and manually. Linux only | Restores the weight cache, fetches from upstream on a miss, verifies against the manifest, runs the `models`-marked contract tests |
+
+**The pinned weights live in `models/manifest.toml`** — upstream repository, immutable revision,
+sha256, licence, and whether the weight is shipped or development-only. That one file is the cache
+key, the download list and the licence gate's input, so those three cannot drift apart.
+`tools/fetch_models.py` fetches and verifies; a file whose hash does not match the manifest is
+deleted rather than used, because it is not the weight whose licence was reviewed.
+
+The cache is keyed on the pinned versions themselves rather than on the manifest file, so editing a
+comment does not discard gigabytes. There are deliberately **no `restore-keys`**: a near-miss cache
+hit would mean testing a different model version, which is worse than a slow download. The nightly
+run exists for the cache rather than the tests — GitHub only lets a branch read caches from its own
+ref or the default branch, so without a nightly run on `main` the first pull request of the day pays
+the full download.
+
+**The performance gate** is `spikes/latency/bench_render_loop.py --check`, against the budget in
+`spikes/latency/perf-baseline.json`. Both the baseline and the multiplier that turns it into a
+budget are recorded in that file, measured on the runner, with the date and the numpy version —
+an implicit threshold is one nobody can argue with. It gates the two preview resolutions, since
+those are what the Dealer actually browses at (§13, and the spike's own recommendation).
+
+**The licence gate** is `tools/licence_gate.py`, with the policy in `tools/approved-licences.toml`.
+It checks npm dependencies, Python dependencies and the weights in the manifest, and it fails if a
+weight marked `shipped` carries a licence that is not approved for distribution, or if any weight
+file has been committed to the repository at all. That last check is the one that matters: it is the
+mechanism preventing the non-commercial SegFormer checkpoint from being mirrored or shipped (§5).
+
+**`main` is protected** — no direct pushes, a green pipeline and a human review required to merge.
+The branch-per-ticket workflow, the required check names and why administrators are deliberately
+not enforced are in [conventions.md](./conventions.md) §7b.
+
+The protection itself is repository settings rather than a file in the repository, so it is applied
+once, by hand, by someone with admin rights:
+
+```bash
+gh api -X PUT repos/OWNER/SpectraPaint/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Checks (ubuntu-latest)",
+      "Checks (windows-latest)",
+      "Performance gate",
+      "Seam 1 — REST contract, with models"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": true
+}
+JSON
+```
+
+`strict` means a branch must be up to date with `main` before it merges — with tickets worked in
+isolated contexts, two individually-green branches breaking each other is the exact failure this
+pipeline exists to catch, and it can only be caught by testing them combined.
 
 **Useful coincidence:** the standard private-repo runner is 2-core / 7 GB — roughly **floor-tier
 hardware**. Since the benchmark needs no models, CI doubles as a continuous floor-tier performance

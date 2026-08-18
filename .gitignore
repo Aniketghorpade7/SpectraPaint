@@ -1,6 +1,7 @@
 # models are large and are fetched/exported, not committed
 models/*
 !models/README.md
+!models/manifest.toml
 
 # python
 __pycache__/

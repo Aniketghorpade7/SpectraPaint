@@ -1,0 +1,51 @@
+# Every model weight this project fetches, pinned and licensed.
+#
+# This file is the single source of truth for three things that must not drift apart:
+#
+#   1. what tools/fetch_models.py downloads, and from where
+#   2. the Actions cache key for the slow lane (see .github/workflows/slow-lane.yml)
+#   3. what the licence gate checks (tools/licence_gate.py)
+#
+# Weights themselves are never committed — see .gitignore and design-decisions.md §9b.
+#
+# Fields:
+#   revision      immutable upstream commit. Never a branch: "latest" is not a version.
+#   sha256        verified on every download. A weight that fails this is not the weight we
+#                 reviewed the licence of.
+#   licence       SPDX identifier where one exists, otherwise the upstream licence's own name.
+#   shipped       true if this weight goes out to a Dealer's machine. Drives the licence gate:
+#                 development-only weights are held to a looser bar than shipped ones.
+#   redistribute  whether we may re-host the file ourselves. False here is why the slow lane
+#                 fetches from upstream into a cache rather than mirroring into a Release.
+
+[[model]]
+id = "semantic-segformer-b0-ade20k"
+purpose = "Semantic pass — proposes the wall region that SAM 2 then refines (design-decisions.md §5)"
+repo = "nvidia/segformer-b0-finetuned-ade-512-512"
+revision = "489d5cd81a0b59fab9b7ea758d3548ebe99677da"
+file = "model.safetensors"
+sha256 = "6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9"
+size_bytes = 15036944
+licence = "NVIDIA Source Code License-NC"
+licence_url = "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512"
+shipped = false
+redistribute = false
+# Non-commercial research licence. Development and demonstration only, and it must be replaced
+# before commercial deployment — that is ticket #8, handed off in
+# docs/handoff/custom-wall-segmentation-model.md. Do not distil from it, do not use it to
+# auto-label training images, and do not mirror the file anywhere we control.
+
+[[model]]
+id = "refiner-sam2-hiera-tiny"
+purpose = "Boundary refinement — turns the proposed wall region into a crisp alpha matte (§5)"
+repo = "facebook/sam2-hiera-tiny"
+revision = "7c218beaf0bb87874785f32b582f640134fc1c09"
+file = "model.safetensors"
+sha256 = "1449035ba6ba2ed524c646da989e5cb3a9b93b97f1c1b2d474e598c3b748d99f"
+size_bytes = 155841672
+licence = "Apache-2.0"
+licence_url = "https://huggingface.co/facebook/sam2-hiera-tiny"
+shipped = true
+redistribute = true
+# Apache-2.0, so this one is fine to ship and fine to mirror. It is still fetched from upstream
+# for consistency with the SegFormer path.
