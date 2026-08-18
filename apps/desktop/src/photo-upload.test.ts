@@ -18,6 +18,11 @@ describe('photo helpers', () => {
     expect(photoMimeFor('PNG')).toBe('image/png');
   });
 
+  it('refuses an extension outside the formats we accept, rather than mislabelling it', () => {
+    expect(photoMimeFor('exe')).toBeNull();
+    expect(photoMimeFor('')).toBeNull();
+  });
+
   it('builds a data URL the renderer can put in an <img> without touching the filesystem', () => {
     expect(photoDataUrl(new Uint8Array([1, 2, 3]), 'image/png')).toBe('data:image/png;base64,AQID');
   });

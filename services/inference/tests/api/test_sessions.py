@@ -100,6 +100,23 @@ def test_a_file_that_is_not_an_image_is_refused(client: TestClient) -> None:
     assert response.json()["code"] == "unsupported_image"
 
 
+def test_a_decompression_bomb_is_refused_not_crashed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A small file claiming to decode to enormous dimensions must be refused with a message,
+    never allowed to blow up a later stage — acceptance criterion 6, the crash case."""
+
+    import PIL.Image
+
+    monkeypatch.setattr(PIL.Image, "MAX_IMAGE_PIXELS", 1)
+
+    response = upload(client, PNG_BYTES)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "unsupported_image"
+    assert response.json()["message"]
+
+
 def test_an_empty_file_is_refused(client: TestClient) -> None:
     response = upload(client, b"")
 

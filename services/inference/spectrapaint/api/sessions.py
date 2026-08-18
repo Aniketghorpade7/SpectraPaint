@@ -10,8 +10,6 @@ in-memory session dies with the process, which is correct for a single counter-s
 """
 
 import io
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
@@ -27,10 +25,9 @@ from spectrapaint.api.errors import (
 
 router = APIRouter()
 
-# Tuned in the same spirit as every other threshold in this project: a plausible starting value,
-# revisit against real photographs (docs/design-decisions.md §12). Room photos from a phone camera
-# rarely exceed a few MB; 25 MB allows even a burst-mode shot while capping the memory a single
-# request can make the service hold.
+# A deliberate bound, decided in docs/design-decisions.md §9 ("Upload size limit"): a phone photo
+# of a room is a few MB, so 25 MB accommodates burst mode while capping the memory a single request
+# can make the service hold. Revisit against real photos if the camera keeps surprising us.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 _MESSAGE_UNSUPPORTED_IMAGE = (
@@ -40,41 +37,24 @@ _MESSAGE_PHOTO_TOO_LARGE = "That photo is too large. Please choose one under 25 
 _MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please start a new one."
 
 
-@dataclass
-class Session:
-    """What the service knows about one loaded photo. Metadata only — the photo itself is handled
-    by whichever stage needs its pixels."""
-
-    id: str
-    created_at: datetime
-    original_name: str
-    content_type: str
-    size_bytes: int
-
-
 class SessionRegistry:
-    """The live set of sessions. No automatic deletion: a session leaves only when the Dealer ends
-    the consultation, and only then do requests against it fail."""
+    """The live set of session ids. Nothing more yet — no metadata is needed until a later stage
+    has something to attach to a session. No automatic deletion: a session leaves only when the
+    Dealer ends the consultation, and only then do requests against it fail."""
 
     def __init__(self) -> None:
-        self._sessions: dict[str, Session] = {}
+        self._sessions: set[str] = set()
 
-    def create(self, *, original_name: str, content_type: str, size_bytes: int) -> str:
-        session = Session(
-            id=uuid4().hex,
-            created_at=datetime.now(UTC),
-            original_name=original_name,
-            content_type=content_type,
-            size_bytes=size_bytes,
-        )
-        self._sessions[session.id] = session
-        return session.id
-
-    def get(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+    def create(self) -> str:
+        session_id = uuid4().hex
+        self._sessions.add(session_id)
+        return session_id
 
     def delete(self, session_id: str) -> bool:
-        return self._sessions.pop(session_id, None) is not None
+        if session_id not in self._sessions:
+            return False
+        self._sessions.remove(session_id)
+        return True
 
 
 def _registry(request: Request) -> SessionRegistry:
@@ -108,11 +88,7 @@ async def create_session(
 
     _verify_is_an_image(contents)
 
-    session_id = _registry(request).create(
-        original_name=photo.filename or "",
-        content_type=photo.content_type or "",
-        size_bytes=len(contents),
-    )
+    session_id = _registry(request).create()
     return {"session_id": session_id}
 
 
@@ -140,6 +116,14 @@ def _verify_is_an_image(contents: bytes) -> None:
     try:
         image = Image.open(io.BytesIO(contents))
         image.verify()
+    except Image.DecompressionBombError:
+        # A small file that decodes to enormous dimensions (Pillow's bomb guard). Refuse it here,
+        # or a later stage would try to hold that much memory.
+        raise ServiceError(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=UNSUPPORTED_IMAGE,
+            message=("That photo is too large to be processed. Please choose a smaller one."),
+        ) from None
     except (UnidentifiedImageError, OSError):
         raise ServiceError(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

@@ -27,10 +27,12 @@ export function registerCreateConsultationBridge(
 ): void {
   ipcMain.handle(CREATE_CONSULTATION_CHANNEL, async (event): Promise<CreateConsultationResult> => {
     if (!isTrustedSender(event.sender)) {
+      // A security refusal, not an outage: the caller is not our window, so telling them to restart
+      // the app would be telling them to do something that cannot help.
       return {
         status: 'failed',
         code: 'unauthorised',
-        message: 'SpectraPaint could not reach its own service. Please restart the app.',
+        message: 'SpectraPaint could not complete that action. Please try again.',
       };
     }
     return createConsultation(getSidecar, getWindow);
@@ -61,12 +63,22 @@ export async function createConsultation(
     return { status: 'failed', code: 'service_unavailable', message: UNAVAILABLE_MESSAGE };
   }
 
-  const sessionId = await uploadPhoto(sidecar, filePath, bytes);
+  const mime = photoMimeFor(path.extname(filePath).slice(1));
+  if (!mime) {
+    // The dialog only offers photo formats, but a typed filename can be anything — refuse rather
+    // than send bytes mislabelled as a format they are not.
+    return {
+      status: 'failed',
+      code: 'unsupported_file',
+      message: 'That file type is not supported. Please choose a JPEG, PNG or WebP photo.',
+    };
+  }
+
+  const sessionId = await uploadPhoto(sidecar, filePath, bytes, mime);
   if (!sessionId.ok) {
     return sessionId.result;
   }
 
-  const mime = photoMimeFor(path.extname(filePath).slice(1));
   return {
     status: 'ready',
     sessionId: sessionId.id,
@@ -108,14 +120,11 @@ async function uploadPhoto(
   sidecar: Sidecar,
   filePath: string,
   bytes: Buffer,
+  mime: string,
 ): Promise<{ ok: true; id: string } | { ok: false; result: CreateConsultationResult }> {
   const form = new FormData();
   // A fresh copy over a concrete ArrayBuffer, so the Blob constructor accepts it.
-  form.append(
-    'photo',
-    new Blob([new Uint8Array(bytes)], { type: photoMimeFor(path.extname(filePath).slice(1)) }),
-    path.basename(filePath),
-  );
+  form.append('photo', new Blob([new Uint8Array(bytes)], { type: mime }), path.basename(filePath));
 
   let response: Response;
   try {

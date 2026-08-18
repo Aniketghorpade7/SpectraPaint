@@ -15,11 +15,9 @@ const EXTENSION_TO_MIME: Record<(typeof PHOTO_EXTENSIONS)[number], string> = {
   webp: 'image/webp',
 };
 
-/** The MIME type the service and the renderer both need to interpret the bytes. */
-export function photoMimeFor(extension: string): string {
-  return (
-    EXTENSION_TO_MIME[extension.toLowerCase() as (typeof PHOTO_EXTENSIONS)[number]] ?? 'image/jpeg'
-  );
+/** The MIME type for the extension, or null when it is not one of the formats we accept. */
+export function photoMimeFor(extension: string): string | null {
+  return EXTENSION_TO_MIME[extension.toLowerCase() as (typeof PHOTO_EXTENSIONS)[number]] ?? null;
 }
 
 /** A base64 data URL, so the renderer can show the photo without any filesystem access. */

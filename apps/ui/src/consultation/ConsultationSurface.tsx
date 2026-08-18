@@ -16,7 +16,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
 
   if (state.phase === 'ready') {
     return (
-      <section className="consultation">
+      <main className="consultation">
         <div className="consultation__bar">
           <h1 className="consultation__title">Consultation</h1>
           <Button onClick={discard}>Discard photo</Button>
@@ -28,7 +28,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
             alt="The Customer's room photo"
           />
         </div>
-      </section>
+      </main>
     );
   }
 

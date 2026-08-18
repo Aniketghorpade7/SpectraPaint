@@ -31,22 +31,32 @@ export function useConsultation(): Consultation {
   const start = useCallback(async () => {
     setState({ phase: 'uploading' });
 
-    const result = await window.spectrapaint.createConsultation();
-    switch (result.status) {
-      case 'cancelled':
-        // Walking away is a decision, not a failure — back to where the Dealer was, silently.
-        setState({ phase: 'idle' });
-        break;
-      case 'ready':
-        setState({
-          phase: 'ready',
-          sessionId: result.sessionId,
-          imageDataUrl: result.imageDataUrl,
-        });
-        break;
-      case 'failed':
-        setState({ phase: 'failed', message: result.message });
-        break;
+    try {
+      const result = await window.spectrapaint.createConsultation();
+      switch (result.status) {
+        case 'cancelled':
+          // Walking away is a decision, not a failure — back to where the Dealer was, silently.
+          setState({ phase: 'idle' });
+          break;
+        case 'ready':
+          setState({
+            phase: 'ready',
+            sessionId: result.sessionId,
+            imageDataUrl: result.imageDataUrl,
+          });
+          break;
+        case 'failed':
+          setState({ phase: 'failed', message: result.message });
+          break;
+      }
+    } catch (error) {
+      // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
+      // must not sit on "Loading your photo…" with no way out.
+      console.error('[consultation] could not start a consultation:', error);
+      setState({
+        phase: 'failed',
+        message: 'The photo could not be loaded. Please try another photo.',
+      });
     }
   }, []);
 
