@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type {
   BootStatus,
+  CreateConsultationResult,
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
@@ -10,6 +11,7 @@ import {
   BOOT_STATUS_CHANNEL,
   BOOT_STATUS_GET_CHANNEL,
   BOOT_STATUS_RETRY_CHANNEL,
+  CREATE_CONSULTATION_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
 } from './channels';
 
@@ -28,6 +30,10 @@ import {
 const bridge: SpectraPaintBridge = {
   request<T>(request: ServiceRequest): Promise<ServiceResponse<T>> {
     return ipcRenderer.invoke(SERVICE_REQUEST_CHANNEL, request) as Promise<ServiceResponse<T>>;
+  },
+
+  createConsultation(): Promise<CreateConsultationResult> {
+    return ipcRenderer.invoke(CREATE_CONSULTATION_CHANNEL) as Promise<CreateConsultationResult>;
   },
 
   onBootStatus(listener: (status: BootStatus) => void): () => void {

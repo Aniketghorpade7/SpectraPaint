@@ -7,6 +7,7 @@
  */
 
 export const SERVICE_REQUEST_CHANNEL = 'spectrapaint:request';
+export const CREATE_CONSULTATION_CHANNEL = 'spectrapaint:create-consultation';
 export const BOOT_STATUS_CHANNEL = 'spectrapaint:boot-status';
 export const BOOT_STATUS_GET_CHANNEL = 'spectrapaint:boot-status:get';
 export const BOOT_STATUS_RETRY_CHANNEL = 'spectrapaint:boot-status:retry';

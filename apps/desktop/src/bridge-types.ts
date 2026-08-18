@@ -26,12 +26,28 @@ export interface ServiceResponse<T = unknown> {
   body: T;
 }
 
+/**
+ * What a new-Consultation attempt comes back as. The Dealer either changed their mind, or has a
+ * photo on screen, or was refused with a message the UI may show as-is. Cancellation is a result,
+ * not an error — walking away is not a failure.
+ */
+export type CreateConsultationResult =
+  | { status: 'cancelled' }
+  | { status: 'ready'; sessionId: string; imageDataUrl: string }
+  | { status: 'failed'; code: string; message: string };
+
 export interface SpectraPaintBridge {
   /**
    * Call the inference service. The secret and the current base URL are added in the main
    * process; a caller supplies only a path within the contract.
    */
   request<T = unknown>(request: ServiceRequest): Promise<ServiceResponse<T>>;
+
+  /**
+   * Open the native photo dialog, upload the chosen file to create a new Consultation, and return
+   * the session id plus the photo for display. All filesystem and secret handling stays in main.
+   */
+  createConsultation(): Promise<CreateConsultationResult>;
 
   /** Subscribe to boot progress. Returns an unsubscribe function. */
   onBootStatus(listener: (status: BootStatus) => void): () => void;
