@@ -1,0 +1,54 @@
+/* The Consultation surface. Greys only — docs/ui-guidelines.md: nothing saturated near the render.
+   The only colour here is the room photo itself. */
+
+.consultation {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* The empty and loading states: centred, one action, a generous margin around the render area. */
+.consultation--start {
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-8);
+  text-align: center;
+}
+
+.consultation__title {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-emphasis);
+}
+
+.consultation__hint {
+  margin: 0 0 var(--space-6);
+  max-width: 46ch;
+  color: var(--grey-5);
+}
+
+.consultation__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--grey-3);
+}
+
+.consultation__stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  overflow: hidden;
+}
+
+.consultation__photo {
+  /* Contain, never cover: the Customer's room is judged whole, against neutral grey. */
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
