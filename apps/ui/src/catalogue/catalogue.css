@@ -1,0 +1,214 @@
+/* The Catalogue panel. Greys only, apart from the Shade swatches themselves — docs/ui-guidelines.md:
+   the only saturated colour on screen should be the paint. */
+
+.catalogue {
+  --shade-row-height: 56px; /* keep in step with ROW_HEIGHT in ShadeList.tsx */
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 380px;
+  min-width: 380px;
+  height: 100%;
+  padding: var(--space-4);
+  background: var(--grey-1);
+  border-left: 1px solid var(--grey-3);
+  overflow: hidden;
+}
+
+.catalogue__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.catalogue__title {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-emphasis);
+}
+
+.catalogue__source {
+  margin: 0;
+  color: var(--grey-5);
+  font-size: var(--text-small);
+}
+
+.catalogue__subtitle {
+  margin: 0 0 var(--space-2);
+  color: var(--grey-5);
+  font-size: var(--text-small);
+  font-weight: var(--weight-emphasis);
+}
+
+.catalogue__search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.catalogue__label {
+  color: var(--grey-5);
+  font-size: var(--text-small);
+}
+
+.catalogue__input {
+  min-height: var(--tap-target-min);
+  padding: 0 var(--space-3);
+  background: var(--grey-0);
+  color: var(--grey-6);
+  border: 1px solid var(--grey-3);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.catalogue__input:focus-visible {
+  outline: 2px solid var(--grey-5);
+  outline-offset: 1px;
+}
+
+.catalogue__recent-row,
+.catalogue__family-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.catalogue__recent-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.catalogue__recent-row .shade-swatch {
+  width: 160px;
+}
+
+/* A family button is chosen by weight and border, never by hue. */
+.catalogue__family {
+  min-height: var(--tap-target-min);
+  padding: 0 var(--space-3);
+  font-size: var(--text-small);
+  font-weight: var(--weight-normal);
+}
+
+.catalogue__family--on {
+  border-color: var(--grey-5);
+  font-weight: var(--weight-emphasis);
+}
+
+.catalogue__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.catalogue__empty-message {
+  margin: 0;
+  color: var(--grey-5);
+}
+
+/* -- the virtualised list ------------------------------------------------------------------- */
+
+.shade-list {
+  flex: 1;
+  overflow-y: auto;
+  border-top: 1px solid var(--grey-3);
+}
+
+.shade-list__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shade-list__row {
+  height: var(--shade-row-height);
+}
+
+/* -- one Shade ------------------------------------------------------------------------------ */
+
+.shade-swatch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  height: var(--shade-row-height);
+  min-height: var(--tap-target-min);
+  padding: var(--space-2);
+  background: none;
+  color: var(--grey-6);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shade-swatch:hover {
+  background: var(--grey-2);
+}
+
+.shade-swatch:focus-visible {
+  outline: 2px solid var(--grey-5);
+  outline-offset: -2px;
+}
+
+.shade-swatch--selected {
+  border-color: var(--grey-6);
+  background: var(--grey-2);
+}
+
+.shade-swatch--placeholder {
+  background: var(--grey-2);
+  opacity: 0.4;
+}
+
+/* The chip carries the Shade Code, so the Dealer reads both at once and can pull the physical
+   chip from the Fandeck to confirm. */
+.shade-swatch__chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 104px;
+  min-width: 104px;
+  height: 40px;
+  border: 1px solid var(--grey-3);
+  border-radius: 3px;
+}
+
+.shade-swatch__code {
+  color: #ffffff;
+  font-size: var(--text-body);
+  font-weight: var(--weight-emphasis);
+  letter-spacing: 0.02em;
+}
+
+/* On a light Shade, white text on the colour is unreadable. Black and white only: a tinted label
+   would sit next to the paint and shift how it reads. */
+.shade-swatch__chip--light .shade-swatch__code {
+  color: #000000;
+}
+
+.shade-swatch__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.shade-swatch__name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.shade-swatch__meta {
+  color: var(--grey-5);
+  font-size: var(--text-small);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
