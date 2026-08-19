@@ -14,6 +14,38 @@ describe('what the renderer is allowed to ask for', () => {
     expect(isPermittedRequest({ path: '/sessions/abc-123', method: 'DELETE' })).toBe(true);
   });
 
+  it('permits the query strings the Catalogue endpoints need', () => {
+    expect(isPermittedRequest({ path: '/catalogue/shades?limit=100&offset=200' })).toBe(true);
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=morning+linen' })).toBe(true);
+    expect(isPermittedRequest({ path: '/catalogue/shades?shade_family=Earth%20Tones' })).toBe(true);
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=' })).toBe(true);
+  });
+
+  it('permits what a Dealer types, once URLSearchParams has encoded it', () => {
+    const typed = ['50% grey', 'café crème', 'a/b', '..', '<script>', "o'brien"];
+
+    for (const q of typed) {
+      const path = `/catalogue/shades?${new URLSearchParams({ q }).toString()}`;
+      expect(isPermittedRequest({ path }), path).toBe(true);
+    }
+  });
+
+  it('refuses a query string that was not built by encoding', () => {
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=a b' })).toBe(false);
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=<script>' })).toBe(false);
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=a?b' })).toBe(false);
+  });
+
+  it('refuses a fragment, which would hide the tail of the URL from this check', () => {
+    expect(isPermittedRequest({ path: '/catalogue/shades#/../secrets' })).toBe(false);
+    expect(isPermittedRequest({ path: '/catalogue/shades?q=a#b' })).toBe(false);
+  });
+
+  it('still refuses traversal in the path when a query string is present', () => {
+    expect(isPermittedRequest({ path: '/catalogue/../secrets?q=x' })).toBe(false);
+    expect(isPermittedRequest({ path: '//example.com/catalogue?q=x' })).toBe(false);
+  });
+
   it('refuses anything that names a host', () => {
     expect(isPermittedRequest({ path: 'http://example.com/health' })).toBe(false);
     expect(isPermittedRequest({ path: '//example.com/health' })).toBe(false);

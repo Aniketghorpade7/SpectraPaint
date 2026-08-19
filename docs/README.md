@@ -9,7 +9,11 @@ Start here.
 2. **[design-decisions.md](./design-decisions.md)** — the hub. Every decision made so far, with the
    reasoning, plus what is still open.
 3. **[adr/](./adr/)** — Architecture Decision Records for the choices that are expensive to reverse.
-4. **[handoff/](./handoff/)** — work deliberately parked, written up so it can be resumed cold.
+4. **[implementation-decisions.md](./implementation-decisions.md)** — the decisions the code forced,
+   ticket by ticket: what, why, and who.
+5. **[technical-difficulties.md](./technical-difficulties.md)** — what fought us on the way, solved
+   or still open, so nobody meets it twice.
+6. **[handoff/](./handoff/)** — work deliberately parked, written up so it can be resumed cold.
 
 ## Before writing code
 
@@ -19,7 +23,19 @@ Start here.
 | **[ui-guidelines.md](./ui-guidelines.md)** | Minimal UI rules. The one that is not about taste: **neutral grey chrome, nothing saturated near the render** — a colour looks different depending on what surrounds it, and this app exists for colour judgement. |
 | **[specs/v1-spectrapaint.md](./specs/v1-spectrapaint.md)** | What V1 is, end to end, with the two test seams. |
 
-Both are linked from every ticket, since neither loads automatically.
+`conventions.md` and `ui-guidelines.md` are linked from every ticket, since neither loads
+automatically.
+
+## While writing code
+
+Keeping these two current is part of the ticket, not paperwork afterwards — see `conventions.md`
+§7c. Tickets are worked in isolated fresh contexts, so anything not written down is lost to the next
+contributor.
+
+| Document | What goes in it |
+|---|---|
+| **[implementation-decisions.md](./implementation-decisions.md)** | Every major decision taken while implementing, **why**, and **who** took it. `design-decisions.md` holds the decisions made before the code existed; this holds the ones the code forced. |
+| **[technical-difficulties.md](./technical-difficulties.md)** | The technical difficulties you hit — resolved, worked around, or still open. Dead ends are worth as much as fixes. |
 
 ## Architecture Decision Records
 

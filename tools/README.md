@@ -11,6 +11,7 @@ Not application code. Nothing in `apps/` or `services/` may import from here.
 | `fetch_models.py` | Downloads the weights pinned in `models/manifest.toml` from their original upstream source, verifying sha256. Also prints the Actions cache key. |
 | `licence_gate.py` | Fails the build when a dependency or a model weight carries a licence that is not approved. |
 | `approved-licences.toml` | The licence policy. Adding a licence here is a deliberate, reviewable decision — read the file before you edit it. |
+| `generate_stand_in_catalogue.py` | Generates the public stand-in Catalogue file in `data/catalogue/` by sampling the Lab space. Deterministic, standard library only, and `--check` verifies the committed file still matches. |
 
 ```bash
 python tools/fetch_models.py            # fetch anything missing, verify everything
@@ -20,6 +21,16 @@ cd services/inference                   # the gate reads licences from this envi
 uv run python ../../tools/licence_gate.py
 uv run python ../../tools/licence_gate.py --list   # print every licence found
 ```
+
+```bash
+python tools/generate_stand_in_catalogue.py           # rewrite the stand-in Catalogue file
+python tools/generate_stand_in_catalogue.py --check   # verify the committed file, write nothing
+```
+
+The stand-in Catalogue is generated rather than borrowed from a manufacturer, so the repository
+carries no redistribution question for data we are going to replace with Arun Paint Industries'
+measured values. It is realistic in shape and size, **not** in accuracy — see
+`docs/implementation-decisions.md`.
 
 Weights are fetched, never committed, and never mirrored anywhere we control. The SegFormer
 checkpoint is under a non-commercial research licence: downloading it for development is fine,

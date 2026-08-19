@@ -52,9 +52,7 @@ def test_core_property_shading_times_base_renders_shading_times_target() -> None
     photo = shading * BASE
     light_map = light_map_of(photo, BASE)
 
-    composite = composite_linear(
-        photo, _alpha(), new_wall_of(light_map, SHADE, TINT)
-    )
+    composite = composite_linear(photo, _alpha(), new_wall_of(light_map, SHADE, TINT))
     assert composite.shape == photo.shape
     assert np.allclose(composite, shading * SHADE, atol=1e-5)
 
@@ -72,9 +70,7 @@ def test_light_tint_is_part_of_the_analytical_output() -> None:
     shading = _shading(seed=3)
     photo = shading * BASE
 
-    out = composite_linear(
-        photo, _alpha(), new_wall_of(light_map_of(photo, BASE), SHADE, tint)
-    )
+    out = composite_linear(photo, _alpha(), new_wall_of(light_map_of(photo, BASE), SHADE, tint))
     assert np.allclose(out, shading * SHADE * tint, atol=1e-5)
 
 

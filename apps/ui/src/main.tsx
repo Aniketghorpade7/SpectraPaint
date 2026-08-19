@@ -4,6 +4,7 @@ import { App } from './App';
 import './tokens.css';
 import './components/components.css';
 import './consultation/consultation.css';
+import './catalogue/catalogue.css';
 
 const container = document.getElementById('root');
 if (!container) {

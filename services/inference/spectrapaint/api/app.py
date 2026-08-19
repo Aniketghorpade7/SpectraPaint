@@ -1,30 +1,51 @@
 """The localhost REST contract.
 
-    GET    /health                                (this ticket)
+    GET    /health
     POST   /sessions              (photo upload) -> { session_id }    <- issue #2
-    GET    /sessions/{id}/events                  (progress stream)
+    GET    /sessions/{id}/events                  (progress stream)   <- issue #4
     GET    /sessions/{id}/planes
     POST   /sessions/{id}/renders { assignments, mode }
     DELETE /sessions/{id}                                              <- issue #2
+    GET    /catalogue                             (what is loaded)     <- issue #5
+    GET    /catalogue/shades                      (browse or search)   <- issue #5
+    GET    /catalogue/shades/{shade_code}                              <- issue #5
 
-The session endpoints exist (issue #2). The rest arrive with the tickets that need them.
+The session, progress, render and Catalogue endpoints exist; the rest arrive with the tickets that
+need them.
 """
+
+from collections.abc import Callable
 
 from fastapi import Depends, FastAPI
 
 from spectrapaint.api.auth import secret_required
+from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.preparation import Stage, build_preparation_stages
 from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
+from spectrapaint.catalogue import Catalogue, open_catalogue
 
 
-def create_app(secret: str) -> FastAPI:
+def create_app(
+    secret: str,
+    catalogue: Catalogue | None = None,
+    preparation_stages: Callable[[bytes], list[Stage]] = build_preparation_stages,
+) -> FastAPI:
     """Build the service, guarded by the per-launch secret.
 
     The secret is an argument rather than an environment read, so tests construct an app without
     touching process state and the runtime keeps its one place to decide where the secret came
     from (see spectrapaint.runtime).
+
+    The Catalogue is an argument for the same reason, and defaults to whichever file the machine is
+    configured with. It is loaded here, at construction, rather than on the first request: a service
+    that starts happily and only discovers its Catalogue is unreadable when a Customer is at the
+    counter has turned a setup problem into a Consultation problem.
+
+    ``preparation_stages`` is an argument for the same reason too: tests inject deterministic stages
+    so the progress stream is assertable without timing luck (ticket #4).
     """
 
     app = FastAPI(
@@ -40,9 +61,11 @@ def create_app(secret: str) -> FastAPI:
     )
 
     install_error_handlers(app)
-    app.state.session_registry = SessionRegistry()
+    app.state.session_registry = SessionRegistry(preparation_stages)
+    app.state.catalogue = open_catalogue() if catalogue is None else catalogue
     app.include_router(sessions_router)
     app.include_router(renders_router)
+    app.include_router(catalogue_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

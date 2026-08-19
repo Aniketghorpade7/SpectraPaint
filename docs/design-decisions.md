@@ -1072,16 +1072,16 @@ are generated up front and are pure, so there is no test seam problem.
 
 ### Decided: the shade is represented in CIELAB and converted to linear RGB
 
-**Decided:** catalogue shades arrive as CIELAB (`LabD50`) — the catalogue's native space — and
-`colour.lab_to_linear_rgb` converts to linear RGB via a **D50→D65 chromatic adaptation**. How:
-`XYY` from Lab, adapt with a Bradford matrix, D65 XYZ to linear RGB, clamp to `[0, 1]`.
+**Decided:** catalogue shades arrive as CIELAB under the **D65, 2° observer** reference white — the
+Catalogue's stored colour space, enforced by the loader (`loader.REQUIRED_COLOUR_SPACE`) — and
+`colour.lab_to_linear_rgb` converts them straight to linear RGB: Lab → XYZ under the D65 white
+point, XYZ → linear sRGB, clamp to `[0, 1]`. No chromatic adaptation is involved, because the
+Catalogue and the render pipeline share the same reference white.
 
 **Why, and why at this boundary:** §6 says the composite happens in linear space, where the spectra
 multiply. A shade defined in Lab must therefore cross to linear RGB somewhere, and doing it
 **inside the colour module** keeps shape-shifting invisible to the engine. The catalogue stays exact
-at the source, the engine stays pure linear, and the conversion has one home. D50→D65 adaptation is
-required because the catalogue's D50 reference white and the render pipeline's D65 are different —
-adapting avoids a colour cast that would otherwise appear as a systematic fidelity error.
+at the source, the engine stays pure linear, and the conversion has one home.
 
 ### Decided: scene estimates use an interior median with explicit clamping
 

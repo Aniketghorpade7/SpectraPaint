@@ -57,7 +57,7 @@ def upload(client: TestClient, contents: bytes) -> str:
 def render(
     client: TestClient,
     session_id: str,
-    shade_id: str = "ST-204",
+    shade_id: str = "PS-1001",
     mode: str = "realistic",
 ) -> object:
     return client.post(
@@ -85,7 +85,7 @@ def test_the_wall_pixels_are_repainted(client: TestClient) -> None:
 
     session_id = upload(client, png_of(NEUTRAL_ROOM_SRGB))
 
-    response = render(client, session_id, shade_id="ST-204")
+    response = render(client, session_id, shade_id="PS-1001")
 
     assert response.status_code == 201
     centre = to_png(response.content).getpixel((ROOM_SIZE[0] // 2, ROOM_SIZE[1] // 2))
@@ -114,7 +114,7 @@ def test_realistic_tints_the_shade_by_the_room_light(
 def test_unknown_shade_is_a_clean_422(client: TestClient) -> None:
     session_id = upload(client, png_of(NEUTRAL_ROOM_SRGB))
 
-    response = render(client, session_id, shade_id="ST-999")
+    response = render(client, session_id, shade_id="PS-9999")
 
     assert response.status_code == 422
     body = response.json()
@@ -129,7 +129,7 @@ def test_an_unknown_mode_is_a_malformed_request(client: TestClient) -> None:
     response = client.post(
         f"/sessions/{session_id}/renders",
         headers=auth(),
-        json={"shade_id": "ST-101", "mode": "photorealistic"},
+        json={"shade_id": "PS-1001", "mode": "photorealistic"},
     )
 
     assert response.status_code == 422
@@ -148,7 +148,7 @@ def test_render_requires_the_secret(client: TestClient) -> None:
 
     response = client.post(
         f"/sessions/{session_id}/renders",
-        json={"shade_id": "ST-101", "mode": "realistic"},
+        json={"shade_id": "PS-1001", "mode": "realistic"},
     )
 
     assert response.status_code == 401

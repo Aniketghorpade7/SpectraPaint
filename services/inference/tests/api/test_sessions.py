@@ -161,7 +161,14 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/health", frozenset({"GET"})),
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
+        ("/sessions/{session_id}/events", frozenset({"GET"})),
+        # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
+        # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
+        # there is nothing here that writes, and nothing that takes an image.
+        ("/catalogue", frozenset({"GET"})),
+        ("/catalogue/shades", frozenset({"GET"})),
+        ("/catalogue/shades/{shade_code}", frozenset({"GET"})),
     }
 
     actual = set()

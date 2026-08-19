@@ -1,23 +1,24 @@
-"""Session lifecycle: ``POST /sessions`` and ``DELETE /sessions/{id}``.
+"""Session lifecycle: ``POST /sessions``, ``GET /sessions/{id}/events`` and
+``DELETE /sessions/{id}``.
 
 A photo enters the system only here, and the lifecycle is what every later endpoint hangs off.
-Since issue #3, the upload also does the once-per-photo preparation the render path needs: the
-photo is decoded, linearised through the 256-entry LUT (encode-once, per the
-spec in docs/specs/v1-spectrapaint.md),
-and the stub Wall Plane matte is built for it. A render request therefore never re-encodes -- the
-structure of the contract enforces it, not a rule in the code.
+Uploading records the session and starts its preparation in the background — the bytes are
+validated so a corrupt or unsupported file is caught at the door, and preparation is where the photo
+is actually read (ticket #4). The render path (issue #3) consumes the prepared photo that same
+preparation produces, so a render never touches the upload bytes.
 
 The registry is deliberately in-memory: persistence to disk is ticket #11's concern, and an
 in-memory session dies with the process, which is correct for a single counter-side consultation.
 """
 
 import io
-from dataclasses import dataclass
+import json
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 from uuid import uuid4
 
-import numpy as np
 from fastapi import APIRouter, File, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 
 from spectrapaint.api.errors import (
@@ -26,7 +27,12 @@ from spectrapaint.api.errors import (
     UNSUPPORTED_IMAGE,
     ServiceError,
 )
-from spectrapaint.render.luts import linearise_u8
+from spectrapaint.api.preparation import (
+    MESSAGE_PREPARATION_FAILED,
+    PreparationJob,
+    PreparedPhoto,
+    Stage,
+)
 
 router = APIRouter()
 
@@ -36,49 +42,38 @@ router = APIRouter()
 MAX_UPLOAD_MB = 25
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
-# The prepared photo is capped on its long side so the in-memory working image stays at preview
-# scale (~1.3 MP) -- docs/specs/v1-spectrapaint.md Performance: full-resolution renders are a later
-# ticket; the ~1 MP preview is the per-tap path while browsing. 1280 px at 16:9 is ~0.9 MP.
-MAX_PREPARED_DIMENSION = 1280
-
 _MESSAGE_UNSUPPORTED_IMAGE = (
     "That file could not be read as a photo. Please choose a JPEG, PNG or WebP image."
 )
 # Derived from the limit itself, so retuning the cap cannot leave the message saying otherwise.
 _MESSAGE_PHOTO_TOO_LARGE = f"That photo is too large. Please choose one under {MAX_UPLOAD_MB} MB."
-# Public: the render endpoint shares this message with the session endpoints.
-MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please start a new one."
-
-# Stub Wall Plane geometry, decided in docs/design-decisions.md S14: a centred rectangle covering
-# 60% x 55% of the photo, with a soft edge band. The segmentation tickets replace the rectangle;
-# the shape of the alpha map (HxWx1 float [0, 1]) is the contract that stays.
-_STUB_WIDTH_FRACTION = 0.60
-_STUB_HEIGHT_FRACTION = 0.55
-_STUB_SOFT_BAND_FRACTION = 0.03
-
-
-@dataclass(frozen=True)
-class PreparedPhoto:
-    """The once-per-photo work the render path consumes (issue #3's encode-once rule)."""
-
-    linear: np.ndarray  # HxWx3 float32, linear RGB at preview scale
-    wall_alpha: np.ndarray  # HxWx1 float32, the stub Wall Plane matte in [0, 1]
+_MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please start a new one."
 
 
 class SessionRegistry:
-    """The live sessions, each with its prepared photo.
+    """The live set of sessions, each with its preparation running in the background.
 
-    No automatic deletion: a session leaves only when the Dealer ends the consultation, and only
-    then do requests against it fail.
+    A session is its preparation job: upload creates both at once, and the photo's bytes live only
+    inside that job's stages. No automatic deletion: a session leaves only when the Dealer ends the
+    consultation, and only then do requests against it fail.
     """
 
-    def __init__(self) -> None:
-        self._sessions: dict[str, PreparedPhoto] = {}
+    def __init__(self, preparation_stages: Callable[[bytes], list[Stage]]) -> None:
+        self._preparation_stages = preparation_stages
+        self._sessions: dict[str, PreparationJob] = {}
 
-    def create(self, photo: PreparedPhoto) -> str:
+    def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
-        self._sessions[session_id] = photo
+        job = PreparationJob(self._preparation_stages(contents))
+        self._sessions[session_id] = job
+        # Started here so preparation genuinely begins on upload (docs/design-decisions.md §13) and
+        # runs behind the Dealer's next move. The job's thread is daemonic and short-lived: a
+        # session deleted mid-preparation abandons at most a few milliseconds of work.
+        job.start()
         return session_id
+
+    def job(self, session_id: str) -> PreparationJob | None:
+        return self._sessions.get(session_id)
 
     def delete(self, session_id: str) -> bool:
         if session_id not in self._sessions:
@@ -86,27 +81,33 @@ class SessionRegistry:
         del self._sessions[session_id]
         return True
 
-    def photo(self, session_id: str) -> PreparedPhoto | None:
-        return self._sessions.get(session_id)
-
 
 def _registry(request: Request) -> SessionRegistry:
     return request.app.state.session_registry
 
 
-def require_photo(request: Request, session_id: str) -> PreparedPhoto:
-    """The prepared photo for a session, or the one not-found error.
+async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
+    """The session's prepared photo, or a clean error.
 
-    Public so the render endpoint shares the same message and response shape as every other
-    session-scoped route.
+    Waits for the session's background preparation to reach its terminal event, then returns the
+    photo it produced. Public so the render endpoint shares the same message and response shape as
+    every other session-scoped route.
     """
 
-    photo = _registry(request).photo(session_id)
-    if photo is None:
+    job = _registry(request).job(session_id)
+    if job is None:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
             code=SESSION_NOT_FOUND,
-            message=MESSAGE_SESSION_NOT_FOUND,
+            message=_MESSAGE_SESSION_NOT_FOUND,
+        )
+
+    photo = await job.photo()
+    if photo is None:
+        raise ServiceError(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=UNSUPPORTED_IMAGE,
+            message=MESSAGE_PREPARATION_FAILED,
         )
     return photo
 
@@ -138,8 +139,35 @@ async def create_session(
 
     _verify_is_an_image(contents)
 
-    session_id = _registry(request).create(_prepare(contents))
+    session_id = _registry(request).create(contents)
     return {"session_id": session_id}
+
+
+@router.get("/sessions/{session_id}/events")
+async def stream_events(request: Request, session_id: str) -> StreamingResponse:
+    """The progress stream for one session's preparation.
+
+    Server-sent events over plain HTTP: every progress event so far, then each new one as it lands,
+    then exactly one terminal event (``done`` or ``failed``), after which the stream closes. A
+    reader that connects after preparation finished still replays the whole log, so it never waits
+    on an event already sent. Authenticated like everything else — by the secret header, never a
+    query string, which is why this is a fetch-based stream rather than an ``EventSource``
+    (docs/specs/v1-spectrapaint.md).
+    """
+
+    job = _registry(request).job(session_id)
+    if job is None:
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=SESSION_NOT_FOUND,
+            message=_MESSAGE_SESSION_NOT_FOUND,
+        )
+
+    return StreamingResponse(
+        _sse_stream(job.stream()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -150,57 +178,8 @@ async def delete_session(request: Request, session_id: str) -> None:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
             code=SESSION_NOT_FOUND,
-            message=MESSAGE_SESSION_NOT_FOUND,
+            message=_MESSAGE_SESSION_NOT_FOUND,
         )
-
-
-def _prepare(contents: bytes) -> PreparedPhoto:
-    """Decode, downscale to preview scale, linearise, and build the stub wall matte.
-
-    This is the once-per-photo preparation; the render path never repeats it. Downscaling happens
-    before linearisation so the LUT input is the actual working pixel data, exactly as the
-    preview-sized render will consume it.
-    """
-
-    with Image.open(io.BytesIO(contents)) as image:
-        rgb = image.convert("RGB")
-        if max(rgb.size) > MAX_PREPARED_DIMENSION:
-            scale = MAX_PREPARED_DIMENSION / max(rgb.size)
-            rgb = rgb.resize(
-                (max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale))),
-                resample=Image.Resampling.LANCZOS,
-            )
-        photo_u8 = np.asarray(rgb, dtype=np.uint8)
-
-    linear = np.ascontiguousarray(linearise_u8(photo_u8), dtype=np.float32)
-    return PreparedPhoto(linear=linear, wall_alpha=_stub_wall_alpha(linear.shape[:2]))
-
-
-def _stub_wall_alpha(shape: tuple[int, int]) -> np.ndarray:
-    """The stub Wall Plane matte: a centred, soft-edged rectangle in [0, 1].
-
-    Replaced by the real segmentation mattes; its shape is the contract that stays. Edge band is
-    a linear ramp so the alpha composite stays clean in linear space (issue #3 criterion 2).
-    """
-
-    height, width = shape
-    rect_w = max(1, round(width * _STUB_WIDTH_FRACTION))
-    rect_h = max(1, round(height * _STUB_HEIGHT_FRACTION))
-    band = max(1, round(min(width, height) * _STUB_SOFT_BAND_FRACTION))
-
-    left = (width - rect_w) // 2
-    right = left + rect_w
-    top = (height - rect_h) // 2
-    bottom = top + rect_h
-
-    x = np.arange(width, dtype=np.float32)
-    y = np.arange(height, dtype=np.float32)
-
-    # Distance to the rectangle edge, in pixels, positive inside. Then alpha ramps from 0 at
-    # ``edge - band`` to 1 at ``edge``, and is fully 1 in the interior.
-    from_left = np.minimum(np.minimum(x[None, :] - left, right - x[None, :]), band) / band
-    from_top = np.minimum(np.minimum(y[:, None] - top, bottom - y[:, None]), band) / band
-    return np.clip(np.minimum(from_left, from_top), 0.0, 1.0)[..., None].astype(np.float32)
 
 
 def _verify_is_an_image(contents: bytes) -> None:
@@ -210,8 +189,8 @@ def _verify_is_an_image(contents: bytes) -> None:
     is not an image at all, and it catches a truncated PNG. It is weaker than it looks for JPEG:
     a JPEG with its EOI marker stripped passes ``verify()`` silently.
 
-    So this is a gate, not a guarantee. ``_prepare`` decodes the pixels right after it, so a file
-    that slips past the gate is caught before anything downstream touches it.
+    So this is a gate, not a guarantee. The preparation job's stage decodes the pixels right after
+    it, so a file that slips past the gate is caught before anything downstream touches it.
     """
 
     try:
@@ -231,3 +210,10 @@ def _verify_is_an_image(contents: bytes) -> None:
             code=UNSUPPORTED_IMAGE,
             message=_MESSAGE_UNSUPPORTED_IMAGE,
         ) from None
+
+
+async def _sse_stream(events: AsyncIterator[dict[str, str]]) -> AsyncIterator[str]:
+    """Frame each event as a server-sent event. Data-only events; the payload is the JSON body."""
+
+    async for event in events:
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

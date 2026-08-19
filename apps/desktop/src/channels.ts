@@ -11,3 +11,6 @@ export const CREATE_CONSULTATION_CHANNEL = 'spectrapaint:create-consultation';
 export const BOOT_STATUS_CHANNEL = 'spectrapaint:boot-status';
 export const BOOT_STATUS_GET_CHANNEL = 'spectrapaint:boot-status:get';
 export const BOOT_STATUS_RETRY_CHANNEL = 'spectrapaint:boot-status:retry';
+export const PROGRESS_EVENT_CHANNEL = 'spectrapaint:progress';
+export const PROGRESS_STREAM_START_CHANNEL = 'spectrapaint:progress:start';
+export const PROGRESS_STREAM_STOP_CHANNEL = 'spectrapaint:progress:stop';
