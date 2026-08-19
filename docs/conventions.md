@@ -153,11 +153,41 @@ only integration memory the project has.
 legitimate change when the reasoning is sound and stated in the commit — and a quiet way to disable
 the project's only integration memory when it is not.
 
+## 7c. Write down what you decided, and what fought you
+
+Two living documents in `docs/`, and **every contributor keeps both up to date as part of the
+ticket** — not afterwards, and not only when it went badly.
+
+| Document | What goes in it |
+|---|---|
+| [implementation-decisions.md](./implementation-decisions.md) | Every major decision taken while implementing, **why** it was taken, and **who** took it |
+| [technical-difficulties.md](./technical-difficulties.md) | The technical difficulties you hit — solved, worked around, or still open |
+
+Each file states when an entry is warranted and the format to copy. Both are append-only: number
+entries sequentially, never renumber, and never edit history — a reversal is a new entry that links
+back to the one it replaces.
+
+Record the **contributor** as the human who owns the change, and note where an agent wrote the code;
+the reasoning was still a human's to accept. A decision needs somebody who can be asked about it.
+
+Why this is a rule and not a nicety: V1 is worked ticket by ticket in **isolated fresh contexts**.
+Nobody working a later ticket was present for the argument that settled an earlier one. The code
+records *what* was chosen and loses *why*, which is the half a later contributor needs in order to
+change it safely — so an unrecorded decision gets silently re-argued, or quietly reversed by someone
+who assumed it was arbitrary. The same holds for difficulties: a dead end nobody wrote down is a
+dead end the next person walks into at full speed.
+
+Note the boundaries. `design-decisions.md` holds the decisions made *before* the code existed;
+implementation decisions are the ones the code forced. A decision that is **hard to reverse** is an
+[ADR](./adr/) instead — the test is in [README.md](./README.md).
+
 ## 8. Before opening a PR
 
 - [ ] Ticket acceptance criteria all met
 - [ ] Glossary vocabulary used throughout
 - [ ] Lint and format clean
 - [ ] Tests pass, and new behaviour is covered at the right seam
-- [ ] No new decision made silently — if you decided something the docs did not cover, record it in
-      `design-decisions.md`
+- [ ] No new decision made silently — every major implementation decision recorded in
+      `implementation-decisions.md` with its reasoning and your name (§7c)
+- [ ] Difficulties hit — solved, worked around or still open — recorded in `technical-difficulties.md`
+      (§7c)
