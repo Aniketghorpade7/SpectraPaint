@@ -58,6 +58,20 @@ describe('which rows a virtualised list has to draw', () => {
     });
   });
 
+  it('draws the same number of rows whether the Catalogue holds a hundred or a hundred thousand', () => {
+    // This is the criterion, stated as arithmetic: the work of drawing the list is set by the
+    // viewport, not by the size of the Catalogue. It is what "a 1000+ Shade Catalogue scrolls
+    // smoothly on a low-end machine" reduces to once the rendering is windowed.
+    const drawn = (rowCount: number) => {
+      const window = visibleWindow({ ...list, rowCount, scrollTop: 25 * rowCount });
+      return window.end - window.start;
+    };
+
+    expect(drawn(1159)).toBe(drawn(100));
+    expect(drawn(100_000)).toBe(drawn(100));
+    expect(drawn(100)).toBeLessThanOrEqual(10 + 2 * OVERSCAN_ROWS);
+  });
+
   it('never asks for more rows than a whole Fandeck', () => {
     const window = visibleWindow({ ...list, viewportHeight: 100_000, scrollTop: 0 });
 
