@@ -422,3 +422,30 @@ service death can never leave the Dealer staring at an endless "working…".
 **Consequence:** The renderer holds a fifth bridge method. A later web target gets the same behaviour
 by implementing the same `onProgress` contract against the same SSE endpoint.
 
+---
+
+## 14. The Room Photo appears only when preparation finishes, not when the upload returns
+
+**Ticket:** #4 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** Issue #2 shipped the photo appearing as soon as the upload response returned. Ticket #4
+changes that deliberately: `applyProgressEvent` reaches `ready` only on the stream's `done`, and
+`ConsultationSurface` renders the photo only at `ready`. The photo bytes are already held in the
+renderer from the upload — this is purely a change in *when it is revealed*, never a re-fetch.
+
+**Why:** the whole point of the stream is that the Dealer sees what is happening instead of a silent
+spinner. Revealing the photo at upload would cut the stream's last frame off — the Dealer would be
+looking at the room while "Reading your photo…" was still the honest state. Making the terminal
+event the single gate on the photo also turns a missing terminal into the one failure the UI must
+defend against, which is why main synthesises a `failed` event when a stream dies early, and why the
+START bridge refuses with an event rather than silently (see difficulty 5 and the fix to the three
+silent returns). This is the reveal-timing design the segmentation tickets inherit.
+
+**Consequence:** a session whose stream never reaches `done` never shows the photo — correct, because
+"never" is exactly the dead-end the never-dead-end rule forbids. Worth knowing, and the reason the
+review asked for this entry: the photo's bytes now live for the session's whole life *on the service*
+too — captured in the preparation job's stage closure (up to 25 MB) instead of being discarded after
+the upload gate. Later tickets need the photo anyway, so this is the right direction, but it is a
+memory profile change over what issue #2 shipped; session deletion (UI discard, or the failed-cleanup
+in the hook) is what releases it.
+

@@ -28,6 +28,9 @@ const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
 const STREAM_FAILED_MESSAGE =
   'SpectraPaint could not finish preparing your photo. Please try again.';
 
+/** The one refusal shape every dead-end branch sends, so the caller's UI can never wait forever. */
+const FAILED_EVENT: ProgressStreamEvent = { phase: 'failed', message: STREAM_FAILED_MESSAGE };
+
 interface ActiveStream {
   controller: AbortController;
   sender: WebContents;
@@ -40,14 +43,25 @@ export function registerProgressStreamBridge(
   const active = new Map<string, ActiveStream>();
 
   ipcMain.handle(PROGRESS_STREAM_START_CHANNEL, (event, sessionId: unknown) => {
-    if (!isTrustedSender(event.sender)) return;
-    if (typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) return;
-    // Idempotent: one stream per session, whichever window asked first.
-    if (active.has(sessionId)) return;
+    if (typeof sessionId === 'string') {
+      // Refuse — never silently. A silent return leaves the caller's UI mid-"Loading your
+      // photo…" with no terminal event to end it (docs/conventions.md §5). The refusal is keyed by
+      // the sessionId the caller passed, so its own listener matches it.
+      if (
+        !isTrustedSender(event.sender) ||
+        !SESSION_ID_PATTERN.test(sessionId) ||
+        active.has(sessionId)
+      ) {
+        send(event.sender, sessionId, FAILED_EVENT);
+        return;
+      }
+    } else {
+      return;
+    }
 
     const sidecar = getSidecar();
     if (!sidecar) {
-      send(event.sender, sessionId, { phase: 'failed', message: STREAM_FAILED_MESSAGE });
+      send(event.sender, sessionId, FAILED_EVENT);
       return;
     }
 
@@ -81,7 +95,7 @@ async function stream(
     });
 
     if (!response.ok || !response.body) {
-      send(sender, sessionId, { phase: 'failed', message: STREAM_FAILED_MESSAGE });
+      send(sender, sessionId, FAILED_EVENT);
       return;
     }
 
@@ -104,13 +118,16 @@ async function stream(
 
     // The stream ended without a terminal event — connection dropped, service died mid-preparation.
     // The Dealer must not sit on an endless "working…" (docs/conventions.md §5: never dead-end).
-    send(sender, sessionId, { phase: 'failed', message: STREAM_FAILED_MESSAGE });
+    send(sender, sessionId, FAILED_EVENT);
   } catch (error) {
     if (controller.signal.aborted) return; // Stopped deliberately by the UI.
     console.error(`[progress] stream for session ${sessionId} failed:`, error);
-    send(sender, sessionId, { phase: 'failed', message: STREAM_FAILED_MESSAGE });
+    send(sender, sessionId, FAILED_EVENT);
   } finally {
-    active.delete(sessionId);
+    // Only clear the entry if it is still this stream's. A stop-then-start on the same session
+    // replaces the registration; this stream's finally must not delete the newer stream's, or a
+    // third start would open a second concurrent reader.
+    if (active.get(sessionId)?.controller === controller) active.delete(sessionId);
   }
 }
 

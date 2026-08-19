@@ -13,7 +13,8 @@ import type { ProgressStreamEvent } from '../../../desktop/src/bridge-types';
  * From issue #4 the loading state is a live stream: the service reports preparation progress in
  * plain language ("Reading your photo…"), the stream ends with exactly one terminal event, and the
  * photo is revealed only once preparation is done — so the Dealer never stares at a silent spinner
- * (docs/ui-guidelines.md, never dead-end).
+ * (docs/ui-guidelines.md, never dead-end). A failed preparation ends its session on the service
+ * too, so a rejected photo cannot orphan a session holding its bytes until the process exits.
  */
 
 export type ConsultationPhase = 'idle' | 'uploading' | 'ready' | 'failed';
@@ -74,6 +75,23 @@ export function useConsultation(): Consultation {
     };
   }, []);
 
+  const endSession = useCallback(async (sessionId: string) => {
+    try {
+      const response = await window.spectrapaint.request({
+        path: `/sessions/${sessionId}`,
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        console.error('[consultation] could not end the session:', response.body);
+      }
+    } catch (error) {
+      // Same rule as start(): the bridge rejecting must not strand the Dealer. Putting the photo
+      // down is a local decision, so the session is dropped locally even when the service never
+      // hears about it.
+      console.error('[consultation] could not end the session:', error);
+    }
+  }, []);
+
   const start = useCallback(async () => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
@@ -90,9 +108,16 @@ export function useConsultation(): Consultation {
           const { sessionId, imageDataUrl } = result;
           const unsubscribe = window.spectrapaint.onProgress(sessionId, (event) => {
             setState((previous) => applyProgressEvent(previous, event));
-            if (event.phase === 'done' || event.phase === 'failed') {
+            if (event.phase === 'done') {
               unsubscribeRef.current?.();
               unsubscribeRef.current = null;
+            } else if (event.phase === 'failed') {
+              unsubscribeRef.current?.();
+              unsubscribeRef.current = null;
+              // The failed session is dead on arrival — nothing can be retried against it. End it
+              // on the service too, or every failed preparation orphans a session holding its photo
+              // until the process exits (the only other DELETE path, discard, needs the ready phase).
+              void endSession(sessionId);
             }
           });
           unsubscribeRef.current = unsubscribe;
@@ -112,28 +137,16 @@ export function useConsultation(): Consultation {
         message: 'The photo could not be loaded. Please try another photo.',
       });
     }
-  }, []);
+  }, [endSession]);
 
-  const discard = useCallback(async () => {
+  const discard = useCallback(() => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
     if (state.phase === 'ready' && state.sessionId) {
-      try {
-        const response = await window.spectrapaint.request({
-          path: `/sessions/${state.sessionId}`,
-          method: 'DELETE',
-        });
-        if (!response.ok) {
-          console.error('[consultation] could not end the session:', response.body);
-        }
-      } catch (error) {
-        // Same rule as start(): the bridge rejecting must not strand the Dealer. Putting the photo
-        // down is a local decision, so it succeeds here even when the service never hears about it.
-        console.error('[consultation] could not end the session:', error);
-      }
+      void endSession(state.sessionId);
     }
     setState({ phase: 'idle' });
-  }, [state]);
+  }, [state, endSession]);
 
   return { state, start, discard };
 }
