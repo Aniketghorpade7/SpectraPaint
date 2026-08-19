@@ -28,12 +28,14 @@ router = APIRouter()
 # A deliberate bound, decided in docs/design-decisions.md §9 ("Upload size limit"): a phone photo
 # of a room is a few MB, so 25 MB accommodates burst mode while capping the memory a single request
 # can make the service hold. Revisit against real photos if the camera keeps surprising us.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_UPLOAD_MB = 25
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 _MESSAGE_UNSUPPORTED_IMAGE = (
     "That file could not be read as a photo. Please choose a JPEG, PNG or WebP image."
 )
-_MESSAGE_PHOTO_TOO_LARGE = "That photo is too large. Please choose one under 25 MB."
+# Derived from the limit itself, so retuning the cap cannot leave the message saying otherwise.
+_MESSAGE_PHOTO_TOO_LARGE = f"That photo is too large. Please choose one under {MAX_UPLOAD_MB} MB."
 _MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please start a new one."
 
 
@@ -105,12 +107,14 @@ async def delete_session(request: Request, session_id: str) -> None:
 
 
 def _verify_is_an_image(contents: bytes) -> None:
-    """Decode enough of the file to prove it is a real, non-corrupt photo.
+    """Refuse anything that is not a photo we can work with, before it reaches a decoding stage.
 
-    Pillow's ``verify()`` reads through the file and raises on truncated or malformed images, which
-    is the "corrupt file produces a clear message rather than a crash" criterion — a magic-byte
-    check alone would let a truncated JPEG with a valid header through to the first stage that
-    decodes it.
+    Pillow's ``verify()`` checks structure without decoding pixels. It reliably rejects a file that
+    is not an image at all, and it catches a truncated PNG. It is weaker than it looks for JPEG:
+    a JPEG with its EOI marker stripped passes ``verify()`` silently.
+
+    So this is a gate, not a guarantee. Whichever stage first decodes the pixels must still handle
+    its own decode errors — do not read a session id as proof that the bytes behind it are sound.
     """
 
     try:

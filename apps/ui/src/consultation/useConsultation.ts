@@ -62,12 +62,18 @@ export function useConsultation(): Consultation {
 
   const discard = useCallback(async () => {
     if (state.phase === 'ready' && state.sessionId) {
-      const response = await window.spectrapaint.request({
-        path: `/sessions/${state.sessionId}`,
-        method: 'DELETE',
-      });
-      if (!response.ok) {
-        console.error('[consultation] could not end the session:', response.body);
+      try {
+        const response = await window.spectrapaint.request({
+          path: `/sessions/${state.sessionId}`,
+          method: 'DELETE',
+        });
+        if (!response.ok) {
+          console.error('[consultation] could not end the session:', response.body);
+        }
+      } catch (error) {
+        // Same rule as start(): the bridge rejecting must not strand the Dealer. Putting the photo
+        // down is a local decision, so it succeeds here even when the service never hears about it.
+        console.error('[consultation] could not end the session:', error);
       }
     }
     setState({ phase: 'idle' });
