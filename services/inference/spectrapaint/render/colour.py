@@ -33,10 +33,14 @@ def srgb_to_linear(x: np.ndarray) -> np.ndarray:
     Branch points are the real ones (0.04045 / 12.92); a 2.2 power curve is not
     a substitute and is rejected by the tests.
     """
+    # np.where evaluates both branches, so the power is fed a base floored at the transition
+    # point. Values at or below it take the linear branch regardless; without the floor a negative
+    # input raises an invalid-value warning computing a result that is then discarded.
+    above = np.maximum(x, _ENCODED_TRANSITION)
     return np.where(
         x <= _ENCODED_TRANSITION,
         x / _LINEAR_SLOPE,
-        ((x + 0.055) / 1.055) ** _GAMMA,
+        ((above + 0.055) / 1.055) ** _GAMMA,
     )
 
 

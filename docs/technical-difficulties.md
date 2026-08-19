@@ -163,3 +163,30 @@ implementation-decisions.md #11. The thread is independent of any request's even
 progresses under both TestClient and the real uvicorn server (verified end-to-end). A future ticket
 that adds background work must either use a thread, or solve this TestClient gap first.
 
+
+---
+
+## 6. `verify()` accepts a JPEG that cannot be decoded, so the failure surfaced two layers away
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-08-19 ·
+**Status:** solved
+
+**What happened:** the upload gate calls Pillow's `Image.verify()`, which checks structure without
+decoding pixels. A JPEG with its end-of-image marker stripped passes it. Preparation then decodes for
+real, raises `OSError`, and — before this was fixed — nothing caught it: the render request that
+later asked for that session's photo returned a bare `500` with no error code and no message the
+Dealer could act on. The docstring on the gate had been edited to *claim* the decode was caught,
+which made the gap harder to see than if it had said nothing.
+
+**Why it was hard:** the upload succeeds and hands back a session id, so the photo looks accepted.
+The error appears at a different endpoint, in a different module, on a request that did nothing
+wrong. Nothing in the upload response or the session state marks the photo as suspect, so the natural
+reading is that the render endpoint is broken.
+
+**Where it stands:** solved. Preparation's failure is already a terminal `failed` event
+(implementation-decisions.md #11), and `sessions.require_photo` now turns "preparation produced no
+photo" into `422 unsupported_image` with the plain-language message, so the render answers in the
+contract's error shape. A seam-1 test uploads a stripped-EOI JPEG and asserts that render response,
+which is what stops the 500 coming back. The general lesson is the one the gate's docstring now
+states honestly: `verify()` is a gate, not a guarantee, and whichever stage first decodes must own
+its own errors.

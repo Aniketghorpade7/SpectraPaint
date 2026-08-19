@@ -25,8 +25,12 @@ from spectrapaint.render.luts import encode_srgb
 def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarray:
     """Divide the linear photo by the wall's base colour (once per photo).
 
-    NaN/inf from a zero or deep-colour channel is clamped to 0 rather than
-    propagated (the spec's "never dead-end" rule -- no NaN in outputs).
+    A zero channel in ``base_colour`` would yield NaN (0/0) or infinity, which would travel
+    through the composite into every pixel of the output. Both are mapped to 0 — an unlit result
+    rather than a poisoned one — because the render must degrade, never dead-end (conventions.md
+    §5). :func:`estimate_base_colour` floors its estimate, so the endpoint cannot reach this
+    guard; it is here because this function is public and its callers' bases are not its to
+    trust.
     """
     with np.errstate(divide="ignore", invalid="ignore"):
         light_map = linear_photo / base_colour
@@ -90,6 +94,9 @@ _BASE_COLOUR_FLOOR = 0.02
 # A band around the frame edge is excluded from both estimates: lens vignette
 # and door frames are not scene colour.
 _EDGE_BAND_FRACTION = 0.05
+# Luma weights for linear light, ITU-R BT.709 — the same primaries the sRGB
+# transfer function in render.colour is defined against.
+_LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722])
 
 
 def estimate_base_colour(linear_photo: np.ndarray) -> np.ndarray:
@@ -109,15 +116,20 @@ def estimate_light_tint(linear_photo: np.ndarray) -> np.ndarray:
 
     Realistic mode tints the shade by the colour of the light actually in the
     room (CONTEXT.md). Without the segmentation mattes the true light sources
-    cannot be masked, so the approximation is the whole-photo interior median:
-    a warm-lit room makes the average scene colour warm. Dividing by its own
-    luma isolates hue and keeps neutral light exactly (1, 1, 1); True Colour
-    mode simply does not apply this tint at all.
+    cannot be masked, so the approximation is the interior median — the same
+    statistic the base colour uses, for the same reason a lamp must not drag it.
+
+    Dividing that median by its **luma** leaves a factor that carries only the
+    cast, not the brightness: neutral light comes back as exactly (1, 1, 1), so
+    a grey room's Shade is rendered as the chip. Luma is the BT.709 sum, the
+    weighting the sRGB primaries define; a plain channel average would call a
+    saturated blue as bright as a saturated green and tint away from the cast it
+    was measuring. True Colour mode does not apply the tint at all.
     """
     interior = _interior(linear_photo)
     median = np.median(interior, axis=(0, 1))
-    luma = float(np.mean(median))
-    if luma == 0.0:
+    luma = float(np.dot(_LUMA_WEIGHTS, median))
+    if luma <= 0.0:
         return np.ones(3, dtype=linear_photo.dtype)
     return (median / luma).astype(linear_photo.dtype)
 

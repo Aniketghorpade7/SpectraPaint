@@ -36,7 +36,7 @@ from spectrapaint.api.preparation import (
 
 router = APIRouter()
 
-# A deliberate bound, decided in docs/design-decisions.md S9 ("Upload size limit"): a phone photo
+# A deliberate bound, decided in docs/design-decisions.md §9 ("Upload size limit"): a phone photo
 # of a room is a few MB, so 25 MB accommodates burst mode while capping the memory a single request
 # can make the service hold. Revisit against real photos if the camera keeps surprising us.
 MAX_UPLOAD_MB = 25
@@ -120,7 +120,7 @@ async def create_session(
     """Accept a photo and return the session that now refers to it.
 
     The only way a photo enters the system. There is deliberately no endpoint that accepts an image
-    alongside a Shade, so encode-once is enforced by omission -- see docs/specs/v1-spectrapaint.md.
+    alongside a Shade, so encode-once is enforced by omission — see docs/specs/v1-spectrapaint.md.
     """
 
     contents = await photo.read()

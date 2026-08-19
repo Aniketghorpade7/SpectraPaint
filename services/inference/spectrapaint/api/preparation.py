@@ -55,13 +55,13 @@ POLL_INTERVAL_SECONDS = 0.05
 MESSAGE_PREPARATION_FAILED = "That photo could not be read. Please try another photo."
 
 # The prepared photo is capped on its long side so the in-memory working image stays at preview
-# scale (~1.3 MP) -- docs/specs/v1-spectrapaint.md Performance: full-resolution renders are a later
-# ticket; the ~1 MP preview is the per-tap path while browsing. 1280 px at 16:9 is ~0.9 MP.
+# scale — docs/specs/v1-spectrapaint.md, "Performance": full-resolution renders are a later ticket;
+# the ~1 MP preview is the per-tap path while browsing. 1280 px at 16:9 is ~0.9 MP.
 MAX_PREPARED_DIMENSION = 1280
 
-# Stub Wall Plane geometry, decided in docs/design-decisions.md S14: a centred rectangle covering
-# 60% x 55% of the photo, with a soft edge band. The segmentation tickets replace the rectangle;
-# the shape of the alpha map (HxWx1 float [0, 1]) is the contract that stays.
+# Stub Wall Plane geometry, decided in docs/implementation-decisions.md §18: a centred rectangle
+# covering 60% × 55% of the photo, with a soft edge band. The segmentation tickets replace the
+# rectangle; the shape of the alpha map (HxWx1 float [0, 1]) is the contract that stays.
 _STUB_WIDTH_FRACTION = 0.60
 _STUB_HEIGHT_FRACTION = 0.55
 _STUB_SOFT_BAND_FRACTION = 0.03
@@ -71,8 +71,10 @@ _STUB_SOFT_BAND_FRACTION = 0.03
 class Stage:
     """One step of preparation: the message shown while it runs, and the work itself.
 
-    ``run`` may return a value; the last returned value becomes the job's result — the render path
-    reads the ``PreparedPhoto`` the single stage produces (issue #3's encode-once rule).
+    ``run`` may return a ``PreparedPhoto``, which the job keeps for the render path to read
+    (issue #3's encode-once rule). A stage that returns anything else — including ``None``, which
+    most stages do — leaves the kept photo alone. That rule, rather than "the last value wins",
+    is what lets tickets #6–#8 append stages without silently emptying the render path.
     """
 
     message: str
@@ -113,12 +115,11 @@ class PreparationJob:
         self._thread.start()
 
     def _run(self) -> None:
-        result: object | None = None
         for stage in self._stages:
             with self._lock:
                 self._events.append({"phase": "progress", "message": stage.message})
             try:
-                result = stage.run()
+                produced = stage.run()
             except Exception:
                 # A photo that cannot be prepared fails this job, not the stream: the reader hears
                 # one terminal 'failed' event and the stream closes, like a 'done' would.
@@ -127,8 +128,13 @@ class PreparationJob:
                     self._terminal = {"phase": "failed", "message": MESSAGE_PREPARATION_FAILED}
                 return
 
+            # Kept by type, never by position: a later stage returning None must not discard the
+            # photo an earlier one produced (see Stage).
+            if isinstance(produced, PreparedPhoto):
+                with self._lock:
+                    self._result = produced
+
         with self._lock:
-            self._result = result
             self._terminal = {"phase": "done"}
 
     async def stream(self) -> AsyncIterator[dict[str, str]]:
@@ -158,7 +164,9 @@ class PreparationJob:
         """The session's prepared photo, once preparation is over.
 
         Replays the event stream to its terminal event — the same ``done``/``failed`` a reader
-        sees — then returns the photo the stage produced, or None if preparation failed.
+        sees — then returns the photo a stage produced, or None if preparation failed before one
+        did. Waiting here rather than returning "not ready" keeps the render contract simple: a
+        render requested during preparation is served once the photo exists, not refused.
         """
 
         async for _ in self.stream():

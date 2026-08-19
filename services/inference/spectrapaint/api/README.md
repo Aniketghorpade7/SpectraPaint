@@ -33,6 +33,27 @@ One shape, everywhere, defined in `errors.py`:
 
 Add new codes to the vocabulary at the top of `errors.py`, never inline at a call site.
 
+## The render endpoint
+
+`POST /sessions/{id}/renders` takes `assignments` — a Shade Code per Wall Plane — and returns the
+repainted photo as `image/png`. The photo is never in the request: it entered at upload and the
+render reads what preparation produced, so encode-once holds structurally rather than by convention.
+
+There is one Wall Plane today (a stub rectangle), so `assignments` carries one entry. The map is the
+contract anyway, because an Accent Wall is two planes with two Shades in one request — see
+`docs/implementation-decisions.md` §18.
+
+| Refused | |
+|---|---|
+| Unknown session | `404 session_not_found` |
+| That photo failed preparation | `422 unsupported_image` |
+| Shade Code not in the Catalogue | `404 shade_not_found` — the same status the Catalogue's own lookup gives |
+| A plane the photo does not have, or no assignment at all | `422 malformed_request` |
+| An unrecognised `mode` | `422 malformed_request` |
+
+An assignment naming an unknown plane is refused rather than ignored: nothing in a returned PNG
+would reveal that the render answered a different question than the one asked.
+
 ## The Catalogue endpoints
 
 Read-only, all three. The Catalogue is a data file the service was pointed at — swapping the file is

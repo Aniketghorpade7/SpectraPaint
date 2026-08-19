@@ -7,6 +7,7 @@ checkpoint's suite.
 """
 
 import numpy as np
+import pytest
 
 from spectrapaint.render.colour import linear_to_srgb
 from spectrapaint.render.engine import (
@@ -16,6 +17,10 @@ from spectrapaint.render.engine import (
     render,
 )
 from spectrapaint.render.luts import linearise_u8
+
+# Stated here rather than imported: the test pins what the weights must be (ITU-R BT.709, the sRGB
+# primaries), so a change to them in the engine is a failure and not a silently agreed edit.
+BT709_LUMA = np.array([0.2126, 0.7152, 0.0722])
 
 
 def _linear_photo(shape=(9, 12, 3), seed=0) -> np.ndarray:
@@ -154,15 +159,21 @@ def test_light_tint_of_a_neutral_photo_is_exactly_neutral() -> None:
 
 
 def test_light_tint_captures_the_photographing_light_colour() -> None:
-    """A warm-lit scene yields a tint whose ratios match the light, not its intensity."""
+    """A warm-lit scene yields a tint carrying the light's colour, not its intensity.
+
+    Asserted as the two invariants the tint exists to have, rather than as its formula: the
+    channel *ratios* are the scene's, and the tint's own luma is 1 so multiplying a Shade by it
+    changes the cast without changing how light the Shade is. Retuning the estimate must not
+    break this test; changing what the tint means should.
+    """
     light = np.array([0.72, 0.60, 0.44], dtype=np.float32) * 0.6  # warm, dim
     linear = np.tile(light, (8, 8, 1))
 
     got = estimate_light_tint(linear)
 
-    # Normalised to luma 1: neutral channels equal, and warm stays > neutral > blue.
-    assert np.allclose(got, light / float(np.mean(light)), atol=1e-5)
-    assert got[0] > got[1] > got[2]
+    assert np.allclose(got / got[1], light / light[1], atol=1e-5)  # the light's ratios
+    assert float(np.dot(BT709_LUMA, got)) == pytest.approx(1.0, abs=1e-6)  # carries no brightness
+    assert got[0] > got[1] > got[2]  # warm stays warm
 
 
 def test_light_tint_is_invariant_to_brightness() -> None:

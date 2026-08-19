@@ -449,3 +449,162 @@ the upload gate. Later tickets need the photo anyway, so this is the right direc
 memory profile change over what issue #2 shipped; session deletion (UI discard, or the failed-cleanup
 in the hook) is what releases it.
 
+---
+
+## 15. The render engine is a pure function in linear RGB, and the service owns every encode
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** `engine.render(linear_photo, alpha, light_map, target_shade, light_tint)` takes
+linear-light arrays and returns one sRGB `uint8` composite. No I/O, no file formats, no state — the
+API layer decodes the upload and encodes the PNG, and `render/` never learns either exists. Both
+gamma directions go through lookup tables in `render/luts.py`: 256 entries for linearising 8-bit
+input, which is exact because a byte has 256 values, and 4096 for encoding.
+
+**Why:** purity is what makes this test seam 2 rather than an integration test. A photo built as
+`known_shading × known_base` has an analytically known answer, so correctness is *provable* before
+either model exists — and every impurity that leaks in (a log line, a config read, a model call)
+destroys that. The linear-space requirement is physical: reflectances multiply, and the light map is
+the per-pixel ratio of the photo to the existing wall colour. Compositing those ratios in encoded
+space is measurably too dark at matte edges, which is the dark fringing the ticket names. The encode
+happens exactly once, on the final composite.
+
+The LUTs are not an optimisation added on spec: the latency spike (`design-decisions.md` §13)
+measured the encode at 241 ms via a 256-entry table against 507 ms with a per-pixel `pow`, and
+linearisation at 139 ms against 457 ms. On the Dealer's per-tap loop that is the difference between
+immediate and waiting. Encoding gets the larger table because its input is a continuous float rather
+than a byte, so table size is the only thing bounding quantisation error there.
+
+**Consequence:** anything that wants to render must linearise first, which is why preparation
+produces `PreparedPhoto` rather than raw pixels (§18). A later ticket that needs logging inside the
+engine has to put it in the caller instead — that is the constraint working, not a problem.
+
+---
+
+## 16. Shades cross from CIELAB to linear RGB inside the colour module, under D65 with no adaptation
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** the Catalogue stores each Shade's colour in CIELAB, and `colour.lab_to_linear_rgb`
+converts it to linear RGB: Lab → XYZ under the D65 white point, XYZ → linear sRGB via the IEC
+61966-2-1 primaries, clamped to `[0, 1]`. **No chromatic adaptation is performed**, because the
+Catalogue's reference white and the render pipeline's are the same one — the loader enforces
+`{"space": "CIELAB", "reference_white": "D65", "observer": "2"}` on the file
+(`catalogue/loader.REQUIRED_COLOUR_SPACE`) and refuses to start otherwise.
+
+**Why here:** the composite happens in linear RGB, so a Shade defined in Lab has to cross somewhere.
+Putting the crossing in the colour module gives it one home, keeps the engine purely linear, and
+leaves the Catalogue exact at the source. The piecewise sRGB transfer function is used in both
+directions, never a 2.2 power curve; the two are visibly different in the shadows, which is exactly
+where a repainted wall is judged.
+
+**Why no adaptation, stated explicitly:** an earlier draft of this entry claimed a D50→D65 Bradford
+adaptation, which the code never performed and must not — the Catalogue is D65 by contract. Adapting
+a D65 value as though it were D50 would shift every Shade in the Catalogue by an amount too small to
+see on one chip and far too large to accept across a fandeck. The loader's check is what makes the
+absence of adaptation safe rather than merely convenient.
+
+**Consequence:** a Catalogue file in any other colour space is a boot failure, not a silent
+mis-render. If one ever has to be supported, the adaptation goes in this module and this entry gets
+a successor — not a quiet edit.
+
+---
+
+## 17. Scene estimates are interior medians, with a floor on the base colour and a luma-normalised tint
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** until the segmentation tickets produce real Wall Planes, both scene inputs are estimated
+from the photo itself, over its **interior** — a band of 5% of the shorter side excluded on every
+edge (`engine._EDGE_BAND_FRACTION`):
+
+- **Base colour:** the per-channel median of the interior, floored at **0.02 in linear light**
+  (`engine._BASE_COLOUR_FLOOR`).
+- **Light tint:** the same interior median, divided by its own **ITU-R BT.709 luma**.
+
+**Why medians:** a window or a lamp clips a channel and drags a mean toward white; a median survives
+it. **Why an interior band:** the edge of a phone photo routinely holds a door frame, furniture or
+lens vignette, none of which is wall. **Why the floor:** the light map divides by the base colour, so
+a zero channel would put `inf`/`nan` into every pixel downstream. 0.02 rather than a value near
+`1/255` because a channel that dark carries no recoverable wall colour at all — flooring at the
+smallest representable value would technically avoid the division but would produce a light map of
+absurd gain, which is a poisoned render with extra steps. **Why luma, not a channel average:** the
+tint must carry the light's *cast* and none of its brightness, so multiplying a Shade by it changes
+the hue and not how light the Shade reads. Dividing by BT.709 luma makes neutral light come back as
+exactly `(1, 1, 1)`; a plain average would weight a saturated blue as heavily as a saturated green
+and tint away from the very cast it measured.
+
+**Explicit limitation, recorded:** both estimates assume the interior is predominantly one wall.
+A multi-wall room biases them toward the largest wall. Accepted for now — it matches the stub matte's
+"largest plane wins" behaviour, and `design-decisions.md` §12 tracks the wall-splitting questions.
+
+**Consequence:** these are the two functions the segmentation tickets replace first, and the only
+places in the render path that guess. The constants live at module scope so they can be retuned
+against real photographs (`conventions.md` §4).
+
+---
+
+## 18. The render contract takes `assignments`, returns a PNG, and reads what preparation produced
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** `POST /sessions/{id}/renders` takes `{ "assignments": { "<wall_plane_id>":
+"<shade_code>" }, "mode": "realistic" | "true_colour" }` and responds `201` with `image/png`.
+Today the only accepted key is `renders.STUB_WALL_PLANE_ID`; the wall itself is a centred,
+soft-edged rectangle covering 60% × 55% of the photo, built during preparation. The prepared photo
+is capped at 1280 px on its long side.
+
+Error statuses, chosen to match what the rest of the contract already means:
+
+| | |
+|---|---|
+| Unknown session | `404 session_not_found` |
+| Preparation failed for that photo | `422 unsupported_image` |
+| Shade Code not in the Catalogue | `404 shade_not_found` |
+| An assignment naming a plane the photo does not have, or none at all | `422 malformed_request` |
+| Unrecognised mode | `422 malformed_request` |
+
+**Why `assignments` and not a bare `shade_code`:** there is exactly one plane today, so a map looks
+like ceremony. It is not — the Accent Wall is two planes with two Shades in one request, which is
+what the shape exists for (`design-decisions.md` §7, spec "Testing Decisions"). A caller written
+against a single-Shade body would have to be rewritten to gain it, and the ticket that gains it is
+the next one. **Why an unknown plane id is refused:** nothing in a returned PNG reveals that an
+assignment was ignored, so a Dealer who assigned a Shade to the wrong wall would be shown a picture
+answering a question they did not ask. **Why `404` for an unknown Shade Code:** `GET
+/catalogue/shades/{shade_code}` already returns `404 shade_not_found`; one machine-readable code
+meaning two statuses would leave a caller unable to treat it as one thing. **Why PNG:** the composite
+is already quantised to 8-bit by the sRGB encode, so a lossy format would degrade it for nothing.
+
+**Why the render reads `PreparedPhoto` rather than re-deriving anything:** encode-once is structural
+here. There is no endpoint that accepts an image alongside a Shade, so the render *cannot* re-encode
+even if someone wanted it to, and the linearisation is paid once per photo instead of once per tap.
+`require_photo` waits for preparation's terminal event rather than returning "not ready", so a render
+requested while the stream is still running is served when the photo exists.
+
+**Consequence, and it is a real one:** the upload bytes are **not** released after preparation. They
+stay captured in the preparation stage's closure for the life of the session, exactly as decision
+§14 records — up to the 25 MB upload cap, on top of the preview-scale linear array. This is the
+current cost of preparing on a worker thread that can be replayed; ending the consultation is what
+frees it, and ticket #11 is where the photo gets a home on disk instead.
+
+---
+
+## 19. Preparation keeps the prepared photo by type, never by position in the stage list
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** `Stage.run` may return a value, and `PreparationJob` keeps it only when it is a
+`PreparedPhoto`. A stage returning anything else — including `None`, which most stages do — leaves
+the kept photo untouched. An earlier draft kept "the last value returned", which read as simpler.
+
+**Why:** decisions §11 and §12 make the stage list the seam tickets #6–#8 plug into. Under
+last-value-wins, the first of those tickets to append a stage that returns nothing would silently
+empty the job's result, and every render would answer `422 unsupported_image` for a photo that
+prepared perfectly. The failure would appear in a ticket that touched neither the render endpoint nor
+this module, which is the worst possible place to debug it. Keying on the type makes appending a
+stage safe by default, which is the property the seam was supposed to have.
+
+**Consequence:** two stages both producing a `PreparedPhoto` would have the later one win, and
+nothing warns about it. That is the right trade while there is one producer; a second producer is a
+reason to revisit this entry, not to work around it.
+
