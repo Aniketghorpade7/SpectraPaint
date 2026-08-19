@@ -20,6 +20,7 @@ import sys
 import uvicorn
 
 from spectrapaint.api.app import create_app
+from spectrapaint.catalogue import CatalogueFileInvalid, CatalogueFileMissing, open_catalogue
 
 HOST = "127.0.0.1"
 SECRET_ENV_VAR = "SPECTRAPAINT_SECRET"
@@ -29,6 +30,7 @@ SECRET_ENV_VAR = "SPECTRAPAINT_SECRET"
 HANDSHAKE_PREFIX = "SPECTRAPAINT_HANDSHAKE "
 
 EXIT_NO_SECRET = 2
+EXIT_NO_CATALOGUE = 3
 
 
 def bind_listening_socket() -> socket.socket:
@@ -76,15 +78,34 @@ def read_secret() -> str:
     return secret
 
 
+def load_catalogue():
+    """The Catalogue, or a clean exit saying why there is none.
+
+    Before the port is announced, deliberately. A service that completes the handshake and then
+    cannot answer a single Shade lookup looks healthy to Electron, so the failure would surface as a
+    broken panel mid-Consultation instead of as a boot failure the Dealer is told about
+    (docs/specs/v1-spectrapaint.md — model load failures surface at boot, not mid-consultation).
+    """
+
+    try:
+        return open_catalogue()
+    except (CatalogueFileMissing, CatalogueFileInvalid) as failure:
+        # Both halves: the detail names the file for whoever set the machine up, the message is what
+        # the Dealer can be shown (conventions.md §5).
+        print(f"{failure.message} ({failure.detail})", file=sys.stderr, flush=True)
+        raise SystemExit(EXIT_NO_CATALOGUE) from failure
+
+
 def main() -> None:
     secret = read_secret()
+    catalogue = load_catalogue()
     listener = bind_listening_socket()
     port = listener.getsockname()[1]
 
     announce(handshake_line(port, os.getpid()))
 
     config = uvicorn.Config(
-        create_app(secret),
+        create_app(secret, catalogue),
         log_level="info",
         # Every request would otherwise be logged with its path; the Dealer's machine has no use
         # for that, and Electron already logs the lifecycle events that matter.

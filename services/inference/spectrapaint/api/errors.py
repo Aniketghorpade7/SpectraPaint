@@ -18,6 +18,7 @@ MALFORMED_REQUEST = "malformed_request"
 SESSION_NOT_FOUND = "session_not_found"
 UNSUPPORTED_IMAGE = "unsupported_image"
 PHOTO_TOO_LARGE = "photo_too_large"
+SHADE_NOT_FOUND = "shade_not_found"
 
 
 class ServiceError(Exception):

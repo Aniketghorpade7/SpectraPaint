@@ -161,6 +161,11 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/health", frozenset({"GET"})),
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
+        # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
+        # there is nothing here that writes, and nothing that takes an image.
+        ("/catalogue", frozenset({"GET"})),
+        ("/catalogue/shades", frozenset({"GET"})),
+        ("/catalogue/shades/{shade_code}", frozenset({"GET"})),
     }
 
     actual = set()
