@@ -624,6 +624,20 @@ cannot see what to delete, or only learns about the problem once it is one:
 
 Revisit if real usage data shows shops filling disks faster than expected.
 
+### Upload size limit
+
+**Decided:** the service refuses a photo over **25 MB** at upload, with a plain-language message,
+before any decoding.
+
+Rationale: a phone photo of a room is typically a few MB, so 25 MB accommodates burst mode and
+converted formats while capping how much memory a single request can make the service hold. It is a
+deliberate bound, not a tuned threshold — revisit against real photos if dealers routinely shoot
+panoramas and start hitting it.
+
+A **decompression bomb** (a small file that decodes to enormous pixel dimensions) is refused the
+same way, because the alternative is a later stage trying to hold that much memory — the "clear
+message, never a crash" rule of conventions §5 applied to the decode, not just the upload size.
+
 ### Location
 
 **Decided:** the database and images live in the OS standard **per-user application data

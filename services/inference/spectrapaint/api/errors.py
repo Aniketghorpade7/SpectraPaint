@@ -15,6 +15,9 @@ from fastapi.responses import JSONResponse
 # The error vocabulary. Add to it here, never inline at a call site.
 UNAUTHORISED = "unauthorised"
 MALFORMED_REQUEST = "malformed_request"
+SESSION_NOT_FOUND = "session_not_found"
+UNSUPPORTED_IMAGE = "unsupported_image"
+PHOTO_TOO_LARGE = "photo_too_large"
 
 
 class ServiceError(Exception):

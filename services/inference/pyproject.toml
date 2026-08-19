@@ -6,6 +6,8 @@ requires-python = "==3.12.*"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
+    "python-multipart",  # FastAPI file uploads (POST /sessions)
+    "pillow",            # validating that an uploaded file really is a decodable photo
 ]
 
 [dependency-groups]

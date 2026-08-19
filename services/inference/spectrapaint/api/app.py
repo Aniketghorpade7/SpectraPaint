@@ -1,20 +1,21 @@
 """The localhost REST contract.
 
     GET    /health                                (this ticket)
-    POST   /sessions              (photo upload) -> { session_id }
+    POST   /sessions              (photo upload) -> { session_id }    <- issue #2
     GET    /sessions/{id}/events                  (progress stream)
     GET    /sessions/{id}/planes
     POST   /sessions/{id}/renders { assignments, mode }
-    DELETE /sessions/{id}
+    DELETE /sessions/{id}                                              <- issue #2
 
-Only /health exists so far — ticket #1 is the walking skeleton. The session endpoints arrive with
-the tickets that need them.
+The session endpoints exist (issue #2). The rest arrive with the tickets that need them.
 """
 
 from fastapi import Depends, FastAPI
 
 from spectrapaint.api.auth import secret_required
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.sessions import SessionRegistry
+from spectrapaint.api.sessions import router as sessions_router
 
 
 def create_app(secret: str) -> FastAPI:
@@ -38,6 +39,8 @@ def create_app(secret: str) -> FastAPI:
     )
 
     install_error_handlers(app)
+    app.state.session_registry = SessionRegistry()
+    app.include_router(sessions_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

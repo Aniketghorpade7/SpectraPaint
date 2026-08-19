@@ -22,6 +22,8 @@ approved = [
   "ISC",
   "MIT",
   "MIT-0",
+  "MIT-CMU",   # Pillow (12.x) — the licence the Python imaging library actually declares. A CMU
+               # variant of MIT, same permissive terms, needed for validating uploaded Room Photos.
   "MPL-2.0",       # weak copyleft, file-level. Fine as an unmodified dependency; if we ever patch
                    # an MPL file, that file's source must be published.
   "PSF-2.0",       # CPython itself
