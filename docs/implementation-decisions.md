@@ -361,3 +361,64 @@ Catalogue for ".." is asking a question, not climbing a directory tree.
 tests state that as a rule rather than an accident, including the case of each character a Dealer can
 type.
 
+---
+
+## 11. Preparation runs on a worker thread, and progress is a replayed per-session log
+
+**Ticket:** #4 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** Photo preparation is a `PreparationJob` that runs its stages on a daemon worker thread
+and records one event per stage into a per-session log. The events endpoint replays the log to each
+reader, then streams live events, then ends with exactly one terminal event (`done` or `failed`).
+
+**Why:** The thread was forced by testability, and the replay by the acceptance criteria. An
+`asyncio.create_task` scheduled during the upload request never runs after that request returns under
+FastAPI's TestClient (see technical-difficulties.md #5), so an event-loop job would never progress in
+test; a thread is independent of any request's loop and also keeps CPU-bound Pillow decoding off
+uvicorn's event loop. Replay is how "opening the stream slightly after work has started still yields
+sensible progress" is met in the strong case — a reader connecting after the job already finished
+still receives the whole log instead of waiting forever for a terminal event already sent.
+
+**Consequence:** A session deleted mid-preparation abandons at most a few milliseconds of work (the
+thread is daemonic and short-lived); there is no way to cancel it. The log lives in memory and dies
+with the process, consistent with the deliberately in-memory session registry. Reversing this to an
+event-loop job would mean first solving the TestClient problem the thread exists to avoid.
+
+## 12. Ticket #4 runs only real preparation stages; the model stages join later, same list
+
+**Ticket:** #4 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** `build_preparation_stages` is the single stage list. For #4 it contains one real stage —
+decode the photo's pixels ("Reading your photo…"). Tickets #6/#7/#8 add their stages (walls, light,
+edges) to the same list; nothing about the buffering, streaming or termination machinery changes.
+
+**Why:** The upload's structural check (`verify()`) does not decode — a JPEG with its EOI marker
+stripped passes it — so decoding is the first genuinely real preparation step and it closes that
+gap by failing a photo cleanly in the background rather than somewhere downstream. Fake stages were
+rejected: the stream must report only work that actually ran, so the Dealer is never told "Finding
+the walls in your photo…" when nothing found anything. The acceptance criteria need the *streaming
+infrastructure* to exist and terminate; they do not require segmentation work that belongs to #6.
+
+**Consequence:** `create_app` takes `preparation_stages` as an argument (like the secret), so tests
+inject deterministic stages instead of timing the real pipeline. The stage list is the seam a later
+ticket reads to know where to plug in.
+
+## 13. The progress stream is a separate fetch-based bridge in main, not part of the request bridge
+
+**Ticket:** #4 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-19
+
+**Decided:** A dedicated IPC bridge (`registerProgressStreamBridge`) opens `fetch` against
+`GET /sessions/{id}/events` in the Electron main process with the secret in the `Authorization`
+header, parses SSE frames, and forwards each event to the renderer. The preload exposes
+`onProgress(sessionId, listener)` returning an unsubscribe function.
+
+**Why:** The generic request bridge reads a single JSON body, which an SSE stream is not. The secret
+must travel in a header, and the browser's `EventSource` cannot set headers — so the stream cannot
+live in the renderer at all. The session id is validated against `^[0-9a-f]{32}$` (uuid4 hex) before
+it reaches a path, so the renderer cannot name a route outside the contract. A stream that ends
+without a terminal event is synthesised as a `failed` event in main, so a dropped connection or a
+service death can never leave the Dealer staring at an endless "working…".
+
+**Consequence:** The renderer holds a fifth bridge method. A later web target gets the same behaviour
+by implementing the same `onProgress` contract against the same SSE endpoint.
+

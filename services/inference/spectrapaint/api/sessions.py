@@ -1,19 +1,23 @@
-"""Session lifecycle: ``POST /sessions`` and ``DELETE /sessions/{id}``.
+"""Session lifecycle: ``POST /sessions``, ``GET /sessions/{id}/events`` and
+``DELETE /sessions/{id}``.
 
 A photo enters the system only here, and the lifecycle is what every later endpoint hangs off.
-No processing happens yet — no models, no segmentation. The service records the session and moves
-on; the bytes are validated so a corrupt or unsupported file is caught at the door, then discarded.
-Storage of the photo itself arrives with the segmentation tickets.
+Uploading records the session and starts its preparation in the background — the bytes are
+validated so a corrupt or unsupported file is caught at the door, and preparation is where the photo
+is actually read (ticket #4). Storage of the photo itself arrives with the segmentation tickets.
 
 The registry is deliberately in-memory: persistence to disk is ticket #11's concern, and an
 in-memory session dies with the process, which is correct for a single counter-side consultation.
 """
 
 import io
+import json
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 
 from spectrapaint.api.errors import (
@@ -22,6 +26,7 @@ from spectrapaint.api.errors import (
     UNSUPPORTED_IMAGE,
     ServiceError,
 )
+from spectrapaint.api.preparation import PreparationJob, Stage
 
 router = APIRouter()
 
@@ -40,22 +45,34 @@ _MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please s
 
 
 class SessionRegistry:
-    """The live set of session ids. Nothing more yet — no metadata is needed until a later stage
-    has something to attach to a session. No automatic deletion: a session leaves only when the
-    Dealer ends the consultation, and only then do requests against it fail."""
+    """The live set of sessions, each with its preparation running in the background.
 
-    def __init__(self) -> None:
-        self._sessions: set[str] = set()
+    A session is its preparation job: upload creates both at once, and the photo's bytes live only
+    inside that job's stages. No automatic deletion: a session leaves only when the Dealer ends the
+    consultation, and only then do requests against it fail.
+    """
 
-    def create(self) -> str:
+    def __init__(self, preparation_stages: Callable[[bytes], list[Stage]]) -> None:
+        self._preparation_stages = preparation_stages
+        self._sessions: dict[str, PreparationJob] = {}
+
+    def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
-        self._sessions.add(session_id)
+        job = PreparationJob(self._preparation_stages(contents))
+        self._sessions[session_id] = job
+        # Started here so preparation genuinely begins on upload (docs/design-decisions.md §13) and
+        # runs behind the Dealer's next move. The job's thread is daemonic and short-lived: a
+        # session deleted mid-preparation abandons at most a few milliseconds of work.
+        job.start()
         return session_id
+
+    def job(self, session_id: str) -> PreparationJob | None:
+        return self._sessions.get(session_id)
 
     def delete(self, session_id: str) -> bool:
         if session_id not in self._sessions:
             return False
-        self._sessions.remove(session_id)
+        del self._sessions[session_id]
         return True
 
 
@@ -90,8 +107,35 @@ async def create_session(
 
     _verify_is_an_image(contents)
 
-    session_id = _registry(request).create()
+    session_id = _registry(request).create(contents)
     return {"session_id": session_id}
+
+
+@router.get("/sessions/{session_id}/events")
+async def stream_events(request: Request, session_id: str) -> StreamingResponse:
+    """The progress stream for one session's preparation.
+
+    Server-sent events over plain HTTP: every progress event so far, then each new one as it lands,
+    then exactly one terminal event (``done`` or ``failed``), after which the stream closes. A
+    reader that connects after preparation finished still replays the whole log, so it never waits
+    on an event already sent. Authenticated like everything else — by the secret header, never a
+    query string, which is why this is a fetch-based stream rather than an ``EventSource``
+    (docs/specs/v1-spectrapaint.md).
+    """
+
+    job = _registry(request).job(session_id)
+    if job is None:
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=SESSION_NOT_FOUND,
+            message=_MESSAGE_SESSION_NOT_FOUND,
+        )
+
+    return StreamingResponse(
+        _sse_stream(job.stream()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -134,3 +178,10 @@ def _verify_is_an_image(contents: bytes) -> None:
             code=UNSUPPORTED_IMAGE,
             message=_MESSAGE_UNSUPPORTED_IMAGE,
         ) from None
+
+
+async def _sse_stream(events: AsyncIterator[dict[str, str]]) -> AsyncIterator[str]:
+    """Frame each event as a server-sent event. Data-only events; the payload is the JSON body."""
+
+    async for event in events:
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

@@ -27,6 +27,19 @@ export interface ServiceResponse<T = unknown> {
 }
 
 /**
+ * One frame of a session's preparation stream, delivered by main as it is parsed.
+ *
+ * `progress` events carry a plain-language message the UI may show as-is. Exactly one terminal event
+ * — `done` or `failed` — arrives last, after which the stream closes.
+ */
+export type ProgressStreamPhase = 'progress' | 'done' | 'failed';
+
+export interface ProgressStreamEvent {
+  phase: ProgressStreamPhase;
+  message?: string;
+}
+
+/**
  * What a new-Consultation attempt comes back as. The Dealer either changed their mind, or has a
  * photo on screen, or was refused with a message the UI may show as-is. Cancellation is a result,
  * not an error — walking away is not a failure.
@@ -48,6 +61,14 @@ export interface SpectraPaintBridge {
    * the session id plus the photo for display. All filesystem and secret handling stays in main.
    */
   createConsultation(): Promise<CreateConsultationResult>;
+
+  /**
+   * Subscribe to a session's preparation progress. Main opens a fetch-based stream to the service
+   * with the secret in a header — never a query string, which is exactly why the browser's
+   * `EventSource` (which cannot set headers) is not used. The listener hears `progress` events,
+   * then exactly one terminal `done` or `failed` event. Returns an unsubscribe function.
+   */
+  onProgress(sessionId: string, listener: (event: ProgressStreamEvent) => void): () => void;
 
   /** Subscribe to boot progress. Returns an unsubscribe function. */
   onBootStatus(listener: (status: BootStatus) => void): () => void;

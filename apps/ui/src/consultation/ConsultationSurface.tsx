@@ -47,7 +47,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
       <h1 className="consultation__title">New Consultation</h1>
 
       {state.phase === 'uploading' ? (
-        <ProgressMessage>Loading your photo…</ProgressMessage>
+        <ProgressMessage>{state.progressMessage ?? 'Loading your photo…'}</ProgressMessage>
       ) : (
         <p className="consultation__hint">
           Start with a photo of the Customer's room. The paint is chosen next.

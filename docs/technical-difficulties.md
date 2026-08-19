@@ -141,3 +141,25 @@ hand-written Catalogue file dropped into that directory is not formatted by anyt
 acceptable — hand-writing one is not a workflow we support, and the loader validates content rather
 than layout.
 
+---
+
+## 5. FastAPI's TestClient never runs background asyncio tasks started during a request
+
+**Ticket:** #4 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-08-19 ·
+**Status:** worked around
+
+**What happened:** the first design ran photo preparation as an `asyncio.create_task` inside
+`POST /sessions`. Service tests that then opened `GET /sessions/{id}/events` hung forever: the job
+never produced events because the task never ran. A minimal reproduction — `create_task` in a POST,
+sleep, then read shared state — showed the state untouched 0.3 s after the POST returned.
+
+**Why it was hard:** nothing fails loudly. The POST returns 201, the stream endpoint connects, and
+the reader waits on an event that can never arrive, because TestClient's event loop only drives the
+app coroutine for the duration of each request. The failure looks like an infinite wait in the app,
+not a test-harness quirk, so the diagnosis lands on the wrong layer.
+
+**Where it stands:** worked around by running preparation on a daemon worker thread instead — see
+implementation-decisions.md #11. The thread is independent of any request's event loop, so it
+progresses under both TestClient and the real uvicorn server (verified end-to-end). A future ticket
+that adds background work must either use a thread, or solve this TestClient gap first.
+
