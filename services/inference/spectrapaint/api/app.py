@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI
 
 from spectrapaint.api.auth import secret_required
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
 
@@ -41,6 +42,7 @@ def create_app(secret: str) -> FastAPI:
     install_error_handlers(app)
     app.state.session_registry = SessionRegistry()
     app.include_router(sessions_router)
+    app.include_router(renders_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

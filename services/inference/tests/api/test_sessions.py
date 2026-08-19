@@ -154,13 +154,14 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
 
     The documented contract (docs/specs/v1-spectrapaint.md) has no endpoint accepting an image
     alongside a Shade, and this test pins the whole surface so one cannot appear silently. Adding
-    the render or planes endpoints later means changing this list deliberately.
+    the planes endpoints later means changing this list deliberately.
     """
 
     expected = {
         ("/health", frozenset({"GET"})),
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
+        ("/sessions/{session_id}/renders", frozenset({"POST"})),
     }
 
     actual = set()
