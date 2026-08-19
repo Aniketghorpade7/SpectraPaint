@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   BootStatus,
   CreateConsultationResult,
+  ProgressStreamEvent,
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
@@ -12,6 +13,9 @@ import {
   BOOT_STATUS_GET_CHANNEL,
   BOOT_STATUS_RETRY_CHANNEL,
   CREATE_CONSULTATION_CHANNEL,
+  PROGRESS_EVENT_CHANNEL,
+  PROGRESS_STREAM_START_CHANNEL,
+  PROGRESS_STREAM_STOP_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
 } from './channels';
 
@@ -19,8 +23,9 @@ import {
  * The only path between the renderer and everything else.
  *
  * `contextIsolation` is on and `nodeIntegration` is off, so this is the entire surface the React
- * app can see. Four methods, deliberately: enough to call the contract and follow boot progress,
- * and nothing that hands out the secret, the port, a filesystem handle or an arbitrary fetch.
+ * app can see. Five methods, deliberately: enough to call the contract, follow boot progress and
+ * stream preparation progress, and nothing that hands out the secret, the port, a filesystem handle
+ * or an arbitrary fetch.
  *
  * Note what is *not* here: no `getSecret()`, and no `baseUrl`. Exposing either would put the
  * secret one `console.log` away from a screenshot, and would break the moment a restart moves the
@@ -34,6 +39,21 @@ const bridge: SpectraPaintBridge = {
 
   createConsultation(): Promise<CreateConsultationResult> {
     return ipcRenderer.invoke(CREATE_CONSULTATION_CHANNEL) as Promise<CreateConsultationResult>;
+  },
+
+  onProgress(sessionId: string, listener: (event: ProgressStreamEvent) => void): () => void {
+    const handler = (
+      _event: IpcRendererEvent,
+      payload: { sessionId: string; event: ProgressStreamEvent },
+    ) => {
+      if (payload.sessionId === sessionId) listener(payload.event);
+    };
+    ipcRenderer.on(PROGRESS_EVENT_CHANNEL, handler);
+    void ipcRenderer.invoke(PROGRESS_STREAM_START_CHANNEL, sessionId);
+    return () => {
+      ipcRenderer.off(PROGRESS_EVENT_CHANNEL, handler);
+      void ipcRenderer.invoke(PROGRESS_STREAM_STOP_CHANNEL, sessionId);
+    };
   },
 
   onBootStatus(listener: (status: BootStatus) => void): () => void {
