@@ -43,12 +43,15 @@ jobs:
         # comment in the manifest should not throw away gigabytes of warm cache.
         run: echo "key=$(python3 tools/fetch_models.py --cache-key)" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the model weights
+      - name: Restore the model weights and the exported graphs
         id: cache
         uses: actions/cache@v4
         with:
           path: models
-          key: model-weights-${{ steps.weights.outputs.key }}
+          # The exporter's own hash is part of the key. The `.onnx` graphs live in this same
+          # directory, so a key that tracked only the pinned weights would happily restore graphs
+          # produced by a previous version of tools/export_onnx.py and test the wrong maths.
+          key: model-weights-${{ steps.weights.outputs.key }}-export-${{ hashFiles('tools/export_onnx.py') }}
           # No restore-keys on purpose. A partial match here would mean weights from a different
           # pinned version, which is worse than a slow download — it would test the wrong model.
 
@@ -64,8 +67,45 @@ jobs:
         # about to test with is the file whose licence and version were reviewed.
         run: python3 tools/fetch_models.py --verify
 
+      - name: Export the checkpoints to ONNX
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: services/inference
+        # Only on a cache miss, because this is the expensive half: it installs PyTorch to convert
+        # the checkpoints, and the `.onnx` files it writes are cached alongside the weights. The
+        # export verifies every graph against the PyTorch model it came from, so a graph that runs
+        # but computes something else fails here rather than in a test that looks unrelated.
+        run: |
+          uv sync --python 3.12 --group export
+          uv run python ../../tools/export_onnx.py
+
+      - name: Check the exported graphs are present
+        # Runs on a cache hit too, for the same reason the weights are re-verified: a cache entry
+        # is not evidence. Deliberately does not re-run the parity check, which would mean
+        # installing PyTorch on every run to re-learn what the export already proved.
+        run: |
+          python3 - <<'CHECK'
+          import sys
+          from pathlib import Path
+
+          expected = [
+              "models/semantic-segformer-b0-ade20k/semantic.onnx",
+              "models/semantic-segformer-b0-ade20k/runtime.json",
+              "models/refiner-sam2-hiera-tiny/sam2-encoder.onnx",
+              "models/refiner-sam2-hiera-tiny/sam2-decoder.onnx",
+              "models/refiner-sam2-hiera-tiny/runtime.json",
+          ]
+          missing = [path for path in expected if not Path(path).exists()]
+          for path in expected:
+              print(("  ok      " if path not in missing else "  MISSING ") + path)
+          if missing:
+              sys.exit(f"{len(missing)} exported file(s) missing. The export did not complete.")
+          CHECK
+
       - name: Install the service
         working-directory: services/inference
+        # Without the export group, which prunes PyTorch back out of the environment. That is
+        # deliberate: the contract tests below then run in an environment shaped like the shipped
+        # one, so anything under spectrapaint/ that reached for torch would fail here.
         run: uv sync --python 3.12
 
       - name: Seam 1 contract tests
