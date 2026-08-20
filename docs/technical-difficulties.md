@@ -190,3 +190,29 @@ contract's error shape. A seam-1 test uploads a stripped-EOI JPEG and asserts th
 which is what stops the 500 coming back. The general lesson is the one the gate's docstring now
 states honestly: `verify()` is a gate, not a guarantee, and whichever stage first decodes must own
 its own errors.
+
+---
+
+## 7. The generic request bridge cannot carry a PNG, so a repaint returned with no image
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-08-20 ·
+**Status:** resolved
+
+**What happened:** the first design for the UI wiring sent the render request through the generic
+request bridge (`service-bridge.ts`). That bridge ends in `body: await response.json().catch(() =>
+null)`, and the render contract returns `image/png` — so a successful repaint arrived in the
+renderer as `ok: true, body: null`. The request succeeded (201), nothing logged and nothing threw,
+and the photo on screen simply never changed.
+
+**Why it was hard:** the failure is silent in the worst way. There is no error to catch, no red test
+— every seam 1 test sees the endpoint working, because the endpoint does work. It only surfaces by
+running the app and watching a tap do nothing, which is precisely the path that is not automated.
+The bridge's docstring even documents the JSON body it reads, but a reader has to go looking for the
+image response on the other side to notice the mismatch.
+
+**Where it stands:** resolved by a dedicated render bridge (`registerRenderBridge`) that reads
+`response.arrayBuffer()` and converts the bytes to a data URL via `photoDataUrl` — the same
+second-bridge pattern decision #13 already established for the progress stream, and recorded as
+implementation-decisions.md #20. Worth knowing for any future endpoint returning bytes: the export
+ticket (#12) will meet the same wall, and the answer is another dedicated bridge, not widening the
+generic one.

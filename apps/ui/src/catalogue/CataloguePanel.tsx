@@ -4,6 +4,7 @@ import { ProgressMessage } from '../components/ProgressMessage';
 import { ShadeList } from './ShadeList';
 import { ShadeSwatch } from './ShadeSwatch';
 import type { Catalogue } from './useCatalogue';
+import type { Shade } from './shade';
 
 /**
  * The Catalogue panel: search, Shade Family browsing, and the recently-used row.
@@ -15,7 +16,14 @@ import type { Catalogue } from './useCatalogue';
  * Every state is defined, not just the happy path: loading, loaded, nothing typed, nothing found,
  * and a failure that always offers the next action.
  */
-export function CataloguePanel({ catalogue }: { catalogue: Catalogue }) {
+export function CataloguePanel({
+  catalogue,
+  onShadeSelected,
+}: {
+  catalogue: Catalogue;
+  /** Called with the Shade Code the Dealer picked, so the photo beside this panel can repaint. */
+  onShadeSelected?: (shadeCode: string) => void;
+}) {
   const {
     phase,
     message,
@@ -33,6 +41,13 @@ export function CataloguePanel({ catalogue }: { catalogue: Catalogue }) {
     select,
     retry,
   } = catalogue;
+
+  // Selecting a Shade is one event: the panel marks it and the surface repaints with it. The
+  // catalogue hook owns the selection state; the surface owns what a selection does.
+  const handleSelect = (shade: Shade) => {
+    select(shade);
+    onShadeSelected?.(shade.shade_code);
+  };
 
   if (phase === 'loading') {
     return (
@@ -92,7 +107,7 @@ export function CataloguePanel({ catalogue }: { catalogue: Catalogue }) {
                 <ShadeSwatch
                   shade={shade}
                   selected={shade.shade_code === selectedShadeCode}
-                  onSelect={select}
+                  onSelect={handleSelect}
                 />
               </li>
             ))}
@@ -147,7 +162,7 @@ export function CataloguePanel({ catalogue }: { catalogue: Catalogue }) {
           rowCount={rowCount}
           shadeAt={shadeAt}
           onShowRows={showRows}
-          onSelect={select}
+          onSelect={handleSelect}
           selectedShadeCode={selectedShadeCode}
           label={
             searched

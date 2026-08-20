@@ -608,3 +608,61 @@ stage safe by default, which is the property the seam was supposed to have.
 nothing warns about it. That is the right trade while there is one producer; a second producer is a
 reason to revisit this entry, not to work around it.
 
+---
+
+## 20. The repaint goes through a dedicated render bridge, because the generic one reads JSON
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** a third IPC bridge (`registerRenderBridge`) performs `POST
+/sessions/{id}/renders` from the Electron main process and hands the renderer a data URL. The
+renderer calls `window.spectrapaint.render(sessionId, shadeCode)` and gets back a `RenderResult`
+discriminated union — `ready` with the image, or `failed` with the service's own code and message.
+Main builds the wire body, including the stub Wall Plane id (`wall_plane_1`), which the renderer
+never sees.
+
+**Why:** the generic request bridge ends in `body: await response.json().catch(() => null)`, so an
+`image/png` response arrives in the renderer as `ok: true, body: null` — a request that succeeds and
+delivers nothing. Making that bridge polymorphic to carry bytes is the same temptation decision #13
+rejected for the progress stream; a dedicated bridge keeps the generic one honest and puts the byte
+handling where the secret already lives. The session id is validated against `^[0-9a-f]{32}$` before
+it reaches a path, and an untrusted sender is refused, exactly as the other bridges do. The UI
+speaks in Shade Codes (the glossary's word) and never in Wall Plane ids, because the wire shape is
+this package's job and the segmentation tickets widen the set of plane ids here, in the one place
+that talks to the service.
+
+**Consequence:** the renderer-facing signature `render(sessionId, shadeCode)` survives the
+segmentation tickets, but not the two-modes ticket: #8's realistic/true_colour toggle will add a
+`mode` argument to the bridge, in the same one place. `contract-path.ts` needed no change — its
+whitelist already admits `POST /sessions/{id}/renders`.
+
+---
+
+## 21. A repaint replaces the photo on screen, with an explicit before/after toggle; a failure returns to the original
+
+**Ticket:** #3 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** tapping a Shade repaints the Wall Plane and the render replaces the photo on screen. A
+"Show original photo / Show repaint" toggle in the bar flips between the two (spec user story 39:
+before/after matters), and a repaint in flight is a visible "Repainting the wall…" state rather than
+a frozen swatch. A failed repaint shows the service's message over the original photo with a way
+back, so the Dealer is never dead-ended (conventions.md §5). The whole state machine is a pure
+reducer (`applyRenderEvent` in `apps/ui/src/consultation/render.ts`) tested in vitest like
+`applyProgressEvent`, and the surface renders the visible image from it.
+
+**Why:** replace-versus-toggle had to be decided explicitly and recorded, because the ticket's
+narrative ("taps a colour and part of the photo repaints") and its criterion ("a render can be
+requested through the contract and returns an image") each answer only half the question. Replacing
+with a toggle answers both of the questions a Dealer and Customer actually ask — "what does my room
+look like painted" and "compare against what it was" — for the cost of one button. The reducer
+drops a reply for a Shade the Dealer has since replaced (it checks the requested `shadeCode` before
+applying `ready` or `failed`), so a fast sequence of taps cannot be overwritten by an older reply.
+Selection is wired from the event (`CataloguePanel.onShadeSelected`), not from an effect watching
+`selectedShadeCode`, for the same reason difficulty 3 records: an effect that sets state in response
+is the signal to find the event that caused it.
+
+**Consequence:** the before/after toggle is V1's answer to preview-versus-full-resolution; the
+spec's two genuinely non-trivial UI pieces remain unextracted. The render state resets with the
+consultation (discard or start), and a reply that arrives after a discard is dropped by the same
+shade-code guard — the reducer is the only protection the async boundary needs.
+

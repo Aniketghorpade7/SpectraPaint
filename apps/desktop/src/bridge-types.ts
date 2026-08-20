@@ -49,6 +49,14 @@ export type CreateConsultationResult =
   | { status: 'ready'; sessionId: string; imageDataUrl: string }
   | { status: 'failed'; code: string; message: string };
 
+/**
+ * What a repaint request comes back as. A refusal — service down, unknown Shade Code, an assignment
+ * naming a wall the photo does not have — is a result carrying the service's own message, so the UI
+ * can show it as-is rather than inventing one.
+ */
+export type RenderResult =
+  { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
+
 export interface SpectraPaintBridge {
   /**
    * Call the inference service. The secret and the current base URL are added in the main
@@ -70,8 +78,19 @@ export interface SpectraPaintBridge {
    */
   onProgress(sessionId: string, listener: (event: ProgressStreamEvent) => void): () => void;
 
-  /** Subscribe to boot progress. Returns an unsubscribe function. */
+  /**
+   * Subscribe to boot progress. Returns an unsubscribe function.
+   */
   onBootStatus(listener: (status: BootStatus) => void): () => void;
+
+  /**
+   * Repaint the Wall Plane in a Shade Code and return the repainted photo as a data URL.
+   *
+   * Main builds the request: it names the Wall Plane and holds the secret, so the renderer asks for
+   * a Shade and gets back an image — it never touches the wire shape or a file. A refusal comes back
+   * as a `failed` result whose message is the service's own, safe to show as-is.
+   */
+  render(sessionId: string, shadeCode: string): Promise<RenderResult>;
 
   /**
    * The status right now. Read on mount, because the service can become ready before the boot
