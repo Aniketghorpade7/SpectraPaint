@@ -26,7 +26,7 @@ import numpy as np
 from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.matte import refiner_alpha, wall_alpha
 from spectrapaint.segmentation.prompts import prompts_for
-from spectrapaint.segmentation.semantic import semantic_regions
+from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
 
 # Shown to the Dealer as-is when a photo has no wall worth painting.
 MESSAGE_NO_WALL_FOUND = (
@@ -71,14 +71,12 @@ class WallPlane:
         return float(self.alpha.mean())
 
 
-def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
-    """Every Wall Plane in the photo — one, for this ticket.
+def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
+    """The semantic pass, and the first of the two "is there a wall here at all?" checks.
 
-    Raises ``NoWallFound`` when the photo has no wall worth painting, which is checked twice for
-    different reasons: the semantic pass may find too little wall to bother with, and the prompt
-    step may find no point that sits safely inside what it did find. The second is the stricter
-    test — a wall too thin to hold a point away from its own boundary cannot be prompted for
-    without risking a mask of the ceiling.
+    Separate from the refinement below because they are the two long stages of preparation and the
+    Dealer is told about them separately — and because failing here costs nothing, while failing
+    after the refiner has run has spent the most expensive seconds in the pipeline.
     """
 
     regions = semantic_regions(graphs.semantic, photo_u8)
@@ -87,6 +85,16 @@ def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
             f"the semantic pass labelled {regions.wall_fraction:.1%} of the photo as wall, "
             f"below the {MINIMUM_WALL_FRACTION:.0%} needed"
         )
+    return regions
+
+
+def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) -> list[WallPlane]:
+    """Refine the semantic region into Wall Planes — one, for this ticket.
+
+    The remaining two "no wall" checks live here. The prompt check is the stricter one: a wall too
+    thin to hold a point away from its own boundary cannot be prompted for without risking a mask
+    of the ceiling instead.
+    """
 
     prompts = prompts_for(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
@@ -104,3 +112,13 @@ def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
             f"below the {MINIMUM_WALL_FRACTION:.0%} needed"
         )
     return [plane]
+
+
+def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
+    """Every Wall Plane in the photo, in one call.
+
+    Preparation runs the two halves as separate stages so it can report progress between them;
+    this is the same pipeline for callers that have nothing to report to.
+    """
+
+    return planes_from(graphs, photo_u8, wall_regions(graphs, photo_u8))

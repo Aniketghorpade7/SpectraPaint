@@ -3,15 +3,15 @@
     GET    /health
     POST   /sessions              (photo upload) -> { session_id }    <- issue #2
     GET    /sessions/{id}/events                  (progress stream)   <- issue #4
-    GET    /sessions/{id}/planes
+    GET    /sessions/{id}/planes                                        <- issue #6
+    GET    /sessions/{id}/planes/{plane_id}/matte                       <- issue #6
     POST   /sessions/{id}/renders { assignments, mode }
     DELETE /sessions/{id}                                              <- issue #2
     GET    /catalogue                             (what is loaded)     <- issue #5
     GET    /catalogue/shades                      (browse or search)   <- issue #5
     GET    /catalogue/shades/{shade_code}                              <- issue #5
 
-The session, progress, render and Catalogue endpoints exist; the rest arrive with the tickets that
-need them.
+Every endpoint in the contract now exists.
 """
 
 from collections.abc import Callable
@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI
 from spectrapaint.api.auth import secret_required
 from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.planes import router as planes_router
 from spectrapaint.api.preparation import Stage, build_preparation_stages
 from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
@@ -64,6 +65,7 @@ def create_app(
     app.state.session_registry = SessionRegistry(preparation_stages)
     app.state.catalogue = open_catalogue() if catalogue is None else catalogue
     app.include_router(sessions_router)
+    app.include_router(planes_router)
     app.include_router(renders_router)
     app.include_router(catalogue_router)
 

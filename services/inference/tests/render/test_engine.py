@@ -112,41 +112,107 @@ def test_engine_is_pure_no_mutation_of_inputs() -> None:
 # --- Scene estimates ---------------------------------------------------------
 
 
-def test_base_colour_is_the_interior_median() -> None:
-    """The median of the photo's interior, so a bright window can't drag it white."""
-    interior_value = [0.35, 0.42, 0.28]
-    window_value = [0.99, 1.00, 0.98]
-    linear = np.zeros((10, 10, 3), dtype=np.float32)
-    interior = np.tile(np.array(interior_value, dtype=np.float32), (8, 8, 1))
-    window = np.tile(np.array(window_value, dtype=np.float32), (2, 2, 1))
-    linear[:8, :8] = interior
-    linear[8:, 8:] = window
+def matte_of(shape: tuple[int, int], box: tuple[int, int, int, int]) -> np.ndarray:
+    """A hard-edged rectangular matte, HxWx1, covering ``box`` as (top, left, bottom, right)."""
+    top, left, bottom, right = box
+    alpha = np.zeros((*shape, 1), dtype=np.float32)
+    alpha[top:bottom, left:right] = 1.0
+    return alpha
 
-    got = estimate_base_colour(linear)
+
+def test_base_colour_is_measured_inside_the_matte_only() -> None:
+    """A bright window *outside* the wall must not reach the estimate.
+
+    This is the whole reason the estimate takes a matte: the old whole-frame statistic could only
+    ever be the colour of the room, and the Light Map divides by the colour of the *wall*.
+    """
+    wall_value = [0.35, 0.42, 0.28]
+    linear = np.full((40, 40, 3), 0.99, dtype=np.float32)
+    linear[5:35, 5:35] = np.array(wall_value, dtype=np.float32)
+
+    got = estimate_base_colour(linear, matte_of((40, 40), (5, 5, 35, 35)))
 
     assert got.shape == (3,)
-    assert np.allclose(got, interior_value, atol=1e-6)
+    assert np.allclose(got, wall_value, atol=1e-6)
+
+
+def test_base_colour_ignores_the_matte_s_own_edge() -> None:
+    """Boundary pixels are contaminated, so the estimate is taken from further in.
+
+    A pixel on the matte's edge is part wall and part whatever is behind the wall's edge. Left in,
+    the bright ring below would win the luminance ranking outright and the wall would be measured
+    as the colour of its own outline.
+    """
+    wall_value = [0.30, 0.30, 0.30]
+    linear = np.zeros((40, 40, 3), dtype=np.float32)
+    linear[5:35, 5:35] = np.array(wall_value, dtype=np.float32)
+    # The outermost ring *inside* the matte: bright, and nothing like the wall.
+    linear[5, 5:35] = linear[34, 5:35] = 1.0
+    linear[5:35, 5] = linear[5:35, 34] = 1.0
+
+    got = estimate_base_colour(linear, matte_of((40, 40), (5, 5, 35, 35)))
+
+    assert np.allclose(got, wall_value, atol=1e-6)
+
+
+def test_base_colour_is_the_wall_in_full_light_not_its_average() -> None:
+    """Ranked by luminance and taken near the 90th percentile, so shadow does not darken it.
+
+    The Base Colour is the paint "as it appears under full light" (CONTEXT.md). A wall that is two
+    thirds in shadow must still be measured as the lit paint, or every Light Map derived from it
+    carries the shadow twice.
+    """
+    lit = [0.60, 0.60, 0.60]
+    shadowed = [0.20, 0.20, 0.20]
+    linear = np.zeros((40, 40, 3), dtype=np.float32)
+    linear[5:35, 5:35] = np.array(shadowed, dtype=np.float32)
+    linear[5:15, 5:35] = np.array(lit, dtype=np.float32)
+
+    got = estimate_base_colour(linear, matte_of((40, 40), (5, 5, 35, 35)))
+
+    assert np.allclose(got, lit, atol=1e-3)
+    assert got[0] > np.mean([lit[0], shadowed[0], shadowed[0]])
+
+
+def test_base_colour_keeps_the_wall_s_colour_cast() -> None:
+    """A mean of whole pixels, never a percentile per channel.
+
+    Taking the 90th percentile of each channel separately would compose the answer from three
+    different sets of pixels and flatten the wall toward neutral — which would erase exactly the
+    cast the estimate exists to capture.
+    """
+    warm_wall = [0.55, 0.40, 0.25]
+    linear = np.zeros((40, 40, 3), dtype=np.float32)
+    linear[5:35, 5:35] = np.array(warm_wall, dtype=np.float32)
+
+    got = estimate_base_colour(linear, matte_of((40, 40), (5, 5, 35, 35)))
+
+    assert np.allclose(got, warm_wall, atol=1e-6)
+    assert got[0] > got[1] > got[2]
 
 
 def test_base_colour_dark_photo_never_drops_below_the_floor() -> None:
-    """A near-black photo must floor, not hand render() a zero divisor."""
-    linear = np.zeros((6, 6, 3), dtype=np.float32)
+    """A near-black wall must floor, not hand render() a zero divisor."""
+    linear = np.zeros((40, 40, 3), dtype=np.float32)
 
-    got = estimate_base_colour(linear)
+    got = estimate_base_colour(linear, matte_of((40, 40), (5, 5, 35, 35)))
 
     assert np.all(got > 0.0)
 
 
-def test_base_colour_ignores_the_frame_edge() -> None:
-    """A white border band must not influence the estimate."""
-    interior_value = [0.4, 0.45, 0.3]
-    linear = np.full((10, 10, 3), 1.0, dtype=np.float32)
-    interior = np.tile(np.array(interior_value, dtype=np.float32), (8, 8, 1))
-    linear[1:9, 1:9] = interior
+def test_base_colour_survives_a_matte_with_no_opaque_interior() -> None:
+    """A wall visible only in slivers still gets a colour measured from itself.
 
-    got = estimate_base_colour(linear)
+    Degrade, never dead-end (conventions.md §5): a matte too thin to have an interior once eroded
+    is a poor wall, not a reason to fail a render the Dealer asked for.
+    """
+    wall_value = [0.5, 0.4, 0.3]
+    linear = np.zeros((40, 40, 3), dtype=np.float32)
+    linear[20:21, 5:35] = np.array(wall_value, dtype=np.float32)
 
-    assert np.allclose(got, interior_value, atol=1e-6)
+    got = estimate_base_colour(linear, matte_of((40, 40), (20, 5, 21, 35)))
+
+    assert np.allclose(got, wall_value, atol=1e-6)
 
 
 def test_light_tint_of_a_neutral_photo_is_exactly_neutral() -> None:

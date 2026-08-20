@@ -28,8 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageFilter
 
+from spectrapaint.imaging import erode
 from spectrapaint.segmentation.semantic import SemanticRegions
 
 # How far inside a region a sampled point must sit, as a fraction of the photo's shorter side.
@@ -61,40 +61,6 @@ class PromptSet:
     labels: np.ndarray
     positive_count: int
     negative_count: int
-
-
-def erode(mask: np.ndarray, radius: int) -> np.ndarray:
-    """Shrink a boolean region by ``radius`` pixels.
-
-    Repeated 3x3 minimum filters rather than one large kernel: a single MinFilter of side 2r+1
-    costs r squared work per pixel, and r passes of a 3x3 reach the same distance for far less.
-    Pillow's filters are C, so this stays cheap at photo resolution — and it keeps the dependency
-    list as it is, which matters more than elegance here (no scipy in the service).
-    """
-
-    if radius <= 0 or not mask.any():
-        return mask
-
-    image = Image.fromarray((mask * 255).astype(np.uint8), mode="L")
-    for _ in range(radius):
-        image = image.filter(ImageFilter.MinFilter(3))
-    return np.asarray(image, dtype=np.uint8) > 127
-
-
-def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
-    """Grow a boolean region by ``radius`` pixels — :func:`erode`'s opposite, and the same trick.
-
-    Together the two give a ring around a region's boundary (dilated minus eroded), which is how
-    the matte's boundary band is found.
-    """
-
-    if radius <= 0 or not mask.any():
-        return mask
-
-    image = Image.fromarray((mask * 255).astype(np.uint8), mode="L")
-    for _ in range(radius):
-        image = image.filter(ImageFilter.MaxFilter(3))
-    return np.asarray(image, dtype=np.uint8) > 127
 
 
 def erosion_radius(shape: tuple[int, int]) -> int:

@@ -31,8 +31,9 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from spectrapaint.imaging import dilate, erode
 from spectrapaint.runtime.graphs import Graphs
-from spectrapaint.segmentation.prompts import PromptSet, dilate, erode
+from spectrapaint.segmentation.prompts import PromptSet
 from spectrapaint.segmentation.semantic import SemanticRegions, pixel_values
 
 # Above this the semantic pass is treated as certain enough to overrule SAM 2 and restore a pixel to

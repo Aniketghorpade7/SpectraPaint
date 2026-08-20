@@ -2,9 +2,12 @@
 
 Behaviour, never implementation (docs/conventions.md §6): statuses, content type,
 mode semantics and the error shape are contract; how the render is produced is
-not. A solid-colour room stands in for the photo: the stub Wall Plane matte then
-has a fully-interior region where the repaint must actually show up, which is
-what lets the mode tests assert *rendered* behaviour rather than structure.
+not. A solid-colour room stands in for the photo, and preparation comes from
+tests/api/conftest.py rather than from the models: the matte then has a
+fully-interior region where the repaint must actually show up, which is what
+lets the mode tests assert *rendered* behaviour rather than structure. The same
+contract against the real pipeline is the slow lane's job — see
+tests/api/test_walls.py.
 """
 
 import io
@@ -14,7 +17,8 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from spectrapaint.api.app import create_app
-from spectrapaint.api.renders import STUB_WALL_PLANE_ID
+from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID
+from tests.api.conftest import stub_preparation_stages
 
 SECRET = "test-secret-not-a-real-one"
 
@@ -38,7 +42,7 @@ def to_png(contents: bytes) -> Image.Image:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(SECRET))
+    return TestClient(create_app(SECRET, preparation_stages=stub_preparation_stages))
 
 
 def auth(secret: str = SECRET) -> dict[str, str]:
@@ -64,7 +68,7 @@ def render(
     return client.post(
         f"/sessions/{session_id}/renders",
         headers=auth(),
-        json={"assignments": {STUB_WALL_PLANE_ID: shade_code}, "mode": mode},
+        json={"assignments": {FIRST_WALL_PLANE_ID: shade_code}, "mode": mode},
     )
 
 
@@ -199,7 +203,7 @@ def test_an_unknown_mode_is_a_malformed_request(client: TestClient) -> None:
     response = client.post(
         f"/sessions/{session_id}/renders",
         headers=auth(),
-        json={"assignments": {STUB_WALL_PLANE_ID: "PS-1001"}, "mode": "photorealistic"},
+        json={"assignments": {FIRST_WALL_PLANE_ID: "PS-1001"}, "mode": "photorealistic"},
     )
 
     assert response.status_code == 422
@@ -218,7 +222,7 @@ def test_render_requires_the_secret(client: TestClient) -> None:
 
     response = client.post(
         f"/sessions/{session_id}/renders",
-        json={"assignments": {STUB_WALL_PLANE_ID: "PS-1001"}, "mode": "realistic"},
+        json={"assignments": {FIRST_WALL_PLANE_ID: "PS-1001"}, "mode": "realistic"},
     )
 
     assert response.status_code == 401

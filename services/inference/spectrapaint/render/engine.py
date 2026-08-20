@@ -19,6 +19,7 @@ deterministic.
 
 import numpy as np
 
+from spectrapaint.imaging import erode
 from spectrapaint.render.luts import encode_srgb
 
 
@@ -83,32 +84,94 @@ def render(
 # ---------------------------------------------------------------------------
 # Scene estimates. These turn a bare photo into the light-map inputs, so the
 # render endpoint can serve a Realistic / True Colour repaint from nothing but
-# the photo. Both are pure numpy -- no I/O -- and both are deliberate stubs
-# pending the segmentation tickets: the true wall base colour and the true
-# light colour require the real Wall Plane mattes.
+# the photo and its Wall Plane matte. Both are pure numpy -- no I/O, no models.
+#
+# The Base Colour is now measured from the matte (ticket #6), which is what the
+# spec's derivation always asked for; the interior-median stub it replaces was
+# recorded as such in docs/implementation-decisions.md §17. The light tint is
+# still a whole-image estimate, and that is not a stub -- the spec asks for "a
+# rough whole-image estimate" on purpose, because the illuminant cancels when
+# dividing by the Base Colour and what is wanted back is the room's cast, not
+# the wall's.
 # ---------------------------------------------------------------------------
 # A median channel at or below this is treated as "the room is too dark to
 # recover a base colour", not as a zero divisor -- its floor keeps the later
 # light_map_of() division safe (issue #3 criterion 4: never a NaN in outputs).
 _BASE_COLOUR_FLOOR = 0.02
-# A band around the frame edge is excluded from both estimates: lens vignette
-# and door frames are not scene colour.
+# A band around the frame edge is excluded from the light-tint estimate: lens
+# vignette and door frames are not scene colour.
 _EDGE_BAND_FRACTION = 0.05
+
+# What counts as a fully-opaque matte pixel. Not 1.0 exactly: the matte's
+# interior is written as 1.0 but passes through a float resize on the way here
+# in some paths, and a pixel at 0.9999 is not a boundary pixel.
+_OPAQUE_COVERAGE = 0.99
+
+# How far inside the matte the Base Colour is measured, as a fraction of the
+# photo's shorter side. The spec says "eroded inward"; this is how far.
+_BASE_COLOUR_EROSION_FRACTION = 0.01
+
+# The luminance percentile the Base Colour is taken from, and the width of the
+# band around it. A single percentile would select a handful of pixels on a
+# small matte, and a mean of five pixels is noise.
+_BASE_PERCENTILE = 90.0
+_BASE_PERCENTILE_BAND = 5.0
 # Luma weights for linear light, ITU-R BT.709 — the same primaries the sRGB
 # transfer function in render.colour is defined against.
 _LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722])
 
 
-def estimate_base_colour(linear_photo: np.ndarray) -> np.ndarray:
-    """The wall's surface colour, as the photo's interior median.
+def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """The wall's surface colour, measured from the Wall Plane matte.
 
-    The wall is assumed to dominate the frame for this stub; the true wall-only
-    estimate arrives with the segmentation tickets. Median over mean so a lamp
-    or a window cannot drag the estimate white.
+    The spec pins this derivation, and every step of it is load-bearing
+    (docs/specs/v1-spectrapaint.md, "The render engine"):
+
+    * **Fully-opaque matte pixels only, eroded inward.** A boundary pixel is a
+      blend of wall and whatever is behind the wall's edge, so its colour is
+      partly the ceiling's. Averaging those in tints the Base Colour toward
+      everything the wall is next to.
+    * **Ranked by luminance, and near the 90th percentile.** The Base Colour is
+      the paint "as it appears under full light" (CONTEXT.md), so the estimate
+      wants the brightest genuinely-wall pixels -- the ones in full light --
+      rather than the average of a wall that is half in shadow. Not the very
+      brightest, which are specular highlights and blown pixels.
+    * **Their mean RGB, not a per-channel percentile.** Taking the 90th
+      percentile of each channel independently would compose a colour from
+      three different sets of pixels and neutralise the wall's cast, which is
+      the one thing this estimate exists to capture.
+
+    ``alpha`` is required rather than optional. A caller with no matte does not
+    have a wall yet, and quietly falling back to a whole-photo statistic is how
+    a render of the sofa's colour would look exactly like a working one.
     """
-    interior = _interior(linear_photo)
-    median = np.median(interior, axis=(0, 1))
-    return np.maximum(median, _BASE_COLOUR_FLOOR).astype(linear_photo.dtype)
+
+    coverage = np.asarray(alpha, dtype=np.float32).reshape(alpha.shape[0], alpha.shape[1])
+    radius = max(1, round(min(coverage.shape) * _BASE_COLOUR_EROSION_FRACTION))
+    interior = erode(coverage >= _OPAQUE_COVERAGE, radius)
+
+    if not interior.any():
+        # A matte with no fully-opaque interior at all -- a wall visible only in
+        # slivers between furniture. Rather than dead-end, fall back to whatever
+        # is opaque before erosion, and only then to the matte's most-covered
+        # pixels, so a thin wall still gets a colour measured from *itself*.
+        interior = coverage >= _OPAQUE_COVERAGE
+    if not interior.any():
+        interior = coverage >= max(coverage.max() * 0.9, np.finfo(np.float32).tiny)
+
+    pixels = linear_photo[interior]
+    luminance = pixels @ _LUMA_WEIGHTS.astype(pixels.dtype)
+
+    low, high = np.percentile(
+        luminance, [_BASE_PERCENTILE - _BASE_PERCENTILE_BAND, _BASE_PERCENTILE]
+    )
+    in_band = (luminance >= low) & (luminance <= high)
+    # A band can come back empty when the wall is a single flat value and every
+    # percentile lands on the same number; the equality check below is what
+    # keeps that case from producing a NaN mean.
+    selected = pixels[in_band] if in_band.any() else pixels
+
+    return np.maximum(selected.mean(axis=0), _BASE_COLOUR_FLOOR).astype(linear_photo.dtype)
 
 
 def estimate_light_tint(linear_photo: np.ndarray) -> np.ndarray:

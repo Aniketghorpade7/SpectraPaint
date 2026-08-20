@@ -7,18 +7,20 @@ docs/specs/v1-spectrapaint.md), and this endpoint works from the session's
 prepared photo — structure enforces the rule, not a comment.
 
 The Shade is looked up in the live Catalogue (issue #5), so a render can only
-ask for a Shade the Dealer can actually sell. Everything else here is a
-deliberate stub pending the later tickets:
+ask for a Shade the Dealer can actually sell.
 
-  * the wall is the stub rectangle matte (preparation._stub_wall_alpha)
-  * the base colour and light tint are estimated from the photo's interior
-    (engine), because the real wall-only estimate needs the segmentation mattes
+The wall is now the real thing (ticket #6): the Wall Plane matte the
+segmentation pipeline found while the photo was being prepared, and a Base
+Colour measured from inside that matte rather than from the whole frame. The
+stub rectangle and the interior-median estimate are both gone.
 
-There is one Wall Plane today, so ``assignments`` carries one entry, keyed by
-the stub's id. The map is the contract rather than a bare ``shade_code`` because
-an Accent Wall — two planes, two Shades, in one request — is what the shape
-exists for (docs/specs/v1-spectrapaint.md), and a caller written against a
-single-Shade body would have to be rewritten to gain it.
+There is still one Wall Plane per photo, so ``assignments`` carries one entry —
+but it is keyed by the id of a plane this photo actually has, and an id the
+photo does not have is refused. The map is the contract rather than a bare
+``shade_code`` because an Accent Wall — two planes, two Shades, in one request —
+is what the shape exists for (docs/specs/v1-spectrapaint.md), and a caller
+written against a single-Shade body would have to be rewritten to gain it.
+Ticket #7 fills the map with more keys without touching this surface.
 
 What is not a stub is the contract: ``assignments``, mode semantics
 (realistic = tinted by the room's light, true_colour = as the chip), the error
@@ -35,6 +37,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from spectrapaint.api.errors import MALFORMED_REQUEST, SHADE_NOT_FOUND, ServiceError
+from spectrapaint.api.preparation import PreparedPhoto
 from spectrapaint.api.sessions import require_photo
 from spectrapaint.catalogue import Catalogue
 from spectrapaint.render.colour import lab_to_linear_rgb
@@ -44,6 +47,7 @@ from spectrapaint.render.engine import (
     light_map_of,
     render,
 )
+from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["renders"])
 
@@ -60,17 +64,6 @@ _MESSAGE_UNKNOWN_WALL_PLANE = (
 # client error (422 malformed_request) instead of a silent default.
 RenderMode = Literal["realistic", "true_colour"]
 
-# The stub Wall Plane's id — the one key ``assignments`` accepts until the
-# segmentation tickets produce real planes with real ids (preparation builds the
-# matte it refers to), so a caller assigning an unknown plane is refused rather
-# than silently rendering something it did not ask for.
-#
-# Written twice, deliberately noted: the Electron bridge holds its own copy in
-# ``apps/desktop/src/render-bridge.ts``, and nothing type-checks across that
-# boundary. Change both, or every repaint answers 422 with both test suites
-# still green (docs/implementation-decisions.md §20).
-STUB_WALL_PLANE_ID = "wall_plane_1"
-
 # True Colour mode shows the shade as the colour chip: the room's light colour
 # is not applied, so the tint factor is neutral (1, 1, 1).
 _NEUTRAL_TINT = np.ones(3, dtype=np.float32)
@@ -81,9 +74,8 @@ class RenderRequest(BaseModel):
 
     ``assignments`` maps a Wall Plane id to a Shade Code, which is the spec's
     shape and the reason an Accent Wall is expressible without changing this
-    surface. Today the only key the service accepts is
-    :data:`STUB_WALL_PLANE_ID`; the segmentation tickets widen the set of valid
-    ids without touching the body.
+    surface. The ids a photo has come from ``GET /sessions/{id}/planes``; ticket
+    #7 makes that list longer without changing the body.
     """
 
     assignments: dict[str, str]
@@ -111,7 +103,7 @@ async def create_render(
 
     prepared = await require_photo(request, session_id)
 
-    shade_code = _assigned_shade_code(body.assignments)
+    plane, shade_code = _assignment(prepared, body.assignments)
 
     shade = _catalogue(request).find_by_code(shade_code)
     if shade is None:
@@ -127,13 +119,16 @@ async def create_render(
         np.asarray([shade.lab.l, shade.lab.a, shade.lab.b], dtype=np.float64)
     )
 
-    base_colour = estimate_base_colour(prepared.linear)
+    # Measured inside this plane's matte, not across the photo: the Base Colour
+    # is the paint currently on *this wall*, and the frame is mostly other
+    # things (ticket #6).
+    base_colour = estimate_base_colour(prepared.linear, plane.alpha)
     light_tint = estimate_light_tint(prepared.linear) if body.mode == "realistic" else _NEUTRAL_TINT
 
     light_map = light_map_of(prepared.linear, base_colour)
     rendered = render(
         prepared.linear,
-        prepared.wall_alpha,
+        plane.alpha,
         light_map,
         target_shade,
         light_tint,
@@ -148,22 +143,33 @@ async def create_render(
     )
 
 
-def _assigned_shade_code(assignments: dict[str, str]) -> str:
-    """The Shade Code assigned to the stub Wall Plane.
+def _assignment(prepared: PreparedPhoto, assignments: dict[str, str]) -> tuple[WallPlane, str]:
+    """The Wall Plane to repaint and the Shade Code to repaint it in.
 
     An empty map, or one naming a plane this photo does not have, is a malformed request rather
     than a render of whatever was to hand — a Dealer who assigned a Shade to the wrong plane must
     be told, not shown a picture that answers a different question (conventions.md §5).
+
+    One plane per photo today, so one entry. The check is against the plane ids *this photo* has,
+    not against a constant, which is what makes it keep working when #7 finds three of them.
     """
 
-    if list(assignments) != [STUB_WALL_PLANE_ID]:
+    if len(assignments) != 1:
         raise ServiceError(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=MALFORMED_REQUEST,
             message=_MESSAGE_UNKNOWN_WALL_PLANE,
         )
 
-    return assignments[STUB_WALL_PLANE_ID]
+    ((plane_id, shade_code),) = assignments.items()
+    plane = prepared.plane(plane_id)
+    if plane is None:
+        raise ServiceError(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=MALFORMED_REQUEST,
+            message=_MESSAGE_UNKNOWN_WALL_PLANE,
+        )
+    return plane, shade_code
 
 
 def _encode_png(rendered: np.ndarray) -> bytes:
