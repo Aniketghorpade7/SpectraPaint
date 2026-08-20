@@ -216,3 +216,116 @@ second-bridge pattern decision #13 already established for the progress stream, 
 implementation-decisions.md #20. Worth knowing for any future endpoint returning bytes: the export
 ticket (#12) will meet the same wall, and the answer is another dedicated bridge, not widening the
 generic one.
+
+---
+
+## 8. The pinned SAM 2 checkpoint declares a video model, and transformers warns when loading it
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-20 · **Status:** resolved
+
+**What happened:** `facebook/sam2-hiera-tiny` at the pinned revision has a `config.json` declaring
+`model_type: sam2_video` and `architectures: [Sam2VideoModel]`. Loading it as the image model —
+which is what a room photo needs — makes transformers 5.15.1 print: *"You are using a model of type
+`sam2_video` to instantiate a model of type `sam2`… is otherwise not supported and can yield
+errors."*
+
+**Why it was hard:** the warning names the exact failure that would matter (silently
+randomly-initialised weights produce a model that runs and returns nonsense) without saying whether
+it is happening. Taking the warning at face value and reaching for the `sam2` package instead would
+have added hydra, a git-sourced dependency and a second copy of the model definitions; ignoring it
+would have risked shipping a refiner with uninitialised weights.
+
+**Where it stands:** resolved by measuring instead of guessing — loading with
+`output_loading_info=True` reports **0 missing keys and 0 unexpected keys**, so the image model is
+fully populated from the video checkpoint, and the warning is the documented "loading a subset"
+case. The export then verifies every graph numerically against that PyTorch model, which would catch
+the failure the warning describes even if a future revision changed the layout. Nothing needs the
+`sam2` package.
+
+---
+
+## 9. A synthetic room cannot tell you whether wall detection works
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-20 · **Status:** open
+
+**What happened:** with no room photographs in the repository, the pipeline was first exercised on a
+generated image — flat wall gradient, a floor band, a bright rectangle for a window, a dark strip
+for a shadow. SegFormer labelled 70.7% of it wall and only 0.4% as any exclusion class: it did not
+read the painted-on rectangle as a window or the flat band as a floor. The refiner's raw mask came
+back mushy on that input, with a maximum of 0.848 and a mean of 0.512, and the boundary band
+consequently covered 59% of the frame instead of a thin ring.
+
+**Why it was hard:** the numbers look like pipeline faults and are mostly the input's fault. A
+network trained on photographs has no reason to recognise a rectangle of constant pixels as glass,
+and SAM 2 has nothing to latch onto where there is no texture. The trap is that a synthetic scene is
+*good enough* to make the plumbing look tested — every shape, dtype and status code is right — while
+saying nothing about the two acceptance criteria that are about accuracy. It did find two real bugs
+(decision 26), so it was not wasted; it simply cannot answer the question it appears to answer.
+
+**Where it stands:** open, and blocked on real photographs. `data/fixtures/rooms/README.md` says
+what is needed — three rooms, hand-labelled, one strongly shadowed, one occluded, one with a window
+— and `tests/api/test_walls.py` will assert against them the moment they land, skipping with a
+reason until then. Until that happens, the accuracy of this pipeline on real rooms is **unverified**,
+and the thresholds in that file are guesses chosen to catch regressions rather than measurements.
+The `MergeShapeInfo` warning ONNX Runtime prints when loading the encoder is benign and unrelated —
+parity against PyTorch passes — but it is worth knowing it is not a symptom of this.
+
+---
+
+## 10. PyTorch ships JavaScript, and eslint found it
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-20 · **Status:** resolved
+
+**What happened:** after `uv sync --group export` installed torch, `npm run check` failed with 84
+errors — `'document' is not defined`, `no-cond-assign`, unused variables — all inside
+`services/inference/.venv/lib/python3.12/site-packages/torch/utils/model_dump/code.js`. PyTorch
+bundles a JavaScript viewer for model dumps, and eslint's ignore list covered `dist`, `out` and
+`node_modules` but not a Python virtualenv.
+
+**Why it was hard:** the failure is silent in CI and loud locally, which is the wrong way round. The
+fast lane runs `npm run check` *before* `uv sync`, so the virtualenv does not exist yet and the lane
+stays green; a contributor who has run the export sees a wall of errors in somebody else's minified
+code, none of it theirs, none of it explained by their own diff.
+
+**Where it stands:** resolved — `**/.venv/**` is on eslint's ignore list, with a comment saying why,
+because the next person to add a Python dependency that ships web assets should not have to work it
+out again. `.prettierignore` already excluded `services`, which is why formatting never complained.
+
+---
+
+## 11. A CSS mask on a greyscale PNG fails open, and brightened the whole room photo
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-20 · **Status:** resolved
+
+**What happened:** with the wall overlay shown, the *entire* Room Photo brightened — sofa, floor and
+furniture along with the wall — rather than only the detected wall. Reported from a screenshot of
+the running app, not caught by any test.
+
+**Why it was hard:** the overlay is a white wash masked by the Alpha Matte, and the matte is served
+as an 8-bit greyscale PNG — coverage in the grey level, and **no alpha channel at all**. CSS
+`mask-mode` defaults to `match-source`, which for an image means *alpha*. The alpha of a
+channel-less PNG is opaque everywhere, so the mask was a no-op and the wash covered its whole
+rectangle.
+
+The direction of the failure is what made it slip through: the mask **fails open**. Nothing errors,
+no image fails to load, the console is clean, and the overlay simply stops meaning anything while
+still looking deliberate. On a photo whose wall is most of the frame it reads as "the overlay is a
+bit strong" rather than "the mask is not applied".
+
+Two further wrong turns worth recording, because both cost time. A first attempt to verify it inside
+Electron's own offscreen renderer returned a 1×1 screenshot. And in a headless harness the mask was
+loaded from a `file://` URL, which does not load — the element then vanished entirely, making the
+broken and fixed cases look identical and briefly suggesting the fix did nothing. Production hands
+the matte over as a `data:` URL, and reproducing that form is what made the comparison meaningful.
+
+**Where it stands:** resolved with `mask-mode: luminance`, measured rather than assumed — in
+headless Chromium at Electron 43's engine version, a half-covered test image brightened on both
+halves without the line and on only the covered half with it. `-webkit-mask-source-type: luminance`
+was measured in the same harness and had **no effect at all**, so it was removed along with
+`-webkit-mask-image`: a fallback that does not fall back is worse than none, because the comment
+beside it lies.
+
+Serving the matte as an `LA` PNG, with coverage duplicated into a real alpha channel, would make the
+CSS default correct and remove the dependence on one property. It was not done — one channel is the
+honest representation of a matte, and this application ships on one known engine — but it is the
+change to reach for if the overlay ever moves to a browser target.

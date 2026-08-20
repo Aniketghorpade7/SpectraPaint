@@ -4,31 +4,35 @@ A photo is prepared once, on upload, in the background. Preparation walks a list
 each stage runs, its plain-language message is recorded — "Reading your photo…", never "running
 inference" (docs/specs/v1-spectrapaint.md, "Progress messaging").
 
-Two properties of this module carry the acceptance criteria of ticket #4:
+Three properties of this module carry the acceptance criteria of tickets #4 and #6:
 
 * **The events are recorded, not just sent.** A client that opens the stream slightly after
   preparation began — or after it finished — replays the log and still sees sensible progress,
   instead of an empty or hanging stream.
 * **The stream terminates cleanly.** Every job ends with exactly one terminal event, ``done`` or
   ``failed``, after which the stream closes.
+* **Preparation begins when the photo loads, not when a render is requested.** Finding the walls is
+  part of *this* list, so it happens while the Dealer is still looking at the progress messages
+  rather than when a Shade is first tapped.
 
-Issue #3 adds the third property: **the render path reads what preparation produced.** The stage
-returns the ``PreparedPhoto`` — decode, downscale, linearise and the stub Wall Plane matte — and
-the job keeps it; ``POST /sessions/{id}/renders`` waits for preparation and renders from that
-photo, never from the upload bytes.
+Issue #3 added the fourth property: **the render path reads what preparation produced.** The last
+stage returns the ``PreparedPhoto`` — the photo, and the Wall Planes found in it — and the job keeps
+it; ``POST /sessions/{id}/renders`` waits for preparation and renders from that, never from the
+upload bytes.
 
 The job runs on a worker thread rather than an asyncio task. Two reasons:
 
-* The work here (Pillow decoding, numpy linearisation) is CPU-bound C code; on uvicorn's event
-  loop it would stall every other request. On its own thread it cannot.
+* The work here (Pillow decoding, numpy linearisation, ONNX inference) is CPU-bound C code; on
+  uvicorn's event loop it would stall every other request. On its own thread it cannot.
 * A thread lives independently of any request's event loop, so the job keeps progressing while
   stream readers come and go — and it is what makes the stream testable: TestClient does not run
   ``asyncio.create_task`` jobs scheduled during one request once that request returns, so an
   event-loop job would never progress under test (docs/technical-difficulties.md).
 
-The stage list is the seam where the model pipeline arrives: ticket #6 (detect walls) adds its
-stages here and the work runs in the same machinery — buffering, streaming and termination are
-unchanged. Nothing about this module names a model or a technique.
+Ticket #6 filled in the seam this module was built around: the stage list now runs the real model
+pipeline, and buffering, streaming and termination are unchanged, exactly as §12 of
+docs/implementation-decisions.md predicted. Nothing here still names a model or a technique — the
+stages call :mod:`spectrapaint.segmentation`, which owns all of that.
 """
 
 from __future__ import annotations
@@ -38,12 +42,21 @@ import io
 import logging
 import threading
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from PIL import Image
 
 from spectrapaint.render.luts import linearise_u8
+from spectrapaint.runtime.graphs import load as load_graphs
+from spectrapaint.runtime.location import ModelsMissing
+from spectrapaint.segmentation.semantic import SemanticRegions
+from spectrapaint.segmentation.walls import (
+    NoWallFound,
+    WallPlane,
+    planes_from,
+    wall_regions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,20 +64,14 @@ logger = logging.getLogger(__name__)
 # work starting; the terminal within one poll of work ending. Localhost, one reader: imperceptible.
 POLL_INTERVAL_SECONDS = 0.05
 
-# Shown as-is when preparation fails — plain language, and an action the Dealer can take.
+# Shown as-is when preparation fails for a reason with no better message of its own — a file that
+# cannot be decoded at all.
 MESSAGE_PREPARATION_FAILED = "That photo could not be read. Please try another photo."
 
 # The prepared photo is capped on its long side so the in-memory working image stays at preview
 # scale — docs/specs/v1-spectrapaint.md, "Performance": full-resolution renders are a later ticket;
 # the ~1 MP preview is the per-tap path while browsing. 1280 px at 16:9 is ~0.9 MP.
 MAX_PREPARED_DIMENSION = 1280
-
-# Stub Wall Plane geometry, decided in docs/implementation-decisions.md §18: a centred rectangle
-# covering 60% × 55% of the photo, with a soft edge band. The segmentation tickets replace the
-# rectangle; the shape of the alpha map (HxWx1 float [0, 1]) is the contract that stays.
-_STUB_WIDTH_FRACTION = 0.60
-_STUB_HEIGHT_FRACTION = 0.55
-_STUB_SOFT_BAND_FRACTION = 0.03
 
 
 @dataclass(frozen=True)
@@ -74,7 +81,7 @@ class Stage:
     ``run`` may return a ``PreparedPhoto``, which the job keeps for the render path to read
     (issue #3's encode-once rule). A stage that returns anything else — including ``None``, which
     most stages do — leaves the kept photo alone. That rule, rather than "the last value wins",
-    is what lets tickets #6–#8 append stages without silently emptying the render path.
+    is what lets tickets #7–#8 append stages without silently emptying the render path.
     """
 
     message: str
@@ -82,11 +89,44 @@ class Stage:
 
 
 @dataclass(frozen=True)
+class DecodedPhoto:
+    """The photo itself, in the two forms the rest of preparation needs.
+
+    Both, rather than one and a conversion: the models and the edge-aware refinement want ordinary
+    8-bit sRGB, because that is what they were trained on and what "where a human sees an edge"
+    means; the render engine wants linear light, because that is where the light maths is valid
+    (spec, "Colour management"). Converting between them on demand would mean doing it repeatedly,
+    per photo, for no gain.
+    """
+
+    srgb: np.ndarray  # HxWx3 uint8, at preview scale
+    linear: np.ndarray  # HxWx3 float32, linear RGB, same size
+
+
+@dataclass(frozen=True)
 class PreparedPhoto:
     """The once-per-photo work the render path consumes (issue #3's encode-once rule)."""
 
     linear: np.ndarray  # HxWx3 float32, linear RGB at preview scale
-    wall_alpha: np.ndarray  # HxWx1 float32, the stub Wall Plane matte in [0, 1]
+    srgb: np.ndarray  # HxWx3 uint8, the same photo as the Dealer sees it
+    planes: tuple[WallPlane, ...]  # every Wall Plane found, in a stable order
+
+    def plane(self, plane_id: str) -> WallPlane | None:
+        """The Wall Plane with this id, or None if the photo has no such plane."""
+        for plane in self.planes:
+            if plane.plane_id == plane_id:
+                return plane
+        return None
+
+    @property
+    def wall_alpha(self) -> np.ndarray:
+        """The first Wall Plane's matte.
+
+        One plane exists today. Kept as a name because the render path and its tests were written
+        against it; ticket #7 renders per plane and this property goes away with the assumption it
+        encodes.
+        """
+        return self.planes[0].alpha
 
 
 class PreparationJob:
@@ -120,12 +160,24 @@ class PreparationJob:
                 self._events.append({"phase": "progress", "message": stage.message})
             try:
                 produced = stage.run()
-            except Exception:
+            except Exception as failure:
                 # A photo that cannot be prepared fails this job, not the stream: the reader hears
                 # one terminal 'failed' event and the stream closes, like a 'done' would.
+                #
+                # The message is the failure's own where it has one — "no wall could be found" is a
+                # different thing for the Dealer to do about it than "that photo could not be read",
+                # and collapsing both into one message would hide which happened (conventions.md
+                # §5). Anything without a message of its own is a fault we did not anticipate, and
+                # gets the generic one rather than a stack trace.
                 logger.warning("Photo preparation failed", exc_info=True)
+                message = getattr(failure, "message", None)
                 with self._lock:
-                    self._terminal = {"phase": "failed", "message": MESSAGE_PREPARATION_FAILED}
+                    self._terminal = {
+                        "phase": "failed",
+                        "message": message
+                        if isinstance(message, str)
+                        else MESSAGE_PREPARATION_FAILED,
+                    }
                 return
 
             # Kept by type, never by position: a later stage returning None must not discard the
@@ -177,26 +229,78 @@ class PreparationJob:
         return result if isinstance(result, PreparedPhoto) else None
 
 
+@dataclass
+class _Workspace:
+    """What one photo's stages hand to each other.
+
+    A stage's ``run`` takes no arguments by design — the job calls them in order and keeps only the
+    ``PreparedPhoto`` — so the intermediate results of a multi-stage pipeline need somewhere to
+    live. This is that somewhere, private to one call of :func:`build_preparation_stages`, which is
+    why the stages can be plain closures and the job needs to know nothing about the pipeline's
+    shape.
+    """
+
+    decoded: DecodedPhoto | None = None
+    regions: SemanticRegions | None = None
+    planes: tuple[WallPlane, ...] = field(default_factory=tuple)
+
+    def photo(self) -> DecodedPhoto:
+        """The decoded photo, or a plain failure if the stage that decodes it did not run.
+
+        A `RuntimeError` rather than an assertion: assertions vanish under `-O`, and a stage order
+        this code depends on should not be checked only in some builds.
+        """
+        if self.decoded is None:
+            raise RuntimeError("the decode stage did not run before the stages that need it")
+        return self.decoded
+
+
 def build_preparation_stages(contents: bytes) -> list[Stage]:
     """The photo-preparation steps, in order.
 
-    One stage: decode the photo's pixels and build the prepared photo the render path consumes.
+    Four stages, and the split is by what the Dealer is waiting for rather than by what the code
+    does: decoding is quick, the semantic pass and the refiner are the seconds-long ones, and the
+    last is short. A single "Preparing your photo…" covering all four would leave the longest wait
+    in the Consultation with no sign of progress.
+
     The upload's structural check (``verify()``) does not decode — a JPEG with its end-of-image
-    marker stripped passes it — so this is the first place a photo that only *looks* valid is
-    actually read, and it fails preparation cleanly rather than somewhere downstream
-    (docs/design-decisions.md §13, "Start on photo load"). Later tickets add their stages to this
-    list.
+    marker stripped passes it — so the first stage is the first place a photo that only *looks*
+    valid is actually read, and it fails preparation cleanly rather than somewhere downstream
+    (docs/design-decisions.md §13, "Start on photo load").
     """
 
-    return [Stage(message="Reading your photo…", run=lambda: prepare_photo(contents))]
+    workspace = _Workspace()
+
+    def decode() -> None:
+        workspace.decoded = decode_photo(contents)
+
+    def look_at_the_room() -> None:
+        workspace.regions = wall_regions(load_graphs(), workspace.photo().srgb)
+
+    def find_the_edges() -> None:
+        photo = workspace.photo()
+        if workspace.regions is None:
+            raise RuntimeError("the semantic stage did not run before the refinement stage")
+        workspace.planes = tuple(planes_from(load_graphs(), photo.srgb, workspace.regions))
+
+    def prepared() -> PreparedPhoto:
+        photo = workspace.photo()
+        return PreparedPhoto(linear=photo.linear, srgb=photo.srgb, planes=workspace.planes)
+
+    return [
+        Stage(message="Reading your photo…", run=decode),
+        Stage(message="Looking at the room…", run=look_at_the_room),
+        Stage(message="Finding the edges of the walls…", run=find_the_edges),
+        Stage(message="Getting the walls ready…", run=prepared),
+    ]
 
 
-def prepare_photo(contents: bytes) -> PreparedPhoto:
-    """Decode, downscale to preview scale, linearise, and build the stub Wall Plane matte.
+def decode_photo(contents: bytes) -> DecodedPhoto:
+    """Decode, downscale to preview scale, and linearise.
 
-    This is the once-per-photo preparation; the render path never repeats it. Downscaling happens
-    before linearisation so the LUT input is the actual working pixel data, exactly as the
-    preview-sized render will consume it.
+    This is the once-per-photo work the render path never repeats. Downscaling happens before
+    linearisation so the LUT input is the actual working pixel data, exactly as the preview-sized
+    render will consume it.
     """
 
     with Image.open(io.BytesIO(contents)) as image:
@@ -207,34 +311,20 @@ def prepare_photo(contents: bytes) -> PreparedPhoto:
                 (max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale))),
                 resample=Image.Resampling.LANCZOS,
             )
-        photo_u8 = np.asarray(rgb, dtype=np.uint8)
+        photo_u8 = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
 
     linear = np.ascontiguousarray(linearise_u8(photo_u8), dtype=np.float32)
-    return PreparedPhoto(linear=linear, wall_alpha=_stub_wall_alpha(linear.shape[:2]))
+    return DecodedPhoto(srgb=photo_u8, linear=linear)
 
 
-def _stub_wall_alpha(shape: tuple[int, int]) -> np.ndarray:
-    """The stub Wall Plane matte: a centred, soft-edged rectangle in [0, 1].
-
-    Replaced by the real segmentation mattes; its shape is the contract that stays. Edge band is
-    a linear ramp so the alpha composite stays clean in linear space (issue #3 criterion 2).
-    """
-
-    height, width = shape
-    rect_w = max(1, round(width * _STUB_WIDTH_FRACTION))
-    rect_h = max(1, round(height * _STUB_HEIGHT_FRACTION))
-    band = max(1, round(min(width, height) * _STUB_SOFT_BAND_FRACTION))
-
-    left = (width - rect_w) // 2
-    right = left + rect_w
-    top = (height - rect_h) // 2
-    bottom = top + rect_h
-
-    x = np.arange(width, dtype=np.float32)
-    y = np.arange(height, dtype=np.float32)
-
-    # Distance to the rectangle edge, in pixels, positive inside. Then alpha ramps from 0 at
-    # ``edge - band`` to 1 at ``edge``, and is fully 1 in the interior.
-    from_left = np.minimum(np.minimum(x[None, :] - left, right - x[None, :]), band) / band
-    from_top = np.minimum(np.minimum(y[:, None] - top, bottom - y[:, None]), band) / band
-    return np.clip(np.minimum(from_left, from_top), 0.0, 1.0)[..., None].astype(np.float32)
+__all__ = [
+    "MESSAGE_PREPARATION_FAILED",
+    "ModelsMissing",
+    "NoWallFound",
+    "DecodedPhoto",
+    "PreparationJob",
+    "PreparedPhoto",
+    "Stage",
+    "build_preparation_stages",
+    "decode_photo",
+]

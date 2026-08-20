@@ -3,6 +3,11 @@
 Run as ``python -m spectrapaint``. Electron spawns this as a child process, reads the handshake
 line from stdout to learn the port, and supervises the process for the rest of the launch.
 
+Boot order is deliberate: the secret, then the Catalogue, then the model files, and only then the
+port. Everything that can be known to be broken is checked before Electron is told the service is
+up, so a setup fault is a boot failure the Dealer is told about rather than a Consultation that
+falls over with a Customer at the counter.
+
 Two things are deliberately not configurable:
 
 * **The host.** Always loopback. A flag would eventually get set to 0.0.0.0 by someone debugging,
@@ -21,6 +26,8 @@ import uvicorn
 
 from spectrapaint.api.app import create_app
 from spectrapaint.catalogue import CatalogueFileInvalid, CatalogueFileMissing, open_catalogue
+from spectrapaint.runtime.graphs import warm_in_background
+from spectrapaint.runtime.location import MODELS_DIR_ENV_VAR, ModelsMissing, resolve_models_dir
 
 HOST = "127.0.0.1"
 SECRET_ENV_VAR = "SPECTRAPAINT_SECRET"
@@ -31,6 +38,7 @@ HANDSHAKE_PREFIX = "SPECTRAPAINT_HANDSHAKE "
 
 EXIT_NO_SECRET = 2
 EXIT_NO_CATALOGUE = 3
+EXIT_NO_MODELS = 4
 
 
 def bind_listening_socket() -> socket.socket:
@@ -96,13 +104,44 @@ def load_catalogue():
         raise SystemExit(EXIT_NO_CATALOGUE) from failure
 
 
+def check_models() -> None:
+    """Refuse to boot a packaged install whose model files are missing or incomplete.
+
+    The same argument the Catalogue makes: a service that completes the handshake and then cannot
+    find a wall has turned a setup problem into a Consultation problem, and the spec is explicit
+    that model failures surface at boot rather than mid-consultation.
+
+    But absence is only a fault when someone said where the files were. Electron sets
+    ``SPECTRAPAINT_MODELS_DIR`` in a packaged app, so a missing file there is a broken install and
+    the service stops. In a source checkout nobody has set it and the export may simply not have
+    been run yet — the rest of the service is still worth running, and the Dealer-facing failure
+    arrives with the first photo that needs a wall, saying so in plain language.
+    """
+
+    packaged = bool(os.environ.get(MODELS_DIR_ENV_VAR, "").strip())
+    try:
+        resolve_models_dir()
+    except ModelsMissing as failure:
+        if packaged:
+            print(f"{failure.message} ({failure.detail})", file=sys.stderr, flush=True)
+            raise SystemExit(EXIT_NO_MODELS) from failure
+        print(f"note: {failure.detail}", file=sys.stderr, flush=True)
+
+
 def main() -> None:
     secret = read_secret()
     catalogue = load_catalogue()
+    check_models()
     listener = bind_listening_socket()
     port = listener.getsockname()[1]
 
     announce(handshake_line(port, os.getpid()))
+
+    # After the handshake, deliberately: Electron has the port and is showing its boot screen, and
+    # the models load in that window instead of inside the thirty-second per-photo budget
+    # (docs/specs/v1-spectrapaint.md, "Performance"). A daemon thread, so a slow load delays the
+    # first photo rather than every request.
+    warm_in_background()
 
     config = uvicorn.Config(
         create_app(secret, catalogue),

@@ -77,3 +77,40 @@
   max-height: 100%;
   object-fit: contain;
 }
+
+/* The detected wall, washed over the photo. White, not a colour: ui-guidelines.md forbids anything
+   saturated near the render, and a bright mask — the usual way to show a segmentation — is exactly
+   what would shift how the wall's colour reads. The Alpha Matte is applied as a mask, so the wash
+   follows the soft edge instead of a hard outline, which is also the honest picture: the boundary
+   really is soft. */
+.consultation__wall-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 30%);
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+
+  /* `mask-mode: luminance` is load-bearing, and its absence was a bug that reached a screenshot.
+     The matte is served as an 8-bit greyscale PNG — coverage lives in the grey level and the image
+     has no alpha channel at all — while `mask-mode` defaults to `match-source`, which for an image
+     means *alpha*. The alpha of a channel-less PNG is opaque everywhere, so the mask became a no-op
+     and this wash covered the whole room photo, brightening the sofa and the floor along with the
+     wall. It fails *open*, which is the worst direction for a mask to fail in: nothing errors, the
+     overlay simply stops meaning anything.
+
+     Measured in headless Chromium at Electron 43's engine version: with the mask alone, both halves
+     of a half-covered test image brightened equally; with this line, only the covered half did.
+     The `-webkit-mask-source-type` spelling was measured too and had no effect whatsoever, so it is
+     deliberately not here — a fallback that does not fall back is worse than none, because the
+     comment next to it lies. */
+  mask-mode: luminance;
+  pointer-events: none;
+}
+
+/* A note, not an error: a photo whose walls could not be outlined is still repaintable. */
+.consultation__wall-note {
+  margin: 0;
+  color: var(--grey-5);
+  font-size: 0.875rem;
+  text-align: center;
+}

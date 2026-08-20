@@ -1,4 +1,4 @@
-# Every model weight this project fetches, pinned and licensed.
+# Every model file this project fetches, pinned and licensed.
 #
 # This file is the single source of truth for three things that must not drift apart:
 #
@@ -10,42 +10,54 @@
 #
 # Fields:
 #   revision      immutable upstream commit. Never a branch: "latest" is not a version.
-#   sha256        verified on every download. A weight that fails this is not the weight we
-#                 reviewed the licence of.
 #   licence       SPDX identifier where one exists, otherwise the upstream licence's own name.
-#   shipped       true if this weight goes out to a Dealer's machine. Drives the licence gate:
-#                 development-only weights are held to a looser bar than shipped ones.
-#   redistribute  whether we may re-host the file ourselves. False here is why the slow lane
+#   shipped       true if this model goes out to a Dealer's machine. Drives the licence gate:
+#                 development-only models are held to a looser bar than shipped ones.
+#   redistribute  whether we may re-host the files ourselves. False here is why the slow lane
 #                 fetches from upstream into a cache rather than mirroring into a Release.
+#   files         every file fetched for this model, each with the sha256 verified on every
+#                 download. A file that fails this is not the file we reviewed the licence of.
+#
+# One model, several files, one licence decision (ticket #6). A checkpoint is not only its
+# weights: the export in tools/export_onnx.py reads `config.json` for the label map — which is
+# where the ADE20K class indices come from, rather than hardcoded from memory — and
+# `preprocessor_config.json` for the resize and normalisation constants it bakes into the ONNX
+# sidecar. Pinning those two alongside the weights keeps all three at one reviewed revision;
+# listing them as separate [[model]] entries would have duplicated the licence fields and made
+# the gate report configuration files as though they were weights.
 
 [[model]]
 id = "semantic-segformer-b0-ade20k"
 purpose = "Semantic pass — proposes the wall region that SAM 2 then refines (design-decisions.md §5)"
 repo = "nvidia/segformer-b0-finetuned-ade-512-512"
 revision = "489d5cd81a0b59fab9b7ea758d3548ebe99677da"
-file = "model.safetensors"
-sha256 = "6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9"
-size_bytes = 15036944
 licence = "NVIDIA Source Code License-NC"
 licence_url = "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512"
 shipped = false
 redistribute = false
+files = [
+  { name = "model.safetensors", sha256 = "6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9", size_bytes = 15036944 },
+  { name = "config.json", sha256 = "209caa9091e4632f7c8883c11170cd08ad29af68b23c09590aa4a5befb1a2a7f", size_bytes = 6884 },
+  { name = "preprocessor_config.json", sha256 = "8039d1d210abaa7117ad78e58cdfd6141a2ec72c03dae891b3cd76737e422c6c", size_bytes = 271 },
+]
 # Non-commercial research licence. Development and demonstration only, and it must be replaced
 # before commercial deployment — that is ticket #8, handed off in
 # docs/handoff/custom-wall-segmentation-model.md. Do not distil from it, do not use it to
-# auto-label training images, and do not mirror the file anywhere we control.
+# auto-label training images, and do not mirror the files anywhere we control.
 
 [[model]]
 id = "refiner-sam2-hiera-tiny"
 purpose = "Boundary refinement — turns the proposed wall region into a crisp alpha matte (§5)"
 repo = "facebook/sam2-hiera-tiny"
 revision = "7c218beaf0bb87874785f32b582f640134fc1c09"
-file = "model.safetensors"
-sha256 = "1449035ba6ba2ed524c646da989e5cb3a9b93b97f1c1b2d474e598c3b748d99f"
-size_bytes = 155841672
 licence = "Apache-2.0"
 licence_url = "https://huggingface.co/facebook/sam2-hiera-tiny"
 shipped = true
 redistribute = true
+files = [
+  { name = "model.safetensors", sha256 = "1449035ba6ba2ed524c646da989e5cb3a9b93b97f1c1b2d474e598c3b748d99f", size_bytes = 155841672 },
+  { name = "config.json", sha256 = "3239c7ecf212b1a9d9f98310c8993612335c5596a12c8cfba25e512e9dc5965b", size_bytes = 5697 },
+  { name = "preprocessor_config.json", sha256 = "6ebf229ee259368ce4a8d4f2fe893a72b053023710853e257253939e601f583d", size_bytes = 683 },
+]
 # Apache-2.0, so this one is fine to ship and fine to mirror. It is still fetched from upstream
 # for consistency with the SegFormer path.

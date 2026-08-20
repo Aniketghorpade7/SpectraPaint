@@ -153,8 +153,9 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
     """Encode-once is enforced structurally, by omission.
 
     The documented contract (docs/specs/v1-spectrapaint.md) has no endpoint accepting an image
-    alongside a Shade, and this test pins the whole surface so one cannot appear silently. Adding
-    the planes endpoints later means changing this list deliberately.
+    alongside a Shade, and this test pins the whole surface so one cannot appear silently. The
+    planes endpoints were added deliberately, by ticket #6, which is what changing this list is
+    for.
     """
 
     expected = {
@@ -164,6 +165,10 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/sessions/{session_id}/events", frozenset({"GET"})),
         # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
+        # Issue #6. What walls the photo has, and the matte for one of them. Both GET: neither
+        # takes an image, so encode-once is still structural.
+        ("/sessions/{session_id}/planes", frozenset({"GET"})),
+        ("/sessions/{session_id}/planes/{plane_id}/matte", frozenset({"GET"})),
         # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
         # there is nothing here that writes, and nothing that takes an image.
         ("/catalogue", frozenset({"GET"})),

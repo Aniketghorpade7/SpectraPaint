@@ -678,3 +678,225 @@ selection, neither of which touches `ConsultationSurface`. The render state rese
 consultation (discard or start), and a reply arriving after a discard is dropped by the same
 shade-code guard, so the reducer is the only protection the async boundary needs.
 
+
+---
+
+## 22. A model is a set of files, and the licence gate judges by what ships
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** a `[[model]]` entry in `models/manifest.toml` pins a **list of files** rather than one,
+and the Actions cache key folds in every file's hash. PyTorch and transformers live in a new
+`export` dependency group, ONNX Runtime in the service's real dependencies. `tools/licence_gate.py`
+now derives the **shipped** Python set from the service's own `pyproject.toml` — `dependencies`
+ship, dependency groups do not — and holds shipped packages to the commercial bar while holding
+build-time tooling to the looser `development_only` one. If it cannot work out what ships, it treats
+everything as shipped.
+
+**Why:** the export needs the checkpoint's `config.json` for the ADE20K label map and its
+`preprocessor_config.json` for the normalisation constants. Reading those instead of transcribing
+them is what stops the five class indices being folklore in our source — but only if they are pinned
+at the same reviewed revision as the weights, which the single-`file` schema could not express.
+Listing them as separate `[[model]]` entries was the alternative and was rejected: it duplicates the
+licence fields and makes the gate report configuration files as though they were weights.
+
+Adding torch then failed the gate, and the failure was correct in form and wrong in substance: the
+gate inspects whichever environment it runs in, so it judged a converter that never leaves a
+developer's machine by the standard for a binary shipped to dealerships. It already drew exactly
+that distinction for weights via `shipped`. Two of the four failures turned out not to be policy at
+all — protobuf writes BSD-3-Clause as "3-Clause BSD License", transformers writes Apache-2.0 as
+"Apache 2.0 License" — and those are now spellings the normaliser knows, which mattered because
+protobuf arrives through onnxruntime and genuinely ships.
+
+**Consequence:** `python tools/fetch_models.py` fetches six files, not two. Anything added to
+`dependencies` is held to the shipping bar automatically, so the way to make a licence question go
+away is still to move the dependency, not to widen the policy. BSL-1.0 and CNRI-Python are listed
+`development_only`; if either ever needs to ship, that is a deliberate second decision.
+
+---
+
+## 23. SAM 2 is exported as two graphs, and every export is checked against PyTorch
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** `tools/export_onnx.py` writes three graphs — `semantic.onnx`, `sam2-encoder.onnx`,
+`sam2-decoder.onnx` — with the opset pinned at 18, a fixed 32-slot prompt input padded with SAM's
+`-1` label, and a `runtime.json` sidecar per model carrying the input size, normalisation constants
+and (for the semantic model) the class indices. Every graph is run against its PyTorch original on a
+seeded pseudo-photo and must match within a tolerance.
+
+**Why:** splitting SAM 2 at the encoder/decoder seam follows the cost. The encode depends only on
+the photo and is the expensive half — measured at 2.0 s against 120 ms for a decode — so a design
+that re-encoded per prompt set would have made trying prompts unaffordable, and #7 has to decode
+once per Wall Plane against the same features. A fixed prompt width was chosen over a dynamic axis
+because a static graph is faster in ONNX Runtime and SAM's padding convention already expresses "a
+variable number of prompts" inside a fixed slot.
+
+The parity check earns its place twice over. It is the only thing standing between us and an export
+that runs while computing something else, which would surface as inexplicably poor mattes rather
+than as an error. And the *input* to that check matters: the first version fed zeros, which takes
+the same path through every branch and can make a broken export look faithful. It now feeds a seeded
+pseudo-photo, and the decoder's two trace prompts are off-centre with one negative, so a transposed
+coordinate or an ignored second point cannot pass.
+
+**Consequence:** the shipped runtime needs `onnxruntime` and the sidecars, never transformers. The
+slow lane runs the export only on a cache miss and includes the exporter's hash in the cache key,
+because the graphs live in the same directory as the weights and a key tracking only the weights
+would restore graphs built by an older exporter.
+
+---
+
+## 24. Model files are checked at boot when packaged, warmed after the handshake, on one CPU path
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** `service.main()` verifies the model files before announcing the port, but a missing set
+is fatal **only when `SPECTRAPAINT_MODELS_DIR` is set**. Warming then runs on a daemon thread after
+the handshake. Sessions are loaded once per process behind a lock, with `CPUExecutionProvider` named
+explicitly.
+
+**Why:** the spec is clear that model failures should surface at boot rather than mid-consultation,
+and the Catalogue already sets that pattern. Applied literally it would have broken the fast lane:
+`test_launch` spawns the real service on both operating systems and there are no weights there,
+so every launch test would have had to move to the slow lane — losing exactly the Windows
+process-teardown coverage that matrix exists for (§9c). The environment variable is the honest
+discriminator: Electron sets it in a packaged app, so absence there is a broken install and the
+service stops, while a source checkout that has not run the export yet still boots and fails
+per-photo in plain language.
+
+Warming after the handshake rather than before it means the load overlaps the boot screen Electron
+is already showing, instead of delaying the port announcement — and the thirty-second per-photo
+budget never contains a model load. Loading a session is not the whole cost: ONNX Runtime picks
+kernels on the first run, so warming runs one throwaway inference through each graph.
+
+**Consequence:** the tier table design-decisions.md §3 leaves open is still open, and this ticket
+does not close it. One CPU path is implemented, which is what "assume a CPU-only shipping build"
+asks for; the measurements now in `spikes/latency/RESULTS.md` are the input the tier table needs.
+
+---
+
+## 25. SAM 2 is constrained by eroded positives and exclusion-only negatives, sampled on a grid
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** positive prompts are sampled from the semantic wall region **after eroding it** by 1.5%
+of the photo's shorter side; negatives come **only** from the four named exclusion classes, never
+from "everywhere that is not wall"; and both are sampled on a deterministic grid, 20 positive and up
+to 12 negative.
+
+**Why:** each rule is a failure avoided. The semantic boundary is a quarter-resolution staircase
+upsampled, so a point sampled near it may be sitting on ceiling — and one positive point in the
+wrong region makes SAM 2 grow the mask into that region, which nothing downstream can undo. Marking
+everything non-wall as negative would include the unlabelled furniture that ADE20K has no class
+for, teaching SAM 2 that the wall stops at the sofa's top edge rather than continuing behind it;
+leaving it unclaimed says the truthful thing, which is that we do not know. And a deterministic grid
+rather than random sampling means the same photo yields the same matte, without which the slow
+lane's accuracy tests could not exist at all.
+
+**Consequence:** `MAX_PROMPT_POINTS` in the exporter and the `_POSITIVE_SHARE` split here are the
+two numbers to revisit if mattes come back poor; both are named constants for that reason. #7 will
+prompt per plane against the same encoder output.
+
+---
+
+## 26. Alpha means coverage, and softness is confined to a spatial band
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** the finished matte has three zones. Where the semantic pass is confident (≥ 0.75) the
+pixel is wall, restored to alpha **1.0**; where it named an exclusion the pixel is **0.0**; and only
+a ring around the matte's own 0.5 crossing — found by dilating and eroding, not by inspecting alpha
+values — carries a fractional value, produced by a guided filter using the photo's luminance as the
+guide.
+
+**Why:** two bugs found by running the pipeline rather than by reading it, both worth recording
+because both looked reasonable in code.
+
+The first: the shadow restore originally set alpha to the model's *confidence*. Confidence and
+coverage are different quantities — a pixel the model is 90% sure about is all wall, not
+nine-tenths of a wall — and spending one as the other left a matte whose maximum was 0.904, so the
+render could never fully paint the wall it had found.
+
+The second: the boundary band was originally "pixels whose alpha looks intermediate". For a mask the
+refiner is unsure about everywhere, that selects the whole photo, hands the guided filter the
+interior, and lets the photo's texture modulate coverage — painting faint shadows of the furniture
+into the alpha itself. A spatial ring cannot do that. Confining softness to where a wall meets a
+non-wall is also what the spec's corner rule asks for, and it is what makes the matte usable when
+the refiner returns a mask it is unsure of everywhere.
+
+**Consequence:** the interior is exactly 1.0, which is what lets the Base Colour estimate look for
+"fully-opaque pixels" and mean it. #7 inherits the rule that a wall-to-wall corner is crisp: two
+planes meeting must not both put a soft edge on the same pixels, or the composite runs twice and
+leaves a dark seam.
+
+---
+
+## 27. The Base Colour is measured inside the matte, near the 90th luminance percentile
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** `estimate_base_colour` now **requires** a matte, and implements the spec's derivation:
+fully-opaque pixels eroded inward by 1% of the shorter side, ranked by luminance, taken from an
+85th–90th percentile band, averaged as whole RGB pixels. It falls back to un-eroded opaque pixels,
+then to the most-covered pixels, when a matte has no interior.
+
+**Why:** this replaces the interior-median stub §17 recorded, and the alternative — leaving `alpha`
+optional so old callers kept working — was rejected: a caller with no matte does not have a wall,
+and a quiet fallback to a whole-photo statistic would render the sofa's colour while looking exactly
+like a working render. The percentile band rather than a single percentile is because a single one
+selects a handful of pixels on a small matte, and a mean of five pixels is noise. The fallbacks exist
+because a wall visible only in slivers between furniture is a poor wall, not a reason to refuse a
+render the Dealer asked for (conventions.md §5).
+
+**Consequence:** three tests that pinned the interior median were replaced by six that pin the
+derivation — measured inside the matte, ignoring the matte's own edge, the wall in full light rather
+than its average, and the cast preserved. Per-*group* Base Colour, for planes sharing existing
+paint, is #7's; with one plane the distinction cannot yet be expressed.
+
+---
+
+## 28. The planes endpoint lists geometry; the matte is a second route, as a PNG
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** `GET /sessions/{id}/planes` returns JSON — plane ids, coverage, bounding box, photo
+dimensions — and `GET /sessions/{id}/planes/{plane_id}/matte` returns the Alpha Matte as an 8-bit
+greyscale PNG. A fourth Electron bridge (`walls-bridge.ts`) fetches both and hands the renderer a
+data URL.
+
+**Why:** the spec's contract lists `/planes` and says nothing about how a matte crosses the wire,
+so this was ours to settle. Inlining it as base64 would add roughly a third of a megabyte per plane,
+make the cheap question ("what planes are there?") pay for the expensive answer, and force the UI to
+unpack a string before it could draw. Greyscale rather than RGBA because the matte *is* one channel
+and what colour to draw it in is the UI's decision (ui-guidelines.md). The bridge exists for the
+same reason §20's did: the generic request bridge reads a JSON body, so a PNG reaches it as
+`body: null`.
+
+**Consequence:** renders now look a plane up by id against the planes *this photo has* rather than
+against a constant, so the check keeps working when #7 finds three. The id value is unchanged, so the
+copy in `render-bridge.ts` that §20 warns about still matches — but that duplication is still there
+and #7 should remove it by having the renderer name the plane.
+
+---
+
+## 29. The fast lane keeps the contract tests, with preparation injected
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-20
+
+**Decided:** the seam 1 tests that need a prepared photo supply their own preparation through
+`create_app(preparation_stages=...)`, with the centred-rectangle matte that used to be production's
+stub now living in `tests/api/conftest.py`. The real pipeline is exercised over the same contract by
+`tests/api/test_walls.py`, marked `models`, against hand-labelled photographs in
+`data/fixtures/rooms/` — and when those photographs are absent, those tests **skip with a reason**.
+
+**Why:** conventions.md §6 says not to mock the model adapters, and this does not: nothing stands in
+for the pipeline's interface, so its absence cannot go unnoticed. What is replaced is the *input* —
+"assume a photo was prepared and this is its matte" — through the injection point `preparation.py`
+already documented and #4's stream tests already used. The alternative was to mark every
+upload-and-render test `models`, which would have moved the render contract's coverage out of the
+fast lane and off Windows entirely. Skipping rather than passing when fixtures are absent is the
+other half: a green lane that checked nothing is worse than a red one, because it is believed.
+
+**Consequence:** the accuracy thresholds (IoU ≥ 0.60, shadowed-wall recall ≥ 0.80, non-wall coverage
+≤ 0.20) are regression floors, not the measured evaluation §10 requires — and they are unverified
+against real rooms until the fixtures exist, which is difficulty 9.

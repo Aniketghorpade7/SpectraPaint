@@ -9,6 +9,7 @@ dependencies = [
     "python-multipart",  # FastAPI file uploads (POST /sessions)
     "pillow",            # validating that an uploaded file really is a decodable photo
     "numpy",             # the render engine and colour maths (spectrapaint.render)
+    "onnxruntime",       # running the exported segmentation models (spectrapaint.runtime)
 ]
 
 [dependency-groups]
@@ -17,9 +18,34 @@ dev = [
     "httpx2",  # starlette's TestClient; plain httpx is deprecated there
     "ruff",
 ]
+# Export-only, and deliberately not in `dependencies`: PyTorch is how the checkpoints become
+# `.onnx` files, and ONNX Runtime is how they are *run*. Keeping torch out of the service's own
+# dependency set is what ADR-0001 and design-decisions.md §1048 mean by "PyTorch for development
+# and export; ONNX Runtime ships" — it is several hundred MB that must not reach a Dealer's
+# installer. Nothing under spectrapaint/ may import torch or transformers; the boundary is
+# tools/export_onnx.py.
+export = [
+    "torch",
+    "transformers",
+    "onnx",        # torch.onnx.export writes through it
+    "onnxscript",  # required by torch's dynamo-based exporter
+]
 
 [tool.uv]
 package = false
+
+# The CPU wheels, explicitly. The default PyPI torch on Linux carries bundled CUDA at a couple of
+# gigabytes, which is pointless here: the shipping assumption is a CPU-only build
+# (design-decisions.md §3, "Correction: GPU support is a packaging decision"), and the export runs
+# on whatever machine a contributor has. Naming the index keeps the export environment the same
+# size on every machine instead of depending on who ran it.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 # ruff is configured once for the whole repository, in ../../ruff.toml — the service is not the
 # only Python here, and two copies of the settings would drift.

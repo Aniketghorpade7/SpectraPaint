@@ -54,6 +54,31 @@ export type CreateConsultationResult =
  * naming a wall the photo does not have — is a result carrying the service's own message, so the UI
  * can show it as-is rather than inventing one.
  */
+/**
+ * One Wall Plane, in the form the renderer can draw: its id, how much of the photo it covers, the
+ * box it occupies, and its Alpha Matte as a PNG data URL.
+ *
+ * The matte arrives as a data URL rather than as pixel data because the renderer's job is to draw
+ * it, and a browser decodes a PNG far faster than JavaScript can unpack an array — the same
+ * reasoning that makes the repaint a data URL.
+ */
+export interface WallPlaneOverlay {
+  planeId: string;
+  coverage: number;
+  photoWidth: number;
+  photoHeight: number;
+  bounds: { left: number; top: number; right: number; bottom: number } | null;
+  matteDataUrl: string;
+}
+
+/**
+ * The walls found in a photo, or a failure carrying the service's own message — "no wall could be
+ * found in that photo" being the case worth passing through verbatim.
+ */
+export type WallsResult =
+  | { status: 'ready'; planes: WallPlaneOverlay[] }
+  | { status: 'failed'; code: string; message: string };
+
 export type RenderResult =
   { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
 
@@ -91,6 +116,14 @@ export interface SpectraPaintBridge {
    * as a `failed` result whose message is the service's own, safe to show as-is.
    */
   render(sessionId: string, shadeCode: string): Promise<RenderResult>;
+
+  /**
+   * The Wall Planes found in this photo, each with its Alpha Matte as a data URL to draw.
+   *
+   * Resolves once preparation has finished, because the service waits rather than answering "not
+   * ready" — so the renderer asks once and does not poll.
+   */
+  walls(sessionId: string): Promise<WallsResult>;
 
   /**
    * The status right now. Read on mount, because the service can become ready before the boot

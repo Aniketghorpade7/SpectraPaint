@@ -109,11 +109,34 @@ Not yet measured; likely the largest single saving still available.
 
 ---
 
-## Still to measure (Part 2)
+## Part 2 — the model stages, measured (ticket #6)
 
-- SAM 2 tiny encoder, ONNX, CPU — the once-per-photo cost
-- ADE20K semantic segmentation pass
-- Boundary refinement at full resolution
-- Model load time at startup (feeds the boot-screen decision)
-- Peak RAM (feeds the tier table)
+Measured on the exported graphs (`tools/export_onnx.py`), ONNX Runtime 1.29 on
+`CPUExecutionProvider`, 24 logical cores, at the graphs' own input sizes. Best of three runs after a
+warm-up, so these are steady-state numbers rather than first-run ones.
+
+| Stage | Cost | Notes |
+|---|---|---|
+| Load 3 sessions | **2 276 ms** | Once per process, at boot |
+| First run of each graph | **3 061 ms** | Allocator and kernel selection — the reason warming runs one throwaway inference, not just a load |
+| Semantic pass (512×512) | **364 ms** | Per photo |
+| SAM 2 encode (1024×1024) | **1 997 ms** | Per photo, and the dominant cost — as Part 1 predicted |
+| SAM 2 decode (32 prompts) | **120 ms** | Per prompt set, so per Wall Plane in #7 |
+| Boundary refinement + matte | included above | Guided filter over ~0.9 MP; not separately resolvable at this precision |
+| Peak RSS | **~2.1 GB** | Whole process, including numpy working buffers |
+
+**Per photo that is ~2.5 s of model work on this machine**, against a thirty-second budget. The
+encode being 80% of it is what justified exporting SAM 2 as two graphs: a design that re-encoded per
+prompt set would have spent two seconds per Wall Plane in #7, where the split spends 120 ms.
+
+**Caveats, stated plainly.** This is a 24-core development machine, not the 2-core floor tier the
+architecture assumes, and these stages were not throttled the way Part 1's were. Peak RSS near
+2 GB is the number most worth re-measuring on shop hardware — it feeds the tier table, and it is
+close enough to a 4 GB machine's comfortable working set to matter. Neither figure has been measured
+on Windows.
+
+## Still to measure
+
+- The same stages on floor-tier hardware (2 cores, and under memory pressure)
+- Peak RSS on Windows, where the allocator differs
 - Whether DirectML on integrated graphics helps (open question #3)
