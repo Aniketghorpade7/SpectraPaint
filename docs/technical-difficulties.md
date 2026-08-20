@@ -290,3 +290,42 @@ code, none of it theirs, none of it explained by their own diff.
 **Where it stands:** resolved — `**/.venv/**` is on eslint's ignore list, with a comment saying why,
 because the next person to add a Python dependency that ships web assets should not have to work it
 out again. `.prettierignore` already excluded `services`, which is why formatting never complained.
+
+---
+
+## 11. A CSS mask on a greyscale PNG fails open, and brightened the whole room photo
+
+**Ticket:** #6 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-20 · **Status:** resolved
+
+**What happened:** with the wall overlay shown, the *entire* Room Photo brightened — sofa, floor and
+furniture along with the wall — rather than only the detected wall. Reported from a screenshot of
+the running app, not caught by any test.
+
+**Why it was hard:** the overlay is a white wash masked by the Alpha Matte, and the matte is served
+as an 8-bit greyscale PNG — coverage in the grey level, and **no alpha channel at all**. CSS
+`mask-mode` defaults to `match-source`, which for an image means *alpha*. The alpha of a
+channel-less PNG is opaque everywhere, so the mask was a no-op and the wash covered its whole
+rectangle.
+
+The direction of the failure is what made it slip through: the mask **fails open**. Nothing errors,
+no image fails to load, the console is clean, and the overlay simply stops meaning anything while
+still looking deliberate. On a photo whose wall is most of the frame it reads as "the overlay is a
+bit strong" rather than "the mask is not applied".
+
+Two further wrong turns worth recording, because both cost time. A first attempt to verify it inside
+Electron's own offscreen renderer returned a 1×1 screenshot. And in a headless harness the mask was
+loaded from a `file://` URL, which does not load — the element then vanished entirely, making the
+broken and fixed cases look identical and briefly suggesting the fix did nothing. Production hands
+the matte over as a `data:` URL, and reproducing that form is what made the comparison meaningful.
+
+**Where it stands:** resolved with `mask-mode: luminance`, measured rather than assumed — in
+headless Chromium at Electron 43's engine version, a half-covered test image brightened on both
+halves without the line and on only the covered half with it. `-webkit-mask-source-type: luminance`
+was measured in the same harness and had **no effect at all**, so it was removed along with
+`-webkit-mask-image`: a fallback that does not fall back is worse than none, because the comment
+beside it lies.
+
+Serving the matte as an `LA` PNG, with coverage duplicated into a real alpha channel, would make the
+CSS default correct and remove the dependence on one property. It was not done — one channel is the
+honest representation of a matte, and this application ships on one known engine — but it is the
+change to reach for if the overlay ever moves to a browser target.

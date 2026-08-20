@@ -84,10 +84,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                     <div
                       key={plane.planeId}
                       className="consultation__wall-overlay"
-                      style={{
-                        maskImage: `url(${plane.matteDataUrl})`,
-                        WebkitMaskImage: `url(${plane.matteDataUrl})`,
-                      }}
+                      style={{ maskImage: `url(${plane.matteDataUrl})` }}
                       aria-hidden="true"
                     />
                   ))
