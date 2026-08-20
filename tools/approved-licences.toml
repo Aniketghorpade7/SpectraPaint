@@ -37,6 +37,14 @@ approved = [
 # shipped.
 development_only = [
   "NVIDIA Source Code License-NC",
+  "BSL-1.0",       # Boost, reached us inside PyTorch's AND expression. PyTorch is in the service's
+                   # `export` dependency group: it converts checkpoints to ONNX on a developer's
+                   # machine and is never installed on a Dealer's, so it is build-time tooling.
+                   # BSL-1.0 is permissive and would very likely pass the shipping bar too — it is
+                   # listed here rather than approved because nothing needs it to ship, and the
+                   # narrower entry is the one that stays honest.
+  "CNRI-Python",   # reached us inside `regex`'s AND expression, a transitive dependency of
+                   # transformers — build-time tooling for the same reason as PyTorch above.
 ]
 
 # Packages whose declared metadata is absent, ambiguous or plain wrong upstream, checked by hand.

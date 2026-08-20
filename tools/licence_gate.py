@@ -16,13 +16,20 @@ licences we accept is a business decision that should be reviewable without read
 Three things are checked:
 
   1. npm dependencies       — from `npm ls --all --json --long`
-  2. Python dependencies    — from the metadata of the running interpreter's environment
+  2. Python dependencies    — from the metadata of the running interpreter's environment, split
+                              into what ships and what is only ever build-time tooling
   3. Model weights          — from models/manifest.toml, including whether any weight we are not
                               allowed to redistribute has been committed to the repository
 
-Point 3 is the one that matters most here. SpectraPaint uses a non-commercially-licensed SegFormer
-checkpoint for development, and the failure mode this gate exists to prevent is that checkpoint
-quietly becoming part of what we ship — see design-decisions.md §5 and §9b.
+The gate exists to protect one thing: what leaves here on a Dealer's machine. So it holds the
+**shipped** set to the commercial bar and build-time tooling to a looser one — the same
+distinction it has always drawn for weights via `shipped`, now drawn for Python packages too
+(ticket #6).
+
+Which Python packages ship is not a list anyone maintains here. It is derived from the service's
+own `pyproject.toml`: `dependencies` ship, and dependency *groups* (`dev`, `export`) do not. That
+is what makes torch admissible — it turns checkpoints into `.onnx` files on a developer's machine
+and is never installed on a Dealer's (see the `export` group's own comment).
 """
 
 import argparse
@@ -46,9 +53,11 @@ FREE_TEXT_TO_SPDX = {
     "apache license 2.0": "Apache-2.0",
     "apache 2.0": "Apache-2.0",
     "apache-2": "Apache-2.0",
+    "apache 2.0 license": "Apache-2.0",  # transformers writes it this way
     "bsd license": "BSD-3-Clause",
     "bsd": "BSD-3-Clause",
     "new bsd license": "BSD-3-Clause",
+    "3-clause bsd license": "BSD-3-Clause",  # protobuf writes it this way
     "simplified bsd license": "BSD-2-Clause",
     "mit license": "MIT",
     "the mit license": "MIT",
@@ -177,11 +186,60 @@ def npm_dependencies():
             "not installed here, so they are not checked."
         )
 
+    # Every npm package is treated as shipping. Splitting npm's dev tree from the bundled one is
+    # a larger job than this ticket needs, and holding tooling to the stricter bar errs in the
+    # safe direction — it can only refuse something, never wave it through.
     return [
-        ("npm", name, version, licence)
+        ("npm", name, version, licence, True)
         for (name, version), licence in sorted(found.items())
         if licence is not None
     ]
+
+
+SERVICE_DIR = REPO_ROOT / "services" / "inference"
+
+
+def canonical(name):
+    """PyPI names compared the way PyPI compares them: case- and separator-insensitive."""
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def shipped_python_packages():
+    """The Python packages that reach a Dealer's machine, or None if that cannot be determined.
+
+    Derived by asking uv to resolve the service's `dependencies` with every dependency group
+    excluded, so the answer comes from `pyproject.toml` rather than from a second list here that
+    could drift away from it.
+
+    Returning None means "could not tell" — and the caller then treats *everything* as shipped.
+    A gate that cannot work out what ships must get stricter, never quieter.
+    """
+    uv = shutil.which("uv")
+    if uv is None:
+        print("uv not found — every Python package will be held to the shipping bar.")
+        return None
+
+    result = subprocess.run(
+        [uv, "export", "--no-default-groups", "--no-hashes", "--no-annotate", "--no-header"],
+        cwd=SERVICE_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(
+            "note: `uv export` failed, so the shipped set is unknown and every Python package is\n"
+            f"      held to the shipping bar.\n{result.stderr.strip()}"
+        )
+        return None
+
+    shipped = set()
+    for line in result.stdout.splitlines():
+        requirement = line.split(";")[0].strip()
+        if not requirement or requirement.startswith(("#", "-")):
+            continue
+        shipped.add(canonical(requirement.split("==")[0]))
+    return shipped or None
 
 
 def python_dependencies():
@@ -198,8 +256,10 @@ def python_dependencies():
         if licence == UNKNOWN:
             licence = licence_from_classifiers(metadata.get_all("Classifier") or [])
         found[name] = (dist.version, licence)
+    shipped = shipped_python_packages()
     return [
-        ("python", name, version, licence) for name, (version, licence) in sorted(found.items())
+        ("python", name, version, licence, shipped is None or canonical(name) in shipped)
+        for name, (version, licence) in sorted(found.items())
     ]
 
 
@@ -239,6 +299,16 @@ def load_policy():
     return set(policy["approved"]), set(policy["development_only"]), exceptions
 
 
+def _print_licence_counts(heading, rows):
+    counts = {}
+    for _, _, _, licence, _ in rows:
+        counts[licence] = counts.get(licence, 0) + 1
+    print(heading)
+    for licence, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"  {count:>4}  {licence}")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fail on unapproved dependency or weight licences."
@@ -256,23 +326,28 @@ def main():
     print()
 
     # ---- dependencies ---------------------------------------------------
+    # Two bars, one rule: anything that reaches a Dealer's machine must carry a licence approved
+    # for commercial distribution; build-time tooling may also carry a development-only licence,
+    # because it is not distributed at all. Tooling that would fail *both* still fails.
     packages = npm_dependencies() + python_dependencies()
-    for ecosystem, name, version, licence in packages:
+    for ecosystem, name, version, licence, ships in packages:
         if (ecosystem, name) in exceptions:
             continue
-        if not is_approved(licence, approved):
+        permitted = approved if ships else approved | development_only
+        if not is_approved(licence, permitted):
+            where = "" if ships else " (build-time only)"
             violations.append(
-                f"{ecosystem}: {name} {version} — {licence}"
+                f"{ecosystem}: {name} {version}{where} — {licence}"
                 + (" (no licence declared upstream)" if licence == UNKNOWN else "")
             )
 
-    counts = {}
-    for _, _, _, licence in packages:
-        counts[licence] = counts.get(licence, 0) + 1
-    print(f"{len(packages)} dependencies checked (npm + python):")
-    for licence, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        print(f"  {count:>4}  {licence}")
-    print()
+    shipping = [row for row in packages if row[4]]
+    tooling = [row for row in packages if not row[4]]
+    _print_licence_counts(f"{len(shipping)} shipped dependencies checked (npm + python):", shipping)
+    if tooling:
+        _print_licence_counts(
+            f"{len(tooling)} build-time dependencies checked (never distributed):", tooling
+        )
 
     # ---- model weights --------------------------------------------------
     weight_rows = weights()
@@ -307,12 +382,13 @@ def main():
 
     # ---- verdict --------------------------------------------------------
     if args.list:
-        for ecosystem, name, version, licence in packages:
-            print(f"{ecosystem:<7} {name:<45} {version:<14} {licence}")
+        for ecosystem, name, version, licence, ships in packages:
+            label = "shipped" if ships else "build-time"
+            print(f"{ecosystem:<7} {name:<45} {version:<14} {label:<11} {licence}")
         return 0
 
     if not violations:
-        print("PASS — every dependency and weight carries an approved licence.")
+        print("PASS — everything shipped carries a licence approved for distribution.")
         return 0
 
     print(f"FAIL — {len(violations)} licence violation(s):")
@@ -322,8 +398,10 @@ def main():
     print()
     print(
         "Either drop the dependency, or add its licence to tools/approved-licences.toml as a\n"
-        "deliberate decision. Do not add one to make the build green — SpectraPaint ships as a\n"
-        "commercial binary to dealerships, and that is the standard every entry is judged against."
+        "deliberate decision — to `approved` if the thing is distributed, to `development_only`\n"
+        "if it is build-time tooling that never leaves this repository. Do not add one to make\n"
+        "the build green: SpectraPaint ships as a commercial binary to dealerships, and that is\n"
+        "the standard every entry is judged against."
     )
     return 1
 
