@@ -4,11 +4,17 @@ import { Button } from '../components/Button';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
 import type { Consultation } from './useConsultation';
+import { overlayVisible } from './walls';
 
 /**
  * The Consultation surface: one action to load a Room Photo, the photo on screen, the Catalogue
- * panel beside it (issue #5), and a way to end it. Deliberately thin — Wall Planes, applying the
- * chosen Shade to the render and persistence arrive with later tickets.
+ * panel beside it (issue #5), the walls SpectraPaint found outlined over the photo (issue #6), and
+ * a way to end it. Deliberately thin — splitting the wall into separate planes and persistence
+ * arrive with later tickets.
+ *
+ * The wall overlay is a white wash rather than the coloured mask a segmentation demo would use, and
+ * it takes itself off screen the moment there is a repaint to look at — see walls.ts, and
+ * ui-guidelines.md on why nothing may sit near the colour a Customer is judging.
  *
  * From issue #3, the photo repaints when a Shade is tapped: the render replaces the photo, a
  * before/after toggle returns to the original, a repaint in flight is a visible state rather than a
@@ -23,8 +29,17 @@ import type { Consultation } from './useConsultation';
  * next action (docs/ui-guidelines.md — never a dead end).
  */
 export function ConsultationSurface({ consultation }: { consultation: Consultation }) {
-  const { state, start, discard, render, applyShade, toggleBeforeAfter, dismissRender } =
-    consultation;
+  const {
+    state,
+    start,
+    discard,
+    render,
+    applyShade,
+    toggleBeforeAfter,
+    dismissRender,
+    walls,
+    toggleWalls,
+  } = consultation;
   const catalogue = useCatalogue();
 
   if (state.phase === 'ready') {
@@ -33,11 +48,18 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     const visibleImage =
       render.showingRender && render.imageDataUrl ? render.imageDataUrl : state.imageDataUrl;
 
+    const showWalls = overlayVisible(walls, render.showingRender);
+
     return (
       <main className="consultation">
         <div className="consultation__bar">
           <h1 className="consultation__title">Consultation</h1>
           <div className="consultation__bar-actions">
+            {walls.planes.length > 0 && !render.showingRender ? (
+              <Button onClick={toggleWalls}>
+                {walls.wanted ? 'Hide the walls found' : 'Show the walls found'}
+              </Button>
+            ) : null}
             {render.phase === 'ready' ? (
               <Button onClick={toggleBeforeAfter}>
                 {render.showingRender ? 'Show original photo' : 'Show repaint'}
@@ -54,6 +76,30 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 src={visibleImage}
                 alt="The Customer's room photo"
               />
+              {showWalls
+                ? walls.planes.map((plane) => (
+                    // The matte is applied as a CSS mask, so the wash appears exactly where the
+                    // Alpha Matte says the wall is — including its soft edge, which a border or an
+                    // outline could not express.
+                    <div
+                      key={plane.planeId}
+                      className="consultation__wall-overlay"
+                      style={{
+                        maskImage: `url(${plane.matteDataUrl})`,
+                        WebkitMaskImage: `url(${plane.matteDataUrl})`,
+                      }}
+                      aria-hidden="true"
+                    />
+                  ))
+                : null}
+              {showWalls ? (
+                <p className="consultation__wall-note">
+                  {walls.planes.length === 1
+                    ? 'This is the wall SpectraPaint found.'
+                    : `SpectraPaint found ${walls.planes.length} walls.`}
+                </p>
+              ) : null}
+              {walls.message ? <p className="consultation__wall-note">{walls.message}</p> : null}
               {render.phase === 'rendering' ? (
                 <ProgressMessage>Repainting the wall…</ProgressMessage>
               ) : null}

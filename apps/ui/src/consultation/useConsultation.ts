@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ProgressStreamEvent, RenderResult } from '../../../desktop/src/bridge-types';
+import type {
+  ProgressStreamEvent,
+  RenderResult,
+  WallsResult,
+} from '../../../desktop/src/bridge-types';
 import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
+import { applyWallsEvent, INITIAL_WALLS_STATE, type WallsState } from './walls';
 
 /**
  * The state of the Consultation surface, and the two things a Dealer can do to it.
@@ -42,6 +47,10 @@ export interface Consultation {
   toggleBeforeAfter: () => void;
   /** Leave a failed repaint behind and keep the original photo on screen. */
   dismissRender: () => void;
+  /** The Wall Planes found in the photo, and whether their outline is on screen (ticket #6). */
+  walls: WallsState;
+  /** Show or hide the detected-wall overlay. */
+  toggleWalls: () => void;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -50,6 +59,9 @@ const LOADING_MESSAGE = 'Loading your photo…';
 const PREP_FAILED_MESSAGE = 'The photo could not be prepared. Please try another photo.';
 
 const RENDER_FAILED_MESSAGE = 'The wall could not be repainted. Please try another Shade.';
+
+const WALLS_UNAVAILABLE_MESSAGE =
+  'The walls in this photo could not be shown. The photo can still be repainted.';
 
 /**
  * The phase transition the progress stream drives, as a pure function so it is testable without a
@@ -76,6 +88,7 @@ export function applyProgressEvent(
 export function useConsultation(): Consultation {
   const [state, setState] = useState<ConsultationState>({ phase: 'idle' });
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
+  const [walls, setWalls] = useState<WallsState>(INITIAL_WALLS_STATE);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // A subscription must not outlive the surface: discarding, starting again, or unmounting
@@ -104,10 +117,37 @@ export function useConsultation(): Consultation {
     }
   }, []);
 
+  const loadWalls = useCallback(async (sessionId: string) => {
+    // Asked for once, when preparation finishes. The service waits for preparation rather than
+    // answering "not ready", so there is nothing to poll and nothing to retry.
+    let result: WallsResult;
+    try {
+      result = await window.spectrapaint.walls(sessionId);
+    } catch (error) {
+      // A missing outline is cosmetic: the photo is still repaintable, which is what the Dealer
+      // came for. So this is a note beside the photo, never an error state over it.
+      console.error('[consultation] could not fetch the wall planes:', error);
+      setWalls((previous) =>
+        applyWallsEvent(previous, { type: 'unavailable', message: WALLS_UNAVAILABLE_MESSAGE }),
+      );
+      return;
+    }
+
+    setWalls((previous) =>
+      applyWallsEvent(
+        previous,
+        result.status === 'ready'
+          ? { type: 'found', planes: result.planes }
+          : { type: 'unavailable', message: result.message },
+      ),
+    );
+  }, []);
+
   const start = useCallback(async () => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
     setRender(INITIAL_RENDER_STATE);
+    setWalls(INITIAL_WALLS_STATE);
     setState({ phase: 'uploading', progressMessage: LOADING_MESSAGE });
 
     try {
@@ -124,6 +164,9 @@ export function useConsultation(): Consultation {
             if (event.phase === 'done') {
               unsubscribeRef.current?.();
               unsubscribeRef.current = null;
+              // The walls are known by the time preparation says done, so this is one request that
+              // resolves immediately rather than a wait the Dealer notices.
+              void loadWalls(sessionId);
             } else if (event.phase === 'failed') {
               unsubscribeRef.current?.();
               unsubscribeRef.current = null;
@@ -150,7 +193,7 @@ export function useConsultation(): Consultation {
         message: 'The photo could not be loaded. Please try another photo.',
       });
     }
-  }, [endSession]);
+  }, [endSession, loadWalls]);
 
   const discard = useCallback(() => {
     unsubscribeRef.current?.();
@@ -159,6 +202,7 @@ export function useConsultation(): Consultation {
       void endSession(state.sessionId);
     }
     setRender(INITIAL_RENDER_STATE);
+    setWalls(INITIAL_WALLS_STATE);
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -215,5 +259,19 @@ export function useConsultation(): Consultation {
     setRender(INITIAL_RENDER_STATE);
   }, []);
 
-  return { state, start, discard, render, applyShade, toggleBeforeAfter, dismissRender };
+  const toggleWalls = useCallback(() => {
+    setWalls((previous) => applyWallsEvent(previous, { type: 'toggle' }));
+  }, []);
+
+  return {
+    state,
+    start,
+    discard,
+    render,
+    applyShade,
+    toggleBeforeAfter,
+    dismissRender,
+    walls,
+    toggleWalls,
+  };
 }

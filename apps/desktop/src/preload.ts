@@ -8,6 +8,7 @@ import type {
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
+  WallsResult,
 } from './bridge-types';
 import {
   BOOT_STATUS_CHANNEL,
@@ -19,15 +20,16 @@ import {
   PROGRESS_STREAM_STOP_CHANNEL,
   RENDER_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
+  WALLS_CHANNEL,
 } from './channels';
 
 /**
  * The only path between the renderer and everything else.
  *
  * `contextIsolation` is on and `nodeIntegration` is off, so this is the entire surface the React
- * app can see. Seven methods, deliberately: enough to call the contract, follow boot progress,
- * stream preparation progress and repaint the Wall Plane, and nothing that hands out the secret,
- * the port, a filesystem handle or an arbitrary fetch.
+ * app can see. Eight methods, deliberately: enough to call the contract, follow boot progress,
+ * stream preparation progress, show which walls were found and repaint one, and nothing that hands
+ * out the secret, the port, a filesystem handle or an arbitrary fetch.
  *
  * Note what is *not* here: no `getSecret()`, and no `baseUrl`. Exposing either would put the
  * secret one `console.log` away from a screenshot, and would break the moment a restart moves the
@@ -68,6 +70,10 @@ const bridge: SpectraPaintBridge = {
 
   render(sessionId: string, shadeCode: string): Promise<RenderResult> {
     return ipcRenderer.invoke(RENDER_CHANNEL, sessionId, shadeCode) as Promise<RenderResult>;
+  },
+
+  walls(sessionId: string): Promise<WallsResult> {
+    return ipcRenderer.invoke(WALLS_CHANNEL, sessionId) as Promise<WallsResult>;
   },
 
   bootStatus(): Promise<BootStatus> {

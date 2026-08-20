@@ -77,3 +77,27 @@
   max-height: 100%;
   object-fit: contain;
 }
+
+/* The detected wall, washed over the photo. White, not a colour: ui-guidelines.md forbids anything
+   saturated near the render, and a bright mask — the usual way to show a segmentation — is exactly
+   what would shift how the wall's colour reads. The Alpha Matte is applied as a mask, so the wash
+   follows the soft edge instead of a hard outline, which is also the honest picture: the boundary
+   really is soft. */
+.consultation__wall-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 30%);
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  pointer-events: none;
+}
+
+/* A note, not an error: a photo whose walls could not be outlined is still repaintable. */
+.consultation__wall-note {
+  margin: 0;
+  color: var(--grey-5);
+  font-size: 0.875rem;
+  text-align: center;
+}
