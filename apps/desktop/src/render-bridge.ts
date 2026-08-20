@@ -22,7 +22,14 @@ import type { Sidecar } from './sidecar';
 // reaches a path, so the renderer cannot name a route outside the contract.
 const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
 
-/** The stub Wall Plane every render colours until the segmentation tickets produce real planes. */
+/**
+ * The stub Wall Plane every render colours until the segmentation tickets produce real planes.
+ *
+ * Written twice, deliberately noted: the service holds its own copy in
+ * `services/inference/spectrapaint/api/renders.py`, and nothing type-checks across that boundary.
+ * Change both or every repaint answers `422 malformed_request` with both test suites still green
+ * (implementation-decisions.md §20).
+ */
 const STUB_WALL_PLANE_ID = 'wall_plane_1';
 
 const RENDER_FAILED_MESSAGE = 'The wall could not be repainted. Please try another Shade.';

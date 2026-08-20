@@ -62,9 +62,13 @@ RenderMode = Literal["realistic", "true_colour"]
 
 # The stub Wall Plane's id — the one key ``assignments`` accepts until the
 # segmentation tickets produce real planes with real ids (preparation builds the
-# matte it refers to). Named here so the tickets that replace it have one place
-# to look, and so a caller assigning an unknown plane is refused rather than
-# silently rendering something it did not ask for.
+# matte it refers to), so a caller assigning an unknown plane is refused rather
+# than silently rendering something it did not ask for.
+#
+# Written twice, deliberately noted: the Electron bridge holds its own copy in
+# ``apps/desktop/src/render-bridge.ts``, and nothing type-checks across that
+# boundary. Change both, or every repaint answers 422 with both test suites
+# still green (docs/implementation-decisions.md §20).
 STUB_WALL_PLANE_ID = "wall_plane_1"
 
 # True Colour mode shows the shade as the colour chip: the room's light colour

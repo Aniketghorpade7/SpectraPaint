@@ -628,12 +628,23 @@ rejected for the progress stream; a dedicated bridge keeps the generic one hones
 handling where the secret already lives. The session id is validated against `^[0-9a-f]{32}$` before
 it reaches a path, and an untrusted sender is refused, exactly as the other bridges do. The UI
 speaks in Shade Codes (the glossary's word) and never in Wall Plane ids, because the wire shape is
-this package's job and the segmentation tickets widen the set of plane ids here, in the one place
-that talks to the service.
+this package's job.
 
-**Consequence:** the renderer-facing signature `render(sessionId, shadeCode)` survives the
-segmentation tickets, but not the two-modes ticket: #8's realistic/true_colour toggle will add a
-`mode` argument to the bridge, in the same one place. `contract-path.ts` needed no change — its
+**The stub plane id is written twice, and that is the one thing to watch here.** It is a bare literal
+in `apps/desktop/src/render-bridge.ts` and in `services/inference/spectrapaint/api/renders.py`, on
+opposite sides of a language boundary that nothing type-checks across. Each side's tests pin it to
+its own copy, so changing one alone leaves both suites green while every repaint answers
+`422 malformed_request` at runtime. The segmentation tickets must change **both**. This is the same
+shape as the error-code strings already duplicated between `errors.py` and `service-bridge.ts`, and
+it is accepted for the same reason — a generated shared constant is machinery this project does not
+otherwise have — but a reader deserves to know the seam is two places, not one.
+
+**Consequence:** the renderer-facing signature `render(sessionId, shadeCode)` survives the two-modes
+ticket cheaply — #8's realistic/true_colour toggle adds one scalar argument — but **not** the
+segmentation tickets. Naming no plane is only tenable while there is exactly one; once #6 produces
+real Wall Planes the renderer has to say which wall it is painting, so the signature grows a plane
+id and the Accent Wall grows a map. That is the `assignments` shape the service already speaks
+(§18), arriving in the renderer one ticket later. `contract-path.ts` needed no change — its
 whitelist already admits `POST /sessions/{id}/renders`.
 
 ---
@@ -661,8 +672,9 @@ Selection is wired from the event (`CataloguePanel.onShadeSelected`), not from a
 `selectedShadeCode`, for the same reason difficulty 3 records: an effect that sets state in response
 is the signal to find the event that caused it.
 
-**Consequence:** the before/after toggle is V1's answer to preview-versus-full-resolution; the
-spec's two genuinely non-trivial UI pieces remain unextracted. The render state resets with the
-consultation (discard or start), and a reply that arrives after a discard is dropped by the same
-shade-code guard — the reducer is the only protection the async boundary needs.
+**Consequence:** every later repaint feature hangs off this reducer rather than off the surface —
+the two-modes toggle (#8) is another event, and per-plane Shades (#6) widen `shadeCode` into a
+selection, neither of which touches `ConsultationSurface`. The render state resets with the
+consultation (discard or start), and a reply arriving after a discard is dropped by the same
+shade-code guard, so the reducer is the only protection the async boundary needs.
 
