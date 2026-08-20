@@ -10,8 +10,8 @@
     GET    /catalogue/shades                      (browse or search)   <- issue #5
     GET    /catalogue/shades/{shade_code}                              <- issue #5
 
-The session, progress and Catalogue endpoints exist; the rest arrive with the tickets that need
-them.
+The session, progress, render and Catalogue endpoints exist; the rest arrive with the tickets that
+need them.
 """
 
 from collections.abc import Callable
@@ -22,6 +22,7 @@ from spectrapaint.api.auth import secret_required
 from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
 from spectrapaint.api.preparation import Stage, build_preparation_stages
+from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
 from spectrapaint.catalogue import Catalogue, open_catalogue
@@ -63,6 +64,7 @@ def create_app(
     app.state.session_registry = SessionRegistry(preparation_stages)
     app.state.catalogue = open_catalogue() if catalogue is None else catalogue
     app.include_router(sessions_router)
+    app.include_router(renders_router)
     app.include_router(catalogue_router)
 
     @app.get("/health")

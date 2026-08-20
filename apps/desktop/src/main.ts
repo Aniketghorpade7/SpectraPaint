@@ -5,6 +5,7 @@ import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
 import { registerCreateConsultationBridge } from './create-consultation';
 import { registerProgressStreamBridge } from './progress-stream';
+import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
 import { SidecarStartError, startSidecar, type Sidecar } from './sidecar';
 
@@ -85,6 +86,7 @@ async function startService(): Promise<void> {
 void app.whenReady().then(async () => {
   registerServiceBridge(() => sidecar, isTrustedSender);
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
+  registerRenderBridge(() => sidecar, isTrustedSender);
   registerCreateConsultationBridge(
     () => sidecar,
     () => mainWindow,

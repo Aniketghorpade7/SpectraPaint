@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]",
     "python-multipart",  # FastAPI file uploads (POST /sessions)
     "pillow",            # validating that an uploaded file really is a decodable photo
+    "numpy",             # the render engine and colour maths (spectrapaint.render)
 ]
 
 [dependency-groups]

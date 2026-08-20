@@ -14,3 +14,4 @@ export const BOOT_STATUS_RETRY_CHANNEL = 'spectrapaint:boot-status:retry';
 export const PROGRESS_EVENT_CHANNEL = 'spectrapaint:progress';
 export const PROGRESS_STREAM_START_CHANNEL = 'spectrapaint:progress:start';
 export const PROGRESS_STREAM_STOP_CHANNEL = 'spectrapaint:progress:stop';
+export const RENDER_CHANNEL = 'spectrapaint:render';

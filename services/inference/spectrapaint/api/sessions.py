@@ -4,7 +4,8 @@
 A photo enters the system only here, and the lifecycle is what every later endpoint hangs off.
 Uploading records the session and starts its preparation in the background — the bytes are
 validated so a corrupt or unsupported file is caught at the door, and preparation is where the photo
-is actually read (ticket #4). Storage of the photo itself arrives with the segmentation tickets.
+is actually read (ticket #4). The render path (issue #3) consumes the prepared photo that same
+preparation produces, so a render never touches the upload bytes.
 
 The registry is deliberately in-memory: persistence to disk is ticket #11's concern, and an
 in-memory session dies with the process, which is correct for a single counter-side consultation.
@@ -26,7 +27,12 @@ from spectrapaint.api.errors import (
     UNSUPPORTED_IMAGE,
     ServiceError,
 )
-from spectrapaint.api.preparation import PreparationJob, Stage
+from spectrapaint.api.preparation import (
+    MESSAGE_PREPARATION_FAILED,
+    PreparationJob,
+    PreparedPhoto,
+    Stage,
+)
 
 router = APIRouter()
 
@@ -78,6 +84,32 @@ class SessionRegistry:
 
 def _registry(request: Request) -> SessionRegistry:
     return request.app.state.session_registry
+
+
+async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
+    """The session's prepared photo, or a clean error.
+
+    Waits for the session's background preparation to reach its terminal event, then returns the
+    photo it produced. Public so the render endpoint shares the same message and response shape as
+    every other session-scoped route.
+    """
+
+    job = _registry(request).job(session_id)
+    if job is None:
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=SESSION_NOT_FOUND,
+            message=_MESSAGE_SESSION_NOT_FOUND,
+        )
+
+    photo = await job.photo()
+    if photo is None:
+        raise ServiceError(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=UNSUPPORTED_IMAGE,
+            message=MESSAGE_PREPARATION_FAILED,
+        )
+    return photo
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
@@ -157,8 +189,8 @@ def _verify_is_an_image(contents: bytes) -> None:
     is not an image at all, and it catches a truncated PNG. It is weaker than it looks for JPEG:
     a JPEG with its EOI marker stripped passes ``verify()`` silently.
 
-    So this is a gate, not a guarantee. Whichever stage first decodes the pixels must still handle
-    its own decode errors — do not read a session id as proof that the bytes behind it are sound.
+    So this is a gate, not a guarantee. The preparation job's stage decodes the pixels right after
+    it, so a file that slips past the gate is caught before anything downstream touches it.
     """
 
     try:

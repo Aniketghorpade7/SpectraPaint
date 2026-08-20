@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ProgressStreamEvent } from '../../../desktop/src/bridge-types';
+import type { ProgressStreamEvent, RenderResult } from '../../../desktop/src/bridge-types';
+import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
 
 /**
  * The state of the Consultation surface, and the two things a Dealer can do to it.
@@ -33,12 +34,22 @@ export interface Consultation {
   state: ConsultationState;
   start: () => void;
   discard: () => void;
+  /** The repaint's state on the Consultation surface. See render.ts for the reducer. */
+  render: RenderState;
+  /** Repaint the Wall Plane in a Shade Code. Safe to call with the photo on screen. */
+  applyShade: (shadeCode: string) => void;
+  /** Show the original photo or the repaint after a successful render. */
+  toggleBeforeAfter: () => void;
+  /** Leave a failed repaint behind and keep the original photo on screen. */
+  dismissRender: () => void;
 }
 
 /** The fallback shown before the stream's first message arrives. */
 const LOADING_MESSAGE = 'Loading your photo…';
 
 const PREP_FAILED_MESSAGE = 'The photo could not be prepared. Please try another photo.';
+
+const RENDER_FAILED_MESSAGE = 'The wall could not be repainted. Please try another Shade.';
 
 /**
  * The phase transition the progress stream drives, as a pure function so it is testable without a
@@ -64,6 +75,7 @@ export function applyProgressEvent(
 
 export function useConsultation(): Consultation {
   const [state, setState] = useState<ConsultationState>({ phase: 'idle' });
+  const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // A subscription must not outlive the surface: discarding, starting again, or unmounting
@@ -95,6 +107,7 @@ export function useConsultation(): Consultation {
   const start = useCallback(async () => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
+    setRender(INITIAL_RENDER_STATE);
     setState({ phase: 'uploading', progressMessage: LOADING_MESSAGE });
 
     try {
@@ -145,8 +158,62 @@ export function useConsultation(): Consultation {
     if (state.phase === 'ready' && state.sessionId) {
       void endSession(state.sessionId);
     }
+    setRender(INITIAL_RENDER_STATE);
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
-  return { state, start, discard };
+  const applyShade = useCallback(
+    async (shadeCode: string) => {
+      if (state.phase !== 'ready' || !state.sessionId) return;
+      setRender((previous) => applyRenderEvent(previous, { type: 'requested', shadeCode }));
+
+      let result: RenderResult;
+      try {
+        result = await window.spectrapaint.render(state.sessionId, shadeCode);
+      } catch (error) {
+        // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
+        // must not sit on "Repainting…" with no way out.
+        console.error('[consultation] could not repaint the wall:', error);
+        setRender((previous) =>
+          applyRenderEvent(previous, {
+            type: 'failed',
+            shadeCode,
+            code: 'render_failed',
+            message: RENDER_FAILED_MESSAGE,
+          }),
+        );
+        return;
+      }
+
+      if (result.status === 'ready') {
+        setRender((previous) =>
+          applyRenderEvent(previous, {
+            type: 'ready',
+            shadeCode,
+            imageDataUrl: result.imageDataUrl,
+          }),
+        );
+      } else {
+        setRender((previous) =>
+          applyRenderEvent(previous, {
+            type: 'failed',
+            shadeCode,
+            code: result.code,
+            message: result.message,
+          }),
+        );
+      }
+    },
+    [state.phase, state.sessionId],
+  );
+
+  const toggleBeforeAfter = useCallback(() => {
+    setRender((previous) => applyRenderEvent(previous, { type: 'toggle' }));
+  }, []);
+
+  const dismissRender = useCallback(() => {
+    setRender(INITIAL_RENDER_STATE);
+  }, []);
+
+  return { state, start, discard, render, applyShade, toggleBeforeAfter, dismissRender };
 }
