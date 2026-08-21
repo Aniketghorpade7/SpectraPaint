@@ -240,8 +240,15 @@ def test_the_wall_found_is_the_wall_that_is_there(client: TestClient, photo: Pat
     wall, not_wall = labels_for(photo, matte.shape)
     found = matte >= 0.5
 
+    # "Anything mid-grey is treated as don't count this pixel" (data/fixtures/rooms/README.md), and
+    # the union is where that promise was being broken: an unsure pixel could never join the
+    # intersection, but a matte covering one still grew the denominator. That silently penalised
+    # exactly the labels the README asks for — an honest grey band around a curtain fold cost IoU,
+    # so the careful labeller scored worse than the one who guessed a hard edge. Both sides of the
+    # ratio now ignore the pixels nobody could label.
+    countable = wall | not_wall
     intersection = float((found & wall).sum())
-    union = float((found | wall).sum())
+    union = float(((found | wall) & countable).sum())
     iou = intersection / union if union else 0.0
     assert iou >= MINIMUM_WALL_IOU, f"wall IoU {iou:.2f} on {photo.name}"
 
