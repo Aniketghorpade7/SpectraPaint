@@ -78,9 +78,11 @@ _MAX_SEAMS = 2
 # same-colour shading-only corner has raw ≈0.008 but a deep valley).
 _ENERGY_FLOOR = 0.010
 _ENERGY_FLOOR_LOW = 0.004
-# Valley / step thresholds on a 0-1 luminance scale.
-_VALLEY_DEPTH_FRACTION = 0.030
-_STEP_FRACTION = 0.090
+# Valley / step thresholds on a 0-1 luminance scale. Shallow real-room
+# valleys are ~0.015-0.02 (gentle shading), so the floor must be low, while
+# striped wallpaper (0.007) stays below it.
+_VALLEY_DEPTH_FRACTION = 0.015
+_STEP_FRACTION = 0.050
 # Small smoothing for the median profile, to quieten single-column texture
 # without diluting a narrow corner. Fixed radius in pixels, not wall-fraction.
 _MEDIAN_SMOOTH_RADIUS = 3
