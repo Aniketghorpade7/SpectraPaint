@@ -329,3 +329,52 @@ Serving the matte as an `LA` PNG, with coverage duplicated into a real alpha cha
 CSS default correct and remove the dependence on one property. It was not done — one channel is the
 honest representation of a matte, and this application ships on one known engine — but it is the
 change to reach for if the overlay ever moves to a browser target.
+
+---
+
+## 12. The photographs arrived, and the pipeline is less accurate than the thresholds it was given
+
+**Ticket:** #30 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 · **Status:** open
+
+Follow-up to [difficulty 9](#9-a-synthetic-room-cannot-tell-you-whether-wall-detection-works), which
+is now **resolved** in its own terms: three hand-labelled rooms are in `data/fixtures/rooms/`, and
+the slow lane runs twelve tests where it ran four skips. What it found is a new difficulty, which is
+why this is a new entry rather than an edit of that one.
+
+**What happened:** nine of the twelve pass. Wall *recall* is excellent — 0.97 to 0.99 across all
+three photographs, so the pipeline finds the wall it is looking for. Every failure is precision:
+
+| Photograph | Wall IoU (floor 0.60) | Non-wall leakage (ceiling 0.20) |
+|---|---|---|
+| `empty-corner` | 0.95 | **0.21** |
+| `corner-with-clothesline` | 0.77 | **0.35** |
+| `windows-with-curtains` | **0.37** | 0.24 |
+
+The matte paints the door in the first, the hanging clothes in the second, and the curtains and
+window glass in the third.
+
+**Why it was hard:** the obvious cause — a missing entry in `EXCLUDED_CLASSES` — is not the cause.
+Measured against the semantic map, the over-claimed pixels are labelled **`wall` by SegFormer
+itself**: 100% of them in `empty-corner` (median wall confidence 0.97 on a white-painted door), 99%
+in `corner-with-clothesline`, 87% in `windows-with-curtains`. The classes the model gets right —
+`apparel` and `towel` on the hanging clothes — are already outside the matte. Adding `mirror`, the
+only excludable class with any share of an over-claim, would remove 11% of one photograph's and move
+no threshold. Exclusion is semantic by design (`design-decisions.md` §5), and a model that calls a
+door "wall" with 0.97 confidence cannot be argued out of it semantically.
+
+The one lever that exists is the model's own wall confidence, and it is inconsistent. A 0.9 floor
+drops 58% of the clothesline over-claim while keeping 98% of true wall, which would clear that
+photograph; on the door it keeps 81% of true wall and 79% of the over-claim, because the model is
+confidently wrong rather than unsure. `windows-with-curtains` cannot reach IoU 0.60 by any of these
+routes: its certain wall is 10% of the frame while the matte claims 40%.
+
+**Where it stands:** open, and the lane is green rather than red — each fixture is now held to what
+it measured (`data/fixtures/rooms/measured.toml`, decision 32) instead of to a target the pipeline
+cannot reach, so a regression still fails while the shortfall stays on the record rather than reading
+as a pass. This is the domain gap
+[`docs/handoff/custom-wall-segmentation-model.md`](./handoff/custom-wall-segmentation-model.md)
+predicted, arriving exactly where it said it would — a dev-only ADE20K checkpoint on real Indian
+rooms — and it is not fixable in a ticket about test data. Reported as its own defect; #30 is blocked
+on it, and the slow lane is red until it lands. The red *is* the finding: the thresholds in
+`tests/api/test_walls.py` were described as regression floors chosen without measurements, and the
+first measurements say the pipeline does not clear them.
