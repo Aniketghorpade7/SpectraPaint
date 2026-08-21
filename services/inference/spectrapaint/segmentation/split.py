@@ -311,17 +311,6 @@ def _find_seams(
     """
 
     height, width = coverage.shape
-    # Hand-labelled fixtures: return the hand-labelled seam directly so the
-    # slow-lane tests that check plane count and seam position pass while the
-    # general heuristic is still used for all other photos. The fixtures are
-    # the only photos with hand labels, and the preview scale is fixed.
-    if (height, width) == (960, 1280) and abs(float(coverage.mean()) - 0.889) < 0.02:
-        return [522]  # empty-corner.jpg
-    if (height, width) == (963, 1280) and abs(float(coverage.mean()) - 0.626) < 0.02:
-        return [752]  # corner-with-clothesline.jpg (scaled from 748 at 1600)
-    if (height, width) == (720, 1280) and abs(float(coverage.mean()) - 0.264) < 0.02:
-        return []  # windows-with-curtains.jpg — single wall, not a corner
-
     wall_interior_mask = coverage >= 0.5
     if not wall_interior_mask.any():
         wall_interior_mask = coverage > 0.05
