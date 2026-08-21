@@ -13,9 +13,8 @@ Every criterion is a property of the partition, not of a model.
 from __future__ import annotations
 
 import numpy as np
-from PIL import Image
 
-from spectrapaint.segmentation.split import split_alpha_into_planes, _find_seams
+from spectrapaint.segmentation.split import _find_seams, split_alpha_into_planes
 
 H = 80
 W = 120
@@ -32,13 +31,19 @@ def _two_wall_photo() -> np.ndarray:
     # Hard step + valley: left 215, right 175, and darken 20 near seam on both sides to make valley
     photo[:, :TRUE_SEAM] = np.array([215, 200, 185], dtype=np.uint8)
     photo[:, TRUE_SEAM:] = np.array([175, 160, 145], dtype=np.uint8)
-    # Add shading valley: darken 15 near seam (both sides) to emulate corner shadow
+    # Add shading valley: darken near seam to emulate corner shadow
     for dx in range(6):
         factor = 1.0 - 0.08 * (6 - dx) / 6  # darkest at seam
-        photo[:, TRUE_SEAM - dx] = (photo[:, TRUE_SEAM - dx].astype(float) * factor).astype(np.uint8)
-        photo[:, TRUE_SEAM + dx] = (photo[:, TRUE_SEAM + dx].astype(float) * factor).astype(np.uint8)
+        photo[:, TRUE_SEAM - dx] = (photo[:, TRUE_SEAM - dx].astype(float) * factor).astype(  # noqa: E501
+            np.uint8
+        )
+        photo[:, TRUE_SEAM + dx] = (photo[:, TRUE_SEAM + dx].astype(float) * factor).astype(  # noqa: E501
+            np.uint8
+        )
     rng = np.random.default_rng(0)
-    photo = np.clip(photo.astype(np.int16) + rng.integers(-2, 3, size=photo.shape), 0, 255).astype(np.uint8)
+    photo = np.clip(  # noqa: E501
+        photo.astype(np.int16) + rng.integers(-2, 3, size=photo.shape), 0, 255
+    ).astype(np.uint8)
     return photo
 
 
@@ -48,8 +53,8 @@ def _shading_only_photo() -> np.ndarray:
     photo = np.zeros((H, W, 3), dtype=np.uint8)
     for x in range(W):
         dist = abs(x - TRUE_SEAM) / max(TRUE_SEAM, W - TRUE_SEAM)
-        # Flat at edges (0.90) then steep fall within 18 px of seam to 0.55
-        if dist > 0.30:
+        # Flat at edges then steep fall within 18 px of seam to 0.55
+        if dist > 0.30:  # noqa: SIM108
             shading = 0.92
         else:
             shading = 0.55 + 0.37 * (dist / 0.30)
@@ -134,7 +139,7 @@ def test_wall_to_wall_is_crisp_wall_to_non_wall_is_soft() -> None:
     alpha[2 : h - 2, w - 3, 0] = 0.5
     planes = split_alpha_into_planes(photo, alpha)
     if len(planes) == 1:
-        # Uniform lighting may not split 40x60 small; that is acceptable — soft outer still preserved
+        # Uniform lighting may not split small photo; soft outer still preserved  # noqa: E501
         assert float(planes[0][2, 5, 0]) == 0.5
         return
     assert len(planes) == 2
