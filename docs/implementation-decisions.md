@@ -1092,3 +1092,40 @@ exist for the flat wall, whose signals are all zero and which must stay one plan
 Worth naming plainly: these numbers are tuned against **two** labelled corners. That is enough to
 stop the algorithm being obviously wrong and not enough to call it right. #30's fixture set is the
 thing to grow before trusting any of them further.
+
+---
+
+## 35. An Accent Wall costs one extra tap, and painting the whole room still costs none
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-22
+
+**Decided:** with more than one Wall Plane on screen, each wall carries a chooser chip. Tapping a
+wall selects it and the next Shade lands only there; tapping the selected wall again goes back to
+painting every wall. Tapping a Shade with nothing selected paints them all, which is what the surface
+did before. The state — which wall is selected, and the Shade each wall carries — lives in
+`apps/ui/src/consultation/accent.ts` as pure functions, and the request carries a bare Shade Code
+while every wall matches and a per-plane map once they differ.
+
+**Why:** the ticket's last criterion is two planes carrying two Shades at once, and until now the
+service and the Electron bridge could both express it while the renderer could not — so the Dealer,
+who the criterion is about, could not produce an Accent Wall. The tap budget is three
+(ui-guidelines.md), so the common case had to stay where it was: one Shade over the whole room is
+still a single tap, and the accent case is two. A toggle rather than a separate "all walls" control
+because deselecting is then the same gesture as selecting, and a confirmation step is a tap the
+budget cannot afford.
+
+The chooser is a chip over each wall rather than the wash itself, and that is not cosmetic: a CSS
+mask clips what is *painted*, not what is *clickable*, so two full-size masked buttons would overlap
+and the upper one would swallow every tap meant for the lower. The chip is a real `<button>` with
+`aria-pressed`, positioned from the plane's own bounding box, at the 44px minimum.
+
+A bare Shade Code is sent while the walls match, rather than always sending a map: the bridge then
+discovers the plane ids itself, so a photo whose walls were re-split between two taps cannot produce
+a request naming a plane that no longer exists. Only walls the Dealer has actually chosen a Shade for
+appear in the map — an unpainted wall stays as photographed rather than being quietly given
+somebody else's Shade.
+
+**Consequence:** the logic is tested where conventions §6 puts it. `accent.ts` is pure, so it is
+vitest's (14 tests); the wire shape is the bridge's own test ("posts a per-plane map for an Accent
+Wall"); and two Shades over two planes in one request is seam 1's, against a two-plane stub added to
+`tests/api/conftest.py`. Nothing needed a DOM test.

@@ -114,3 +114,36 @@
   font-size: 0.875rem;
   text-align: center;
 }
+
+/* The chosen wall's wash is a little stronger, so which wall the next Shade will land on is visible
+   without reading the caption. Still white and still weak: ui-guidelines.md forbids anything
+   saturated near a colour the Customer is judging, and that holds for the selection too. */
+.consultation__wall-overlay--chosen {
+  background: rgb(255 255 255 / 45%);
+}
+
+/* Choosing a wall. A chip over the middle of that wall rather than the whole wash, because a mask
+   clips painting and not hit-testing — two full-size masked buttons would overlap and the upper one
+   would swallow taps meant for the lower. 44px minimum target (ui-guidelines.md), and the Shade Code
+   is shown beside the name once the wall carries one, so the Dealer can read back what is where. */
+.consultation__wall-chip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-height: var(--tap-target-min);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--grey-4);
+  border-radius: 4px;
+  background: var(--grey-1);
+  color: var(--grey-6);
+  font: inherit;
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+/* The chosen wall inverts, which is the only emphasis available: the token set is greys on purpose,
+   and an accent colour beside a wall being judged for its colour is exactly what it forbids. */
+.consultation__wall-chip--chosen {
+  border-color: var(--grey-6);
+  background: var(--grey-6);
+  color: var(--grey-0);
+}

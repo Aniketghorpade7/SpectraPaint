@@ -11,6 +11,7 @@ import pytest
 from spectrapaint.render.colour import (
     D65_2DEGREE_XY,
     D65_2DEGREE_XYZ,
+    lab_to_linear_rgb,
     linear_to_srgb,
     srgb_to_linear,
 )
@@ -76,3 +77,56 @@ def test_srgb_to_linear_handles_beyond_bounds_without_crashing() -> None:
     """Callers may pass slightly out-of-range values; never NaN."""
     out = srgb_to_linear(np.array([[-0.1, 1.5]]))
     assert np.isfinite(out).all()
+
+
+# ---------------------------------------------------------------------------
+# Lab -> linear RGB. Untested until #7, which is how a transposed primary matrix survived from #3:
+# every Shade decoded to the wrong colour — a near-white Shade came out hot pink — while the render
+# tests passed, because they assert that a wall stopped being grey and that the two modes differ,
+# and both of those are true of the wrong colour too (difficulty 16).
+# ---------------------------------------------------------------------------
+
+# Reference values, computed from the CIE formulae by hand rather than from this module: Lab -> XYZ
+# with the D65 2 degree white, XYZ -> linear sRGB with the IEC 61966-2-1 primaries.
+_LAB_TO_LINEAR_REFERENCE = [
+    ((100.0, 0.0, 0.0), (1.0, 1.0, 1.0)),  # the reference white itself
+    ((50.0, 0.0, 0.0), (0.184, 0.184, 0.184)),  # mid grey stays neutral
+    ((97.0, 0.49, 0.85), (0.940, 0.921, 0.911)),  # PS-1001, a Catalogue near-white
+    ((66.0, 38.14, 22.02), (0.821, 0.230, 0.198)),  # PS-6010, the reddest Shade in the Catalogue
+    ((80.0, -0.0, -30.94), (0.360, 0.584, 1.0)),  # PS-12011, the bluest
+]
+
+
+@pytest.mark.parametrize(("lab", "expected"), _LAB_TO_LINEAR_REFERENCE)
+def test_lab_decodes_to_the_reference_linear_rgb(
+    lab: tuple[float, float, float], expected: tuple[float, float, float]
+) -> None:
+    """The decode matches values worked out from the standard, not from this implementation."""
+
+    decoded = lab_to_linear_rgb(np.asarray(lab, dtype=np.float64))
+    assert decoded == pytest.approx(np.asarray(expected), abs=1e-3)
+
+
+@pytest.mark.parametrize("l_star", [0.0, 18.0, 50.0, 82.0, 97.0, 100.0])
+def test_a_neutral_lab_decodes_to_equal_channels(l_star: float) -> None:
+    """a* = b* = 0 is grey by definition, so the three channels must come out equal.
+
+    The property that catches a transposed primary matrix on the first run, which is why it is here
+    and not only in the reference table above: a matrix read by columns instead of rows turns every
+    grey into a colour, and a table of expected values can always be regenerated from the broken
+    implementation by somebody who assumes it is right.
+    """
+
+    decoded = lab_to_linear_rgb(np.asarray([l_star, 0.0, 0.0], dtype=np.float64))
+    assert decoded[0] == pytest.approx(decoded[1], abs=1e-6)
+    assert decoded[1] == pytest.approx(decoded[2], abs=1e-6)
+
+
+def test_lab_decodes_a_stack_of_shades_at_once() -> None:
+    """The Catalogue decodes many Shades in one call, so the shape must survive."""
+
+    stack = np.asarray([lab for lab, _ in _LAB_TO_LINEAR_REFERENCE], dtype=np.float64)
+    decoded = lab_to_linear_rgb(stack)
+    assert decoded.shape == stack.shape
+    for row, (_, expected) in zip(decoded, _LAB_TO_LINEAR_REFERENCE, strict=True):
+        assert row == pytest.approx(np.asarray(expected), abs=1e-3)

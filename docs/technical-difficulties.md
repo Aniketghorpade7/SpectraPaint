@@ -464,3 +464,37 @@ of them, and by suppressing non-maximal peaks per cue before counting anything (
 lesson worth keeping is about where each test belongs: `tests/render/test_split.py` is the right
 place for the partition algebra, and it cannot answer "does this find a corner in a room" — only
 `data/fixtures/rooms/` can.
+
+---
+
+## 16. Every Shade rendered as the wrong colour, and every test agreed it was fine
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-22 · **Status:** resolved
+
+**What happened:** writing the Accent Wall test for #7's last criterion — two planes, two Shades,
+one request — the assertion "the wall assigned the bluest Shade is blue" failed. The wall was
+magenta. So was the other one, and the cause was not the Accent Wall: `lab_to_linear_rgb` computed
+`xyz @ MATRIX` where the sRGB primary matrix is written one row per output channel, which applies
+its **transpose**. Every Shade in the Catalogue had been decoding to the wrong colour since issue #3.
+
+How wrong: `PS-1001 "Morning Linen"`, Lab(97, 0.49, 0.85), a near-white, rendered as sRGB
+(255, 117, 211) — hot pink. Lab white decoded to (1.0, 0.193, 0.719) instead of (1, 1, 1).
+
+**Why it was hard:** nothing was subtly off, and everything passed. `tests/render/test_colour.py`
+covered the piecewise transfer function thoroughly and the D65 white-point constant, and never
+called `lab_to_linear_rgb` at all. The render tests asserted that a repainted wall is no longer the
+room's grey, and that Realistic and True Colour differ from each other — both of which are true of
+the wrong colour. So the one thing a paint visualiser exists to get right, "the wall is the colour of
+the chip", was the one thing no test asked.
+
+Two things made it invisible for four tickets. The photographs it was tested against are near-neutral
+walls, and the wrongness is a channel mix rather than a brightness error, so a render still looked
+like a plausible repaint of a room. And the wrong direction is the *easy* orientation to write: for a
+row-vector stack, `xyz @ M` reads naturally and is wrong, while `xyz @ M.T` reads awkwardly and is
+right.
+
+**Where it stands:** resolved — the matrix is transposed at use, with the trap named in a comment.
+The tests that now guard it are a reference table computed from the CIE formulae by hand rather than
+from this module, and a property test: a* = b* = 0 is grey by definition, so the three channels must
+come out equal. The property test is the one that matters, because a table of expected values can
+always be regenerated from a broken implementation by somebody who assumes it is right.

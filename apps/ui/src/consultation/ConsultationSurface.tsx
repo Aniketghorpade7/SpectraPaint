@@ -3,6 +3,7 @@ import { useCatalogue } from '../catalogue/useCatalogue';
 import { Button } from '../components/Button';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
+import { describeTarget, describeWall, isTargeted } from './accent';
 import type { Consultation } from './useConsultation';
 import { overlayVisible } from './walls';
 
@@ -15,6 +16,11 @@ import { overlayVisible } from './walls';
  * The wall overlay is a white wash rather than the coloured mask a segmentation demo would use, and
  * it takes itself off screen the moment there is a repaint to look at — see walls.ts, and
  * ui-guidelines.md on why nothing may sit near the colour a Customer is judging.
+ *
+ * From issue #7 a photo with more than one wall lets the Dealer paint them separately: tapping a
+ * wall chooses it, and the next Shade lands only there, so an Accent Wall costs one extra tap and
+ * painting the whole room still costs none. Tapping the chosen wall again goes back to painting them
+ * all — a toggle rather than a confirmation, which is a tap the budget cannot afford.
  *
  * From issue #3, the photo repaints when a Shade is tapped: the render replaces the photo, a
  * before/after toggle returns to the original, a repaint in flight is a visible state rather than a
@@ -39,6 +45,8 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     dismissRender,
     walls,
     toggleWalls,
+    paint,
+    selectWall,
   } = consultation;
   const catalogue = useCatalogue();
 
@@ -83,17 +91,50 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                     // outline could not express.
                     <div
                       key={plane.planeId}
-                      className="consultation__wall-overlay"
+                      className={
+                        isTargeted(paint.target, plane.planeId)
+                          ? 'consultation__wall-overlay consultation__wall-overlay--chosen'
+                          : 'consultation__wall-overlay'
+                      }
                       style={{ maskImage: `url(${plane.matteDataUrl})` }}
                       aria-hidden="true"
                     />
+                  ))
+                : null}
+              {showWalls && walls.planes.length > 1
+                ? walls.planes.map((plane, index) => (
+                    // Choosing a wall is a real `<button>`: a div with a click handler is not one
+                    // (ui-guidelines.md), and choosing the accent wall by keyboard has to work. It
+                    // is a chip over the wall rather than the wash itself, because a mask clips what
+                    // is painted and not what is clickable — two full-size masked buttons would
+                    // overlap, and the upper one would swallow every tap meant for the lower.
+                    <button
+                      key={`choose-${plane.planeId}`}
+                      type="button"
+                      className={
+                        isTargeted(paint.target, plane.planeId)
+                          ? 'consultation__wall-chip consultation__wall-chip--chosen'
+                          : 'consultation__wall-chip'
+                      }
+                      style={chipPosition(plane, index, walls.planes.length)}
+                      aria-pressed={isTargeted(paint.target, plane.planeId)}
+                      onClick={() => selectWall(plane.planeId)}
+                    >
+                      {describeWall(index, walls.planes.length)}
+                      {paint.assignments[plane.planeId]
+                        ? ` · ${paint.assignments[plane.planeId]}`
+                        : ''}
+                    </button>
                   ))
                 : null}
               {showWalls ? (
                 <p className="consultation__wall-note">
                   {walls.planes.length === 1
                     ? 'This is the wall SpectraPaint found.'
-                    : `SpectraPaint found ${walls.planes.length} walls.`}
+                    : `SpectraPaint found ${walls.planes.length} walls. ${describeTarget(
+                        paint.target,
+                        walls.planes,
+                      )}`}
                 </p>
               ) : null}
               {walls.message ? <p className="consultation__wall-note">{walls.message}</p> : null}
@@ -136,4 +177,28 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
       )}
     </main>
   );
+}
+
+/**
+ * Where a wall's chooser sits: over the middle of that wall's bounding box.
+ *
+ * Percentages of the photo, so the chip stays on its wall however the photo is scaled to the stage.
+ * A plane with no bounds — the service may report none — falls back to spacing the chips evenly, so
+ * the choice is still reachable rather than stacked in one corner.
+ */
+function chipPosition(
+  plane: {
+    bounds: { left: number; top: number; right: number; bottom: number } | null;
+    photoWidth: number;
+    photoHeight: number;
+  },
+  index: number,
+  total: number,
+): { left: string; top: string } {
+  if (!plane.bounds || plane.photoWidth <= 0 || plane.photoHeight <= 0) {
+    return { left: `${((index + 1) / (total + 1)) * 100}%`, top: '50%' };
+  }
+  const centreX = (plane.bounds.left + plane.bounds.right) / 2 / plane.photoWidth;
+  const centreY = (plane.bounds.top + plane.bounds.bottom) / 2 / plane.photoHeight;
+  return { left: `${centreX * 100}%`, top: `${centreY * 100}%` };
 }
