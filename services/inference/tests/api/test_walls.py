@@ -379,3 +379,178 @@ def test_shadowed_wall_stays_wall(client: TestClient, photo: Path) -> None:
         f"only {recall:.0%} of the shadowed wall in {photo.name} survived — "
         "a ghost of the old paint would show after recolouring"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wall Planes, against hand-labelled corners (ticket #7, criteria 1-4).
+#
+# `<name>.planes.png` answers what `<name>.wall.png` cannot: how many Wall Planes the photograph
+# has and where they join. The synthetic tests in tests/render/test_split.py pin the partition
+# algebra on inputs whose answer is arithmetic; these pin the thing only a photograph can settle —
+# that the split lands on the corner a person can see.
+# ---------------------------------------------------------------------------
+
+# How far a seam may sit from the hand-labelled corner, as a fraction of the photo's width. A corner
+# is not a mathematically exact column — the label is traced by eye and the join has width in a real
+# photograph — but 2% of the width (26 px at 1280) is the point past which the wrong plane visibly
+# carries the accent Shade.
+MAXIMUM_SEAM_OFFSET_FRACTION = 0.02
+
+# How much of a detected plane must fall inside one labelled plane. Below this the split is not
+# wrong-by-a-margin, it is straddling a corner: one Shade over two walls, which is the failure the
+# whole ticket exists to prevent.
+MINIMUM_PLANE_PURITY = 0.85
+
+
+def plane_labels_for(photo: Path, shape: tuple[int, int]) -> list[np.ndarray]:
+    """The hand-labelled Wall Planes, ordered left to right, at the matte's resolution.
+
+    One boolean mask per labelled plane. Ordering is by the mean column of the plane's pixels, which
+    is the convention `data/fixtures/rooms/README.md` states and the order the service numbers
+    `wall_plane_N` in — so index 0 here is what the service should be calling `wall_plane_1`.
+    """
+
+    with Image.open(planes_label_path(photo)) as image:
+        rgb = image.convert("RGB").resize((shape[1], shape[0]), resample=Image.Resampling.NEAREST)
+    pixels = np.asarray(rgb, dtype=np.uint8)
+
+    colours = {tuple(colour) for colour in pixels.reshape(-1, 3).tolist()} - {(0, 0, 0)}
+    masks = [(pixels == np.asarray(colour, dtype=np.uint8)).all(axis=-1) for colour in colours]
+    return sorted(masks, key=lambda mask: float(np.flatnonzero(mask.any(axis=0)).mean()))
+
+
+def plane_mattes_of(client: TestClient, session_id: str) -> list[np.ndarray]:
+    """Every Wall Plane's matte, in the order the service lists them."""
+
+    described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
+    return [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+
+
+@pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)
+@pytest.mark.parametrize(
+    "photo", plane_labelled_rooms() or [None], ids=lambda p: p.stem if p else "none"
+)
+def test_the_wall_is_split_into_the_planes_the_photograph_has(
+    client: TestClient, photo: Path
+) -> None:
+    """As many Wall Planes as the photograph has walls — no more, no fewer.
+
+    Criterion 1, and the one a synthetic test cannot reach: a step edge drawn into an array splits
+    because it was drawn to. A photographed corner has a gentle shading valley, camera noise, and
+    furniture edges stronger than the corner itself, and whether the split survives that is a
+    question only a photograph answers.
+    """
+
+    session_id = prepare(client, photo)
+    mattes = plane_mattes_of(client, session_id)
+    labelled = plane_labels_for(photo, mattes[0].shape)
+
+    assert len(mattes) == len(labelled), (
+        f"{photo.name} has {len(labelled)} Wall Plane(s) by hand, and the pipeline found "
+        f"{len(mattes)} — an Accent Wall needs the walls to be separate surfaces"
+    )
+
+
+@pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)
+@pytest.mark.parametrize(
+    "photo", plane_labelled_rooms() or [None], ids=lambda p: p.stem if p else "none"
+)
+def test_no_wall_plane_straddles_a_corner(client: TestClient, photo: Path) -> None:
+    """Each Wall Plane belongs to one labelled wall, and no two planes claim the same one.
+
+    Counting planes is not enough: two planes split down the middle of one wall would count right
+    and be wrong in the way that matters, because the Dealer's accent Shade would land half on each
+    of two walls.
+    """
+
+    session_id = prepare(client, photo)
+    mattes = plane_mattes_of(client, session_id)
+    labelled = plane_labels_for(photo, mattes[0].shape)
+
+    claimed: dict[int, int] = {}
+    for index, matte in enumerate(mattes):
+        found = matte >= 0.5
+        overlaps = [float((found & mask).sum()) for mask in labelled]
+        total = sum(overlaps)
+        if total == 0:
+            raise AssertionError(
+                f"plane {index + 1} of {photo.name} covers none of the labelled wall"
+            )
+
+        best = int(np.argmax(overlaps))
+        purity = overlaps[best] / total
+        assert purity >= MINIMUM_PLANE_PURITY, (
+            f"plane {index + 1} of {photo.name} is {purity:.0%} inside labelled plane {best + 1} — "
+            "it straddles a corner, so one Shade would cover two walls"
+        )
+
+        assert best not in claimed, (
+            f"planes {claimed[best] + 1} and {index + 1} of {photo.name} both claim labelled "
+            f"plane {best + 1} — one wall has been split down its middle"
+        )
+        claimed[best] = index
+
+
+@pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)
+@pytest.mark.parametrize(
+    "photo", plane_labelled_rooms() or [None], ids=lambda p: p.stem if p else "none"
+)
+def test_the_seam_sits_where_the_corner_is(client: TestClient, photo: Path) -> None:
+    """The join between two planes lands on the corner, within a fraction of the width.
+
+    Measured per row and taken as a median, so a few rows where furniture or a curtain interrupts
+    the wall cannot decide the outcome. A seam a whole smoothing radius adrift paints a strip of one
+    wall in the other wall's Shade — a defect nobody would call a rounding error.
+    """
+
+    session_id = prepare(client, photo)
+    mattes = plane_mattes_of(client, session_id)
+    labelled = plane_labels_for(photo, mattes[0].shape)
+
+    if len(labelled) < 2:
+        pytest.skip(f"{photo.name} is labelled as one Wall Plane, so it has no seam")
+    assert len(mattes) == len(labelled), (
+        f"{photo.name}: {len(mattes)} planes found against {len(labelled)} labelled, so there is "
+        "no seam to compare — see the plane-count test"
+    )
+
+    height, width = mattes[0].shape
+    tolerance = max(1.0, width * MAXIMUM_SEAM_OFFSET_FRACTION)
+
+    # The right-hand edge of the leftmost plane, row by row, in the label and in what was found.
+    offsets = []
+    for row in range(height):
+        in_label = np.flatnonzero(labelled[0][row])
+        in_matte = np.flatnonzero(mattes[0][row] >= 0.5)
+        if in_label.size and in_matte.size:
+            offsets.append(abs(int(in_matte[-1]) - int(in_label[-1])))
+
+    assert offsets, f"{photo.name}: the leftmost plane and its label never share a row"
+    median_offset = float(np.median(offsets))
+    assert median_offset <= tolerance, (
+        f"the seam in {photo.name} sits {median_offset:.0f} px from the labelled corner, "
+        f"more than the {tolerance:.0f} px allowed at this width"
+    )
+
+
+@pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)
+@pytest.mark.parametrize(
+    "photo", plane_labelled_rooms() or [None], ids=lambda p: p.stem if p else "none"
+)
+def test_no_pixel_belongs_to_two_wall_planes(client: TestClient, photo: Path) -> None:
+    """Criteria 3 and 4: the planes are a partition, so nothing composites twice.
+
+    A double-claimed pixel is not an abstract violation — it is a dark seam down the middle of a
+    repainted room, because the blend runs over it once per plane.
+    """
+
+    session_id = prepare(client, photo)
+    mattes = plane_mattes_of(client, session_id)
+
+    total = np.sum(mattes, axis=0)
+    # 1/255 of slack: each matte crossed the wire as an 8-bit PNG, so a matte that was exactly 1.0
+    # comes back as 1.0 and two that were 0.5 need not sum to precisely one.
+    assert float(total.max()) <= 1.0 + (1.0 / 255.0), (
+        f"a pixel in {photo.name} is claimed {float(total.max()):.3f} times over — "
+        "it would be composited twice, leaving a dark seam"
+    )
