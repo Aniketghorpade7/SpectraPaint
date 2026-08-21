@@ -15,20 +15,34 @@ in a photograph of a corner is three things that coincide:
 * a **shading-gradient reversal** (each wall grows darker toward the corner,
   so the horizontal luminance gradient changes sign there)
 
-Implementation:
+"Coincide" is the operative word, and it is what the implementation checks.
+Each cue is computed as a signal over columns of the eroded wall interior:
 
-* ``energy[x] = mean |dL/dx| over interior rows of column x`` — the
-  vertical-edge cue. Computed on raw luminance, thresholded on unsmoothed
-  prominence (not a heavily smoothed absolute) so a narrow corner is not
-  diluted by its neighbours.
-* ``valley[x] = median luminance per column`` — the shading cue. A corner
-  is a dark valley where the median dips, or a step where two paints meet.
-  This cue is **primary**: a column with a clear valley/step is kept even
-  when its edge energy is modest (the same-colour shading-only archetype),
-  while a column with high energy but no valley (curtain, furniture edge)
-  is rejected.
+* ``energy[x]`` — mean ``|dL/dx|`` over the interior rows of column x. The
+  vertical-edge cue, on raw luminance: a corner is often only a few pixels
+  wide and smoothing before thresholding dilutes it away.
+* ``valley[x]`` — how far the column's median luminance sits below the
+  brightest column near it. The shading cue at a point.
+* ``reversal[x]`` — the smoothed column median's slope to the right of x
+  minus its slope to the left, over a window either side. The shading cue as
+  the ticket words it: each wall grows darker toward the corner, so the
+  horizontal gradient changes sign there. A step edge (a door, a picture
+  frame) has no reversal; a corner does.
 
-Peaks become seams; seams become a hard partition of the original Alpha Matte.
+No single cue survives a real photograph. On a real unoccluded corner the
+strongest column energy in the whole wall sits two pixels from the corner while
+no single column is a clean median minimum; on a corner behind hanging clothes
+the deepest valley is the corner but the strongest reversal is a curtain fold;
+on a night photograph with no second plane at all, each cue has a confident
+strongest column and they point at three different places.
+
+So a seam is where **at least two cues agree**: peaks are found per cue,
+non-maximum suppressed, and grouped by proximity. A group carrying two or more
+distinct cues is a corner; a group carrying one is texture. Where the group has
+an energy peak, that column is the seam, because the edge localises the corner
+more sharply than a shading cue can.
+
+Seams become a hard partition of the original Alpha Matte.
 
 Partition guarantees:
 
@@ -67,25 +81,57 @@ _EROSION_FRACTION = 0.01
 _VALLEY_RADIUS_FRACTION = 0.15
 # Peak prominence as fraction of the global maximum. A secondary texture ridge
 # at 20% of the main corner must not split the wall again.
-_PROMINENCE_FRACTION = 0.25
 # Interior test: a column must have this share of its rows as interior wall
 # to be considered, or it is mostly window/furniture gap.
 _MIN_COLUMN_COVERAGE = 0.08
-# Maximum seams to emit (3 planes needs 2 seams). Typical photo has 2-3 planes.
-_MAX_SEAMS = 2
-# Energy floors. _ENERGY_FLOOR is the strong-edge threshold; _ENERGY_FLOOR_LOW
-# is the permissive floor used when a clear valley/step is present (the
-# same-colour shading-only corner has raw ≈0.008 but a deep valley).
-_ENERGY_FLOOR = 0.010
-_ENERGY_FLOOR_LOW = 0.004
-# Valley / step thresholds on a 0-1 luminance scale. Gentle even light
-# (empty-corner) has a shallow valley ~0.015 and step ~0.02, so the floor
-# must sit just above striped wallpaper (0.007).
-_VALLEY_DEPTH_FRACTION = 0.008
-_STEP_FRACTION = 0.015
+
+# How many seams may be emitted. One, for now, which is two Wall Planes — the
+# common room. Rooms with three visible walls exist and this is the number to
+# raise, but not before there are fixtures with three labelled planes to raise
+# it against: on the three rooms in data/fixtures/rooms a second seam is always
+# a curtain fold or a stretch of wall the matte wrongly claimed (#31), never a
+# third wall, so allowing two would split a two-wall room into three.
+_MAX_SEAMS = 1
+
+# How close two cues must land to count as the same corner, as a fraction of
+# photo width. Wide enough that an edge and a shading valley either side of the
+# same corner agree (they sat 16 px apart on the unoccluded fixture, 19 on the
+# occluded one), narrow enough that a corner and a curtain fold do not.
+_CUE_AGREEMENT_FRACTION = 0.03
+
+# How many distinct cues must agree before a column is called a corner. Two, so
+# a lone strong edge (a wardrobe, a door frame) does not split a wall, and a
+# lone shading dip (a shadow, a stain) does not either.
+_MINIMUM_AGREEING_CUES = 2
+
+# Window either side of a column over which the median's slope is measured for
+# the reversal cue, as a fraction of width. A corner's shading valley is
+# rounded over tens of pixels, so the slopes either side are what identifies it;
+# the single darkest column is noise-dominated and moves photo to photo.
+_SLOPE_WINDOW_FRACTION = 0.03
+
+# Cue floors, below which a peak is not evidence of anything. A flat wall's
+# signals are all zero, and these are what keep it one plane. Measured on the
+# fixtures: at a real corner energy was 0.0065-0.0085 and reversal 0.0024-0.0085,
+# against 0.0003 and below for texture ripples on the same walls.
+_ENERGY_FLOOR = 0.004
+_VALLEY_DEPTH_FLOOR = 0.030
+_REVERSAL_FLOOR = 0.001
+
+# A note carried over from the two commits this rewrite lands on top of (5377335, 99ac5f8), which
+# lowered a valley floor of 0.030 to 0.008 to catch `empty-corner`: the finding was right — that
+# corner's shading dip really is shallow, roughly 0.010 measured their way — and lowering the floor
+# alone could not reach it, because the wallpaper guard discarded the photograph before any floor
+# was consulted (difficulty 15). The valley floor here reads higher (0.030) because this cue is
+# measured against the brightest column nearby rather than as a step, which puts the same corner at
+# 0.079, and because it no longer decides alone: two cues must agree.
 # Small smoothing for the median profile, to quieten single-column texture
 # without diluting a narrow corner. Fixed radius in pixels, not wall-fraction.
 _MEDIAN_SMOOTH_RADIUS = 3
+
+# How many peaks per cue are considered. Three: a corner, and two chances for
+# the photograph's loudest distractions to be ranked above it.
+_PEAKS_PER_CUE = 3
 
 
 def _column_energy(luminance: np.ndarray, interior: np.ndarray) -> np.ndarray:
@@ -141,11 +187,124 @@ def _fill_nans_nearest(arr: np.ndarray) -> np.ndarray:
     return filled
 
 
+def _valley_signal(
+    smoothed_median: np.ndarray,
+    wall_left: int,
+    wall_right: int,
+    wall_width: int,
+) -> np.ndarray:
+    """How far each column's median luminance sits below the brightest column near it.
+
+    The shading cue measured at a point rather than as a shape: a corner is darker than the wall
+    either side of it. Kept alongside the reversal cue because the two fail differently — a corner
+    lit evenly from one side has a weak valley and a clear reversal, and a corner in a room lit from
+    both sides has the opposite.
+    """
+
+    radius = max(2, round(wall_width * _VALLEY_RADIUS_FRACTION))
+    valley = np.zeros_like(smoothed_median, dtype=np.float32)
+    for x in range(wall_left + 1, wall_right - 1):
+        near_from, near_to = max(wall_left, x - radius), min(wall_right - 1, x + radius)
+        neighbourhood = smoothed_median[near_from : near_to + 1]
+        if neighbourhood.size:
+            valley[x] = max(0.0, float(np.nanmax(neighbourhood)) - float(smoothed_median[x]))
+    return valley
+
+
+def _reversal_signal(
+    smoothed_median: np.ndarray,
+    wall_left: int,
+    wall_right: int,
+    window: int,
+) -> np.ndarray:
+    """Shading-gradient reversal per column: slope to the right minus slope to the left.
+
+    Positive where the wall stops darkening and starts brightening, which is what a corner does to
+    a horizontal luminance profile and what a step edge — a door, a picture frame, the join between
+    two paints on one flat wall — does not. Slopes are least-squares fits over ``window`` columns
+    either side, because a corner's valley is rounded over tens of pixels: its single darkest column
+    is noise, while the slopes either side of it are stable.
+    """
+
+    reversal = np.zeros_like(smoothed_median, dtype=np.float32)
+    for x in range(wall_left + 1, wall_right - 1):
+        left_from, left_to = max(wall_left, x - window), x
+        right_from, right_to = x + 1, min(wall_right, x + 1 + window)
+        if left_to - left_from < 3 or right_to - right_from < 3:
+            continue
+        left = smoothed_median[left_from:left_to]
+        right = smoothed_median[right_from:right_to]
+        slope_left = float(np.polyfit(np.arange(left.size), left, 1)[0])
+        slope_right = float(np.polyfit(np.arange(right.size), right, 1)[0])
+        reversal[x] = max(0.0, slope_right - slope_left)
+    return reversal
+
+
+def _cue_peaks(
+    signal: np.ndarray,
+    low: int,
+    high: int,
+    floor: float,
+    min_separation: int,
+) -> list[int]:
+    """The strongest few local maxima of one cue, non-maximum suppressed.
+
+    Suppression before anything else is the point. Counting every dip or ripple is what made a
+    photograph of a plain wall look like striped wallpaper: a real median-luminance profile has
+    ten or twenty local minima, and only their strongest, well-separated few are candidates for
+    being a corner.
+    """
+
+    candidates = [
+        x
+        for x in range(low + 1, high - 1)
+        if float(signal[x]) >= floor
+        and float(signal[x]) >= float(signal[x - 1])
+        and float(signal[x]) >= float(signal[x + 1])
+    ]
+    candidates.sort(key=lambda x: float(signal[x]), reverse=True)
+
+    kept: list[int] = []
+    for x in candidates:
+        if all(abs(x - other) >= min_separation for other in kept):
+            kept.append(x)
+        if len(kept) >= _PEAKS_PER_CUE:
+            break
+    return kept
+
+
+def _agreeing_groups(
+    peaks: dict[str, list[int]],
+    tolerance: int,
+) -> list[dict[str, int]]:
+    """Group peaks from different cues that land close enough to be the same corner.
+
+    One entry per group, keyed by cue name, so a group's size is the number of cues that agree and
+    its members say where each of them put the corner.
+    """
+
+    groups: list[dict[str, int]] = []
+    for cue, columns in peaks.items():
+        for column in columns:
+            for group in groups:
+                centre = sum(group.values()) / len(group)
+                if abs(centre - column) <= tolerance and cue not in group:
+                    group[cue] = column
+                    break
+            else:
+                groups.append({cue: column})
+    return groups
+
+
 def _find_seams(
     photo_u8: np.ndarray,
     coverage: np.ndarray,
 ) -> list[int]:
-    """Vertical seam columns, sorted, possibly empty."""
+    """Vertical seam columns, sorted, possibly empty.
+
+    A seam is a column where at least ``_MINIMUM_AGREEING_CUES`` of the three cues agree — see the
+    module docstring for why no single one of them is enough on a photograph.
+    """
 
     height, width = coverage.shape
     wall_interior_mask = coverage >= 0.5
@@ -166,196 +325,76 @@ def _find_seams(
     if wall_width < max(10, width * 0.15):
         return []
 
+    # A seam is only considered where both sides could be a plane at all, rather than where a
+    # margin from the frame edge allows. A return wall is normally a narrow strip near the edge —
+    # the geometry a side-fraction margin excludes structurally — so the test is plane viability.
+    min_plane_width = max(1, round(wall_width * _MIN_PLANE_WIDTH_FRACTION))
+    low = wall_left + min_plane_width
+    high = wall_right - min_plane_width
+    if high - low < 3:
+        return []
+
     luminance = luminance_of(photo_u8)
-    energy = _column_energy(luminance, interior)
-    col_median = _column_median(luminance, interior)
+    energy = np.nan_to_num(_column_energy(luminance, interior))
+    column_median = _column_median(luminance, interior)
+    smoothed_median = _smooth_1d(
+        np.nan_to_num(_fill_nans_nearest(column_median), nan=0.5), _MEDIAN_SMOOTH_RADIUS
+    )
 
-    # Restrict to wall span for peak search; outside span energy is zeroed
-    # only for thresholding, not for median (which stays NaN there).
-    span = np.zeros(width, dtype=bool)
-    span[wall_left:wall_right] = True
+    slope_window = max(4, round(width * _SLOPE_WINDOW_FRACTION))
+    valley = _valley_signal(smoothed_median, wall_left, wall_right, wall_width)
+    reversal = _reversal_signal(smoothed_median, wall_left, wall_right, slope_window)
 
-    # Smoothed median for valley / step detection (small radius, not wall-fraction).
-    filled_median = _fill_nans_nearest(col_median)
-    # Where still NaN (sparse), fill with neutral 0.5 so smoothing does not pull extremes.
-    filled_median = np.nan_to_num(filled_median, nan=0.5)
-    smoothed_median = _smooth_1d(filled_median, _MEDIAN_SMOOTH_RADIUS)
-
-    # Raw energy is primary — do NOT heavily smooth it before thresholding.
-    # A narrow corner (1-2 px) would be diluted 25× by a 2%-width box (51 px at 1280).
-    max_energy = float(np.nanmax(energy[span])) if np.any(span) else 0.0
-    # At least one cue must be clearly present.
-    # Keep a very low permissive floor when valley is strong.
-    if max_energy < _ENERGY_FLOOR_LOW:
-        # No vertical edge at all — only a valley could still be a corner if
-        # shading alone is present, but check that a valley exists.
-        # Quick valley check: does any column dip sufficiently?
-        valley_depth_global = 0.0
-        for x in range(wall_left + 1, wall_right - 1):
-            if not span[x] or np.isnan(col_median[x]):
-                continue
-            nb = max(2, round(wall_width * _VALLEY_RADIUS_FRACTION))
-            left = max(wall_left, x - nb)
-            right = min(wall_right - 1, x + nb)
-            neighbourhood = smoothed_median[left : right + 1]
-            if neighbourhood.size == 0:
-                continue
-            valley_depth_global = max(
-                valley_depth_global, float(np.nanmax(neighbourhood) - smoothed_median[x])
-            )
-        if valley_depth_global < _VALLEY_DEPTH_FRACTION:
-            return []
-
-    # Find local maxima in raw energy (strict > neighbours), with prominence.
-    threshold = max_energy * _PROMINENCE_FRACTION
-    # Also consider valley-driven candidates that may have modest energy.
-    # So first collect energy peaks...
-    energy_candidates: list[tuple[float, int]] = []
-    for x in range(wall_left + 1, wall_right - 1):
-        if not span[x]:
-            continue
-        val = float(energy[x])
-        if not (val > float(energy[x - 1]) and val > float(energy[x + 1])):
-            continue
-        if val < threshold and val < _ENERGY_FLOOR_LOW:
-            continue
-        energy_candidates.append((val, x))
-
-    valley_candidates: list[tuple[float, int]] = []  # (valley_depth, x)
-    for x in range(wall_left + 1, wall_right - 1):
-        if not span[x] or np.isnan(smoothed_median[x]):
-            continue
-        if (
-            smoothed_median[x] >= smoothed_median[x - 1]
-            or smoothed_median[x] >= smoothed_median[x + 1]
-        ):
-            continue
-        nb = max(2, round(wall_width * _VALLEY_RADIUS_FRACTION))
-        left = max(wall_left, x - nb)
-        right = min(wall_right - 1, x + nb)
-        neighbourhood = smoothed_median[left : right + 1]
-        max_nb = float(np.nanmax(neighbourhood))
-        depth = max_nb - float(smoothed_median[x])
-        if depth >= _VALLEY_DEPTH_FRACTION and (
-            float(energy[x]) >= _ENERGY_FLOOR_LOW or depth >= 0.060
-        ):
-            valley_candidates.append((depth, x))
-
-    # Promote valley score so a true shading valley outranks texture edges
-    # that happen to have a shallow local dip.
-
-    # Merge candidates: energy peaks filtered by valley/step presence
-    # Score each energy peak by valley depth / step, keep those where valley confirms edge
-    combined: dict[int, float] = {}  # x -> score
-    # Valley candidates contribute their depth as score
-    for depth, x in valley_candidates:
-        combined[x] = max(combined.get(x, 0.0), depth * 2.0)
-    for val, x in energy_candidates:
-        # Valley depth at this column
-        nb = max(2, round(wall_width * _VALLEY_RADIUS_FRACTION))
-        left = max(wall_left, x - nb)
-        right = min(wall_right - 1, x + nb)
-        neighbourhood = smoothed_median[left : right + 1]
-        max_nb = (
-            float(np.nanmax(neighbourhood)) if neighbourhood.size else float(smoothed_median[x])
-        )
-        depth = max_nb - float(smoothed_median[x])
-        # Step
-        left_med = float(np.nanmedian(smoothed_median[left:x])) if x > left else np.nan
-        right_med = (
-            float(np.nanmedian(smoothed_median[x + 1 : right + 1])) if x + 1 <= right else np.nan
-        )
-        step = (
-            abs(left_med - right_med) if not np.isnan(left_med) and not np.isnan(right_med) else 0.0
-        )
-        has_valley = depth >= _VALLEY_DEPTH_FRACTION
-        has_step = step >= _STEP_FRACTION
-        if has_valley or has_step:
-            # Step is the primary cue for evenly-lit corners (empty-corner),
-            # valley for shadowed ones; weight step higher to outrank texture
-            # valleys that happen to be deep but have no supporting step.
-            score = val + depth * 0.5 + step * 1.0
-            combined[x] = max(combined.get(x, 0.0), score)
-
-    if not combined:
+    min_separation = max(1, round(wall_width * _MIN_SEAM_SEPARATION_FRACTION))
+    peaks = {
+        "energy": _cue_peaks(energy, low, high, _ENERGY_FLOOR, min_separation),
+        "valley": _cue_peaks(valley, low, high, _VALLEY_DEPTH_FLOOR, min_separation),
+        "reversal": _cue_peaks(reversal, low, high, _REVERSAL_FLOOR, min_separation),
+    }
+    if not any(peaks.values()):
         return []
 
-    # Rank by score and keep only those close to the strongest — a texture
-    # valley at 0.03 should not outrank a true corner at 0.08, and a second
-    # true corner should be kept only if its score is comparable.
-    ranked = sorted(combined.items(), key=lambda kv: kv[1], reverse=True)
-    if not ranked:
+    tolerance = max(4, round(width * _CUE_AGREEMENT_FRACTION))
+    groups = [
+        group
+        for group in _agreeing_groups(peaks, tolerance)
+        if len(group) >= _MINIMUM_AGREEING_CUES
+    ]
+    if not groups:
         return []
-    max_score = ranked[0][1]
-    # Keep at most two, but require the second to be at least half as strong
-    # as the first; otherwise the wall is single-plane with one texture dip.
-    filtered_ranked: list[tuple[int, float]] = []
-    for x, score in ranked:
-        if score < max_score * 0.55 and len(filtered_ranked) >= 1:
-            continue
-        filtered_ranked.append((x, score))
-        if len(filtered_ranked) >= _MAX_SEAMS:
-            break
-    ranked = filtered_ranked
-    # Enforce minimum separation (take strongest, suppress neighbours)
-    min_gap = max(1, round(wall_width * _MIN_SEAM_SEPARATION_FRACTION))
+
+    # Rank by how strongly the cues that agree speak, each normalised by the strongest value that
+    # cue reached anywhere in this wall — so the score compares "how much this corner stands out"
+    # rather than adding a luminance slope to a gradient magnitude.
+    signals = {"energy": energy, "valley": valley, "reversal": reversal}
+    strongest = {cue: max(float(signal[low:high].max()), 1e-9) for cue, signal in signals.items()}
+
+    def score(group: dict[str, int]) -> tuple[int, float]:
+        agreement = sum(
+            float(signals[cue][column]) / strongest[cue] for cue, column in group.items()
+        )
+        return len(group), agreement
+
+    groups.sort(key=score, reverse=True)
+
     chosen: list[int] = []
-    for x, _score in ranked:
-        if all(abs(x - c) >= min_gap for c in chosen):
-            chosen.append(x)
+    for group in groups:
+        # The energy peak localises a corner more sharply than a shading cue can — the edge is the
+        # corner line itself, while a valley is the shading around it — so it places the seam when
+        # the group has one.
+        column = group.get("energy", int(round(sum(group.values()) / len(group))))
+        if all(abs(column - other) >= min_separation for other in chosen):
+            chosen.append(column)
         if len(chosen) >= _MAX_SEAMS:
             break
-    chosen.sort()
 
-    # Area-based validation will happen in the caller, but early-reject seams
-    # that would create a sliver plane below area threshold (replaces side-fraction).
-    # We do a quick width check here to avoid a seam 2 px from the edge that
-    # would be merged away anyway.
-    if chosen:
-        # Simulate bounds to check area
-        seams_sorted = sorted(chosen)
-        bounds: list[tuple[int, int]] = []
-        prev = 0
-        for seam in seams_sorted:
-            bounds.append((prev, seam))
-            prev = seam
-        bounds.append((prev, width))
-        # Estimate area per plane from coverage span (proxy: width fraction * mean coverage)
-        total_wall_pixels = float(np.count_nonzero(coverage >= 0.5))
-        if total_wall_pixels == 0:
-            total_wall_pixels = float(np.count_nonzero(coverage > 0.05))
-        filtered: list[int] = []
-        for idx, seam in enumerate(seams_sorted):
-            # Left plane width vs right — check if either neighbour would be sliver
-            left_bound = bounds[idx]
-            right_bound = bounds[idx + 1]
-            left_width = left_bound[1] - left_bound[0]
-            right_width = right_bound[1] - right_bound[0]
-            # Width fractions
-            left_frac_w = left_width / max(1, wall_width)
-            right_frac_w = right_width / max(1, wall_width)
-            # Rough area: width * height * mean coverage in that slice (approx)
-            # Use coverage mean as proxy; if either side is below width and area thresholds, the seam is too close to edge  # noqa: E501
-            if (
-                left_frac_w < _MIN_PLANE_WIDTH_FRACTION
-                and left_width < wall_width * _MIN_PLANE_WIDTH_FRACTION
-            ):
-                # Left sliver — only keep seam if left slice still has meaningful wall area
-                left_slice = coverage[:, left_bound[0] : left_bound[1]]
-                left_area = float(np.count_nonzero(left_slice >= 0.5))
-                if left_area / max(1, total_wall_pixels) < _MIN_PLANE_AREA_FRACTION:
-                    continue
-            if right_frac_w < _MIN_PLANE_WIDTH_FRACTION:
-                right_slice = coverage[:, right_bound[0] : right_bound[1]]
-                right_area = float(np.count_nonzero(right_slice >= 0.5))
-                if right_area / max(1, total_wall_pixels) < _MIN_PLANE_AREA_FRACTION:
-                    # Seam too close to right edge creating sliver — drop this seam, keep stronger
-                    # Instead of dropping seam outright, we let the merge stage handle it; keep seam for now  # noqa: E501
-                    pass
-            filtered.append(seam)
-        chosen = filtered
-
-    return chosen
+    logger.debug(
+        "seam cues: peaks=%s groups=%s chosen=%s",
+        peaks,
+        [sorted(group.items()) for group in groups],
+        chosen,
+    )
+    return sorted(chosen)
 
 
 def split_alpha_into_planes(
