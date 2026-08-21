@@ -33,14 +33,34 @@ function invokeRender(
   sender: FakeSender,
   sessionId: unknown,
   shadeCode: unknown,
+  mode: unknown = undefined,
 ): Promise<RenderResult> {
-  return (
-    handlers.render as (
-      event: { sender: FakeSender },
-      sessionId: unknown,
-      shadeCode: unknown,
-    ) => Promise<RenderResult>
-  )({ sender }, sessionId, shadeCode);
+  const handler = handlers.render as (
+    event: { sender: FakeSender },
+    sessionId: unknown,
+    shadeCode: unknown,
+    mode: unknown,
+  ) => Promise<RenderResult>;
+  return mode === undefined ? handler({ sender }, sessionId, shadeCode) : handler({ sender }, sessionId, shadeCode, mode);
+}
+
+function mockPlanesThenRender(planeIds: string[] = ['wall_plane_1']) {
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes('/planes') && (!init || init.method === undefined || init.method === 'GET')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ planes: planeIds.map((id) => ({ plane_id: id })) }),
+      } as unknown as Response;
+    }
+    // renders POST
+    return {
+      ok: true,
+      status: 201,
+      arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
+    } as unknown as Response;
+  });
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -111,11 +131,7 @@ describe('registerRenderBridge', () => {
   });
 
   it('POSTs the assignment to the session and returns the repaint as a data URL', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 201,
-      arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
-    });
+    mockPlanesThenRender(['wall_plane_1']);
 
     const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, 'AP-2140');
 
@@ -124,24 +140,60 @@ describe('registerRenderBridge', () => {
       imageDataUrl: 'data:image/png;base64,iVBORw==',
     });
 
-    const call = fetchMock.mock.calls[0] as [string, RequestInit];
-    const [url, init] = call;
+    // First call is planes, second is renders
+    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [string, RequestInit];
+    const [url, init] = renderCall;
     expect(url).toBe(`http://127.0.0.1:1/sessions/${VALID_SESSION_ID}/renders`);
     expect(init.method).toBe('POST');
     expect(init.headers).toMatchObject({ Authorization: 'Bearer test-secret' });
     expect(JSON.parse(init.body as string)).toEqual({
       assignments: { wall_plane_1: 'AP-2140' },
+      mode: 'realistic',
     });
   });
 
-  it('returns the service error body as-is so the UI can show it', async () => {
+  it('paints every plane when a single Shade Code is given', async () => {
+    mockPlanesThenRender(['wall_plane_1', 'wall_plane_2']);
+
+    const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, 'AP-2140');
+
+    expect(result.status).toBe('ready');
+    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [string, RequestInit];
+    expect(JSON.parse((renderCall[1].body as string)).assignments).toEqual({
+      wall_plane_1: 'AP-2140',
+      wall_plane_2: 'AP-2140',
+    });
+  });
+
+  it('posts a per-plane map for an Accent Wall', async () => {
     fetchMock.mockResolvedValue({
-      ok: false,
-      status: 404,
-      json: async () => ({
-        code: 'shade_not_found',
-        message: 'That Shade Code is not in this Catalogue. Please check the code on the chip.',
-      }),
+      ok: true,
+      status: 201,
+      arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
+    } as unknown as Response);
+
+    const assignments = { wall_plane_1: 'PS-1001', wall_plane_2: 'PS-2001' };
+    const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, assignments);
+
+    expect(result.status).toBe('ready');
+    const call = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(call[1].body as string)).toEqual({ assignments, mode: 'realistic' });
+  });
+
+  it('returns the service error body as-is so the UI can show it', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('/planes')) {
+        return { ok: true, status: 200, json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }) } as unknown as Response;
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({
+          code: 'shade_not_found',
+          message: 'That Shade Code is not in this Catalogue. Please check the code on the chip.',
+        }),
+      } as unknown as Response;
     });
 
     const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, 'NOPE-0000');
@@ -154,7 +206,12 @@ describe('registerRenderBridge', () => {
   });
 
   it('turns an unparseable error body into a generic failure, never a dead end', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => null });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/planes')) {
+        return { ok: true, status: 200, json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }) } as unknown as Response;
+      }
+      return { ok: false, status: 500, json: async () => null } as unknown as Response;
+    });
 
     const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, 'AP-2140');
 

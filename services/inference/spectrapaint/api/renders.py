@@ -34,14 +34,7 @@ from spectrapaint.api.preparation import PreparedPhoto
 from spectrapaint.api.sessions import require_photo
 from spectrapaint.catalogue import Catalogue
 from spectrapaint.render.colour import lab_to_linear_rgb
-from spectrapaint.render.engine import (
-    composite_linear,
-    estimate_base_colour,
-    estimate_light_tint,
-    light_map_of,
-    new_wall_of,
-)
-from spectrapaint.render.luts import encode_srgb
+from spectrapaint.render.engine import estimate_light_tint, render_many
 from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["renders"])
@@ -101,17 +94,10 @@ async def create_render(
 
     targets = _assignments(prepared, body.assignments)
 
-    # The room's light colour — one estimate for the whole photo, not per
-    # plane. The illuminant cancels when dividing by Base Colour, so what is
-    # wanted back is the room's cast (spec, "The render engine").
     light_tint = estimate_light_tint(prepared.linear) if body.mode == "realistic" else _NEUTRAL_TINT
 
-    # Composite in linear RGB. Each Wall Plane is an exclusive partition, so
-    # alphas are disjoint and the order of blending does not matter. We
-    # iterate, keeping the result in linear space and encoding once at the
-    # end.
-    result_linear = prepared.linear.copy()
-
+    # Build per-plane linear targets; the maths lives in render/ (conventions §3)
+    plane_targets: list[tuple[np.ndarray, np.ndarray]] = []
     for plane, shade_code in targets:
         shade = _catalogue(request).find_by_code(shade_code)
         if shade is None:
@@ -120,22 +106,12 @@ async def create_render(
                 code=SHADE_NOT_FOUND,
                 message=_MESSAGE_SHADE_NOT_FOUND,
             )
-
         target_shade = lab_to_linear_rgb(
             np.asarray([shade.lab.l, shade.lab.a, shade.lab.b], dtype=np.float64)
         )
+        plane_targets.append((plane.alpha, target_shade))
 
-        # Base Colour per Wall Plane, measured inside *that* plane's matte.
-        # For a room with one existing paint the estimates are near-identical;
-        # for a pre-existing Accent Wall each plane keeps its own (spec).
-        base_colour = estimate_base_colour(prepared.linear, plane.alpha)
-        light_map = light_map_of(prepared.linear, base_colour)
-        new_wall = new_wall_of(light_map, target_shade, light_tint)
-        result_linear = composite_linear(result_linear, plane.alpha, new_wall)
-
-    # Single encode at the end, over the composited linear result.
-    encoded = encode_srgb(np.ascontiguousarray(result_linear))
-    rendered = (encoded * 255.0 + 0.5).astype(np.uint8)
+    rendered = render_many(prepared.linear, plane_targets, light_tint)
 
     png_bytes = _encode_png(rendered)
     return Response(

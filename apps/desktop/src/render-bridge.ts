@@ -23,12 +23,15 @@ import type { Sidecar } from './sidecar';
 const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
 
 /**
- * The stub Wall Plane every render colours until the segmentation tickets produce real planes.
+ * Fallback plane id when the plane list cannot be read. The service has
+ * always spoken in assignments keyed by wall_plane_N; after issue #7 the
+ * photo may have wall_plane_1..N. The bridge discovers the ids at render
+ * time so the Dealer can colour an Accent Wall without the renderer ever
+ * holding the secret or the wire shape.
  *
- * Written twice, deliberately noted: the service holds its own copy in
- * `services/inference/spectrapaint/api/renders.py`, and nothing type-checks across that boundary.
- * Change both or every repaint answers `422 malformed_request` with both test suites still green
- * (implementation-decisions.md §20).
+ * The literal is kept as a fallback only — every successful path fetches
+ * the photo's own planes and assigns the Shade to each of them. A per-plane
+ * assignment map (Accent Wall) is also accepted directly.
  */
 const STUB_WALL_PLANE_ID = 'wall_plane_1';
 
@@ -43,17 +46,40 @@ export function registerRenderBridge(
 ): void {
   ipcMain.handle(
     RENDER_CHANNEL,
-    async (event, sessionId: unknown, shadeCode: unknown): Promise<RenderResult> => {
+    async (
+      event,
+      sessionId: unknown,
+      shadeCodeOrAssignments: unknown,
+      mode: unknown = 'realistic',
+    ): Promise<RenderResult> => {
       if (!isTrustedSender(event.sender)) {
         return refusal('unauthorised');
       }
 
-      if (
-        typeof sessionId !== 'string' ||
-        !SESSION_ID_PATTERN.test(sessionId) ||
-        typeof shadeCode !== 'string' ||
-        shadeCode.length === 0
+      if (typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) {
+        return refusal('malformed_request');
+      }
+
+      // Two shapes: a Shade Code string to paint every plane, or a full
+      // assignments map for an Accent Wall. The generic guard keeps the
+      // channel from being used to probe arbitrary paths.
+      let assignments: Record<string, string> | null = null;
+      if (typeof shadeCodeOrAssignments === 'string') {
+        if (shadeCodeOrAssignments.length === 0) return refusal('malformed_request');
+      } else if (
+        shadeCodeOrAssignments !== null &&
+        typeof shadeCodeOrAssignments === 'object' &&
+        !Array.isArray(shadeCodeOrAssignments)
       ) {
+        const entries = Object.entries(shadeCodeOrAssignments as Record<string, unknown>);
+        if (
+          entries.length === 0 ||
+          entries.some(([k, v]) => typeof k !== 'string' || typeof v !== 'string' || k.length === 0 || (v as string).length === 0)
+        ) {
+          return refusal('malformed_request');
+        }
+        assignments = shadeCodeOrAssignments as Record<string, string>;
+      } else {
         return refusal('malformed_request');
       }
 
@@ -61,6 +87,29 @@ export function registerRenderBridge(
       if (!sidecar) {
         return refusal('service_unavailable');
       }
+
+      // Resolve which planes to paint. A string Shade Code means "paint every
+      // plane this photo has" — the bridge discovers the ids so the renderer
+      // never holds the secret. A map is used as-is (per-plane Accent Wall).
+      if (assignments === null) {
+        const shadeCode = shadeCodeOrAssignments as string;
+        try {
+          const planesResp = await fetch(`${sidecar.baseUrl}/sessions/${sessionId}/planes`, {
+            headers: { Authorization: `Bearer ${sidecar.secret}` },
+          });
+          if (planesResp.ok) {
+            const data = (await planesResp.json()) as { planes: { plane_id: string }[] };
+            const ids = data.planes.map((p) => p.plane_id).filter((id) => /^[a-z0-9_]{1,64}$/.test(id));
+            assignments = ids.length > 0 ? Object.fromEntries(ids.map((id) => [id, shadeCode])) : { [STUB_WALL_PLANE_ID]: shadeCode };
+          } else {
+            assignments = { [STUB_WALL_PLANE_ID]: shadeCode };
+          }
+        } catch {
+          assignments = { [STUB_WALL_PLANE_ID]: shadeCode };
+        }
+      }
+
+      const renderMode = mode === 'true_colour' ? 'true_colour' : 'realistic';
 
       let response: Response;
       try {
@@ -70,9 +119,7 @@ export function registerRenderBridge(
             Authorization: `Bearer ${sidecar.secret}`,
             'Content-Type': 'application/json',
           },
-          // The mode is the contract's default (realistic) for now; the two-modes toggle is ticket
-          // #8 and will add `mode` here, in this one place.
-          body: JSON.stringify({ assignments: { [STUB_WALL_PLANE_ID]: shadeCode } }),
+          body: JSON.stringify({ assignments, mode: renderMode }),
         });
       } catch (error) {
         // Never dead-end: the UI gets a result it can act on rather than a hanging promise.

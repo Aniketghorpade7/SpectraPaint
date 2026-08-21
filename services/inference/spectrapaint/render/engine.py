@@ -81,6 +81,36 @@ def render(
     return (encoded * 255.0 + 0.5).astype(np.uint8)
 
 
+def render_many(
+    linear_photo: np.ndarray,
+    plane_targets: list[tuple[np.ndarray, np.ndarray]],
+    light_tint: np.ndarray,
+) -> np.ndarray:
+    """Recolour several Wall Planes, each with its own Shade, in one image.
+
+    ``plane_targets`` is a list of ``(alpha, target_shade)`` where
+    ``target_shade`` is the Shade's linear RGB triple. Each plane's
+    Base Colour is measured inside *its own* matte (spec: a pre-existing
+    Accent Wall keeps its own), its Light Map derived from that, and the
+    planes are composited in the photo's left-to-right order. Alphas are an
+    exclusive partition, so the order does not matter and no pixel is
+    composited twice (no dark seam). All maths — including every per-plane
+    composite — runs in linear RGB; the single encode happens at the end
+    (issue #3 criterion 2). This keeps the maths in :mod:`spectrapaint.render`
+    (conventions.md §3) and the API thin.
+    """
+
+    result_linear = linear_photo.copy()
+    for alpha, target_shade in plane_targets:
+        base_colour = estimate_base_colour(linear_photo, alpha)
+        light_map = light_map_of(linear_photo, base_colour)
+        new_wall = new_wall_of(light_map, target_shade, light_tint)
+        result_linear = composite_linear(result_linear, alpha, new_wall)
+
+    encoded = encode_srgb(np.ascontiguousarray(result_linear))
+    return (encoded * 255.0 + 0.5).astype(np.uint8)
+
+
 # ---------------------------------------------------------------------------
 # Scene estimates. These turn a bare photo into the light-map inputs, so the
 # render endpoint can serve a Realistic / True Colour repaint from nothing but

@@ -900,3 +900,55 @@ other half: a green lane that checked nothing is worse than a red one, because i
 **Consequence:** the accuracy thresholds (IoU ≥ 0.60, shadowed-wall recall ≥ 0.80, non-wall coverage
 ≤ 0.20) are regression floors, not the measured evaluation §10 requires — and they are unverified
 against real rooms until the fixtures exist, which is difficulty 9.
+
+---
+
+## 30. Wall Planes are a hard vertical partition of the wall matte, found by shading valley + vertical edge
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** `spectrapaint/segmentation/split.py` turns the single wall Alpha Matte from `matte.wall_alpha` into
+one to three Wall Planes by a hard vertical cut. The detector is deliberately **valley-primary**:
+
+* per-column median luminance `valley[x] = median(L[interior[:,x]])` — a corner is a dark valley where each
+  wall darkens toward it (shading-gradient reversal, spec). A valley is a local minimum whose depth
+  `max_median(neighbourhood) - valley` exceeds `0.030`.
+* per-column vertical-edge energy `energy[x] = mean |dL/dx| over interior rows` — the corner's line and the
+  vanishing-line cue. Energy is measured on **raw** (unsmoothed) columns; a 2%-width box smooth would dilute a
+  1-2 px corner 25× (Room 2: raw 0.0238 → smoothed 0.0070, below the old `_ENERGY_FLOOR 0.015`).
+
+A column becomes a seam only when a valley **and** a supporting edge coincide, or when a strong step
+(`|median_left - median_right| ≥ 0.09`) coincides with an edge. The strongest valleys/edges are ranked by
+`depth*2.0` (valley) or `energy + depth*0.5 + step*0.3` and suppressed by `0.18·wall_width` separation. Striped
+wallpaper (many repeating valleys/edges) is rejected when valley count would otherwise be >4.
+
+Partition is hard: `plane_alpha = original_coverage * hard_mask[:, left:right]` — soft only where wall meets
+non-wall (the original matte's feather), crisp where wall meets wall. Every wall pixel belongs to exactly one
+plane, so `sum(planes) == original` and no pixel is composited twice (no dark seam). Degenerate slivers
+(`coverage < 0.005` or `< height*2` interior pixels) are **merged** into a neighbour rather than deleted, so no
+wall pixels are lost; a sliver below `MINIMUM_WALL_FRACTION 0.02` is merged and the partition check in
+`walls.planes_from` degrades to a single plane with a warning rather than an `assert` (which is stripped under
+`-O` and would surface as a 500).
+
+`walls.planes_from` now validates the partition and re-normalises ids to `wall_plane_1..N` left-to-right.
+`render.engine.render_many` keeps the maths in `render/` (conventions §3): per-plane `Base Colour` measured
+inside each plane's matte, per-plane Light Map, composite in linear RGB in left-to-right order, single
+`sRGB` encode at the end. `api/renders.py` builds `plane_targets = [(alpha, target_shade)]` and calls it; the
+`assignments` map already expressed an Accent Wall, now with 2-3 keys. `apps/desktop/src/render-bridge.ts`
+discovers plane ids via `GET /planes` and assigns the Shade to every plane (single-Shade tap) or posts a
+per-plane map (Accent Wall); the `wall_plane_1` literal is now a fallback only.
+
+**Why:** the first implementation measured only `mean |dL/dx|` and compared a heavily smoothed absolute to
+`0.015`, with a `15%` side-fraction margin. On two real rooms (678×452 three-plane studio, 1280×720 phone
+photo with corner at x≈80) it returned one plane: the smoothing diluted the true corner below the floor, and
+the margin excluded return walls that are `≈4%` of width by construction — photographing a room *is* narrow
+strips at the frame edge. Lowering the floor to `0.003` produced wardrobe and curtain edges (Room 1: 138, 348;
+Room 2: 218, 701) because `|dL/dx|` alone cannot tell a corner from a curtain. The valley is what separates them,
+so it was promoted from veto to primary. The side-fraction was replaced by a minimum plane **area**
+(`0.04` of wall area and `0.03` width) — a texture line near the edge leaves no material wall on one side,
+a real corner does.
+
+**Consequence:** seams are full-height vertical cuts only; a corner that stops at a doorway head is not
+representable — acceptable for V1 and stated as a limit. `PreparedPhoto.wall_alpha` (single-plane convenience)
+is now dead and will be removed when callers have migrated. `_MAX_SEAMS = 2` caps at three planes, the
+typical 2-3 the spec names; more would be further slivers, not walls.

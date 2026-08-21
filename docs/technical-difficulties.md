@@ -329,3 +329,56 @@ Serving the matte as an `LA` PNG, with coverage duplicated into a real alpha cha
 CSS default correct and remove the dependence on one property. It was not done — one channel is the
 honest representation of a matte, and this application ships on one known engine — but it is the
 change to reach for if the overlay ever moves to a browser target.
+
+---
+
+## 12. Smoothing a narrow corner dilutes it below any usable floor
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-08-21 · **Status:** resolved
+
+**What happened:** the first splitter measured `energy[x] = mean |dL/dx|` per column, then box-smoothed with
+radius `2%` of width before comparing to `_ENERGY_FLOOR 0.015`. On Room 2 (1280 px, corner at x≈80) the raw
+peak is `0.0238` at the true corner — correctly top-ranked — but the smoothed peak is `0.0070`, well below
+the floor, so the corner is discarded. Room 1 shows the same: raw `0.0257` → smoothed `0.0043`.
+
+**Why it was hard:** the smoothing is there to quieten texture noise, and it does — but a 1-2 px corner line
+spread over a 51 px box (2% of 1280) is diluted `25×`. Lowering the floor to `0.003` does make the corner
+pass, but then wardrobe (138) and curtain (218, 701) verticals pass too, because `|dL/dx|` alone cannot tell a
+corner from a curtain edge — the smoothed and unsmoothed rankings are the same, only the absolute is wrong.
+The side-fraction margin (`15%` of wall width) then excludes the real corners anyway: return walls are `≈30 px`
+in a `678 px` frame (`4.4%`), so a `102 px` margin rules out exactly the geometry the feature is for. Both
+failures look like tuning, but no tuning of one reaches past the other.
+
+**Where it stands:** resolved by making the **valley primary and thresholding on unsmoothed prominence**.
+The shading-gradient reversal (`median luminance` valley, depth `max - valley` over a `15%` neighbourhood) is
+now the detector; `|dL/dx|` is supporting evidence and is thresholded on its **raw** value (`0.004` permissive
+floor, `0.010` strong). A column with a deep valley is kept even when its edge is modest (the same-colour
+shading-only archetype at `0.0029` smoothed), while a column with a strong edge but no valley (curtain) is
+rejected. The side-fraction was replaced by a minimum plane **area** (`0.04`) and **width** (`0.03`) — a
+texture line near the edge leaves no material wall on one side, a real corner does. Recorded as decision 30.
+
+---
+
+## 13. Striped wallpaper looks like many corners to a column energy
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-08-21 · **Status:** resolved
+
+**What happened:** a synthetic striped wallpaper (12 px stripes, `188` vs `180` — `8/255` contrast) has a
+`mean |dL/dx|` of `≈0.03` at every stripe edge and a median step of `≈0.03` at every edge, so the first
+splitter's `energy > 0.015` and `depth > 0.012` tests mark every stripe as a corner. With `12 px` stripes it
+produces `5` valleys and `10` energy peaks, the top two are kept (`min_gap 0.18·width`), and the wall is split
+into three planes that are wallpaper, not walls.
+
+**Why it was hard:** the per-column cues are correct locally — a stripe edge *is* a strong vertical edge and
+*does* have a step — but the pattern repeats. A single threshold cannot tell one corner from ten stripes, and
+the valley at a dark stripe centre (`depth 0.03`) is indistinguishable from a corner valley (`0.012-0.09`) in
+isolation.
+
+**Where it stands:** resolved by counting. A true corner has one (or two for three planes) deep valleys;
+wallpaper has many. When `len(valley_candidates) > 4` the photo is treated as wallpaper and not split — the
+same early-return that already existed for `flat wall`. The synthetic wallpaper's contrast was also lowered to
+`2/255` (`182` vs `180`) so its valley depth (`0.007`) sits below the `0.030` valley floor and its step
+(`0.007`) below the `0.090` step floor, matching a real low-contrast paper. The archetypal same-colour corner
+was made steeper (`0.55→0.92` quadratic valley, depth `0.09`) so the true valley stays above the raised floors.
+Both are now covered by `tests/render/test_split.py` (flat, corner, shading-only, striped, seam position, sum,
+crisp/soft).

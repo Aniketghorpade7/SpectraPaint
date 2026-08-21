@@ -15,10 +15,10 @@ The modules, in pipeline order:
 | `semantic.py` | Labels the scene; returns the wall, the four named exclusions, and the wall confidence |
 | `prompts.py` | Turns that region into the point prompts that constrain SAM 2 |
 | `matte.py` | Runs the refiner and builds the soft matte — shadow restored, exclusions removed, boundary sharpened |
-| `walls.py` | Composes the above into Wall Planes, and decides when there is no wall to find |
+| `split.py` | Splits the wall matte into Wall Planes by vertical structure (edge + shading valley), hard partition — soft only wall↔non-wall, crisp wall↔wall |
+| `walls.py` | Composes the above into Wall Planes, validates the partition, and decides when there is no wall to find |
 
-One region for now: ticket #6 finds the wall, ticket #7 splits it into planes. `walls.py` already
-returns a list of Wall Planes with ids, so #7 lengthens a list rather than changing a shape.
+Ticket #7: `walls.planes_from` now returns `wall_plane_1..N` (typically 1-3) via `split.split_alpha_into_planes`; every wall pixel belongs to exactly one plane and the sum of planes equals the original matte (no dark seam). See `split.py` module docstring and `docs/implementation-decisions.md:30`.
 
 The SegFormer ADE20K checkpoints are non-commercial and are for development only.
 Replacement: [custom-wall-segmentation-model.md](../../../../docs/handoff/custom-wall-segmentation-model.md).

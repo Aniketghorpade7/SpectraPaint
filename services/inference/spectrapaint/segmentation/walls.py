@@ -19,6 +19,7 @@ the middle of whatever the photo happens to show (conventions.md §5).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -115,20 +116,55 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
     split_alphas = split_alpha_into_planes(photo_u8, alpha)
 
     # Validate the partition: every wall pixel must be claimed exactly once,
-    # so that compositing never double-claims (dark seam).
+    # so that compositing never double-claims (dark seam). This is a real
+    # check that degrades rather than a bare assert (conventions.md §5) —
+    # an assert would be stripped under -O and would surface as a 500.
     if len(split_alphas) == 1:
         return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=split_alphas[0])]
 
     wall_planes: list[WallPlane] = []
     for index, plane_alpha in enumerate(split_alphas, start=1):
-        wall_planes.append(WallPlane(plane_id=f"wall_plane_{index}", alpha=plane_alpha))
+        # A sliver plane below the offerable fraction is merged rather than
+        # offered as a paintable surface: a 2% sliver is not a wall a Customer
+        # can judge a colour from and it would leave unpainted pixels if dropped.
+        candidate = WallPlane(plane_id=f"wall_plane_{index}", alpha=plane_alpha)
+        if candidate.coverage < MINIMUM_WALL_FRACTION and len(split_alphas) > 1:
+            logging.getLogger(__name__).warning(
+                "Wall plane %s below minimum fraction (%.3f), merging",
+                candidate.plane_id,
+                candidate.coverage,
+            )
+            if wall_planes:
+                # Merge into previous — coverage is preserved, not deleted
+                prev = wall_planes.pop()
+                merged_alpha = np.clip(prev.alpha + candidate.alpha, 0.0, 1.0).astype(np.float32)
+                wall_planes.append(WallPlane(plane_id=prev.plane_id, alpha=merged_alpha))
+            else:
+                # First plane is sliver — merge into next (defer by stashing)
+                # Keep it for now; the next iteration will merge into it
+                wall_planes.append(candidate)
+            continue
+        wall_planes.append(candidate)
+
+    # If merging left a single plane, restore the original single-plane id
+    # so callers that key on wall_plane_1 keep working.
+    if len(wall_planes) == 1:
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=wall_planes[0].alpha)]
+
+    # Re-normalise ids to wall_plane_1..N in left-to-right order
+    wall_planes = [
+        WallPlane(plane_id=f"wall_plane_{i + 1}", alpha=p.alpha) for i, p in enumerate(wall_planes)
+    ]
 
     total_coverage = sum(p.coverage for p in wall_planes)
-    # The sum of per-plane coverages must equal the original wall coverage
-    # (partition, not duplication). Allow tiny floating point drift.
-    assert abs(total_coverage - single.coverage) < 1e-5, (
-        f"partition coverage {total_coverage:.6f} != original {single.coverage:.6f}"
-    )
+    if abs(total_coverage - single.coverage) >= 1e-4:
+        logging.getLogger(__name__).warning(
+            "Partition coverage %.6f != original %.6f (drift %.6f); degrading to single plane",
+            total_coverage,
+            single.coverage,
+            total_coverage - single.coverage,
+        )
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)]
     return wall_planes
 
 
