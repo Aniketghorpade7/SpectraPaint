@@ -59,6 +59,13 @@ _LABEL_WALL = 0.75
 _LABEL_NOT_WALL = 0.25
 
 
+# The suffixes a label carries. A photograph is anything in the directory that is not one of these,
+# which is the safe way round: a label form added later (ticket #30 added `.planes.png` to the
+# `.wall.png` that was here first) must not silently start being collected *as a photograph* and fed
+# through the pipeline as if it were a room.
+LABEL_SUFFIXES = (".wall.png", ".planes.png")
+
+
 def rooms() -> list[Path]:
     """Every fixture photograph on disk, in a stable order."""
     if not FIXTURE_DIR.is_dir():
@@ -66,7 +73,8 @@ def rooms() -> list[Path]:
     return sorted(
         path
         for path in FIXTURE_DIR.iterdir()
-        if path.suffix.lower() in {".jpg", ".jpeg", ".png"} and not path.name.endswith(".wall.png")
+        if path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        and not path.name.endswith(LABEL_SUFFIXES)
     )
 
 
@@ -75,12 +83,22 @@ def labelled_rooms() -> list[Path]:
     return [path for path in rooms() if label_path(path).is_file()]
 
 
+def plane_labelled_rooms() -> list[Path]:
+    """Fixture photographs that also have hand-labelled Wall Plane boundaries (ticket #30)."""
+    return [path for path in rooms() if planes_label_path(path).is_file()]
+
+
 def label_path(photo: Path) -> Path:
     return photo.with_suffix("").with_suffix(".wall.png")
 
 
+def planes_label_path(photo: Path) -> Path:
+    return photo.with_suffix("").with_suffix(".planes.png")
+
+
 NO_PHOTOS = "no room fixtures in data/fixtures/rooms — see its README"
 NO_LABELS = "no hand-labelled wall masks in data/fixtures/rooms — see its README"
+NO_PLANE_LABELS = "no hand-labelled Wall Plane masks in data/fixtures/rooms — see its README"
 
 
 @pytest.fixture
@@ -120,6 +138,25 @@ def matte_of(client: TestClient, session_id: str, plane_id: str) -> np.ndarray:
     with Image.open(io.BytesIO(response.content)) as image:
         assert image.mode == "L"
         return np.asarray(image, dtype=np.float32) / 255.0
+
+
+def wall_matte_of(client: TestClient, session_id: str) -> np.ndarray:
+    """Every Wall Plane's matte, unioned: the wall as a whole, however many planes it is in.
+
+    The accuracy checks below are claims about *the wall*, and `<name>.wall.png` labels the wall
+    rather than any one plane of it. Taking the first plane instead was correct while a photo had
+    exactly one (ticket #6) and becomes wrong the moment #7 splits it — one plane of three cannot
+    overlap the whole labelled wall, so the test would fail for a reason that has nothing to do
+    with whether the wall was found.
+
+    Maximum rather than sum because the planes are a partition: disjoint alphas, so the two agree
+    inside the wall, and maximum cannot exceed 1.0 if that ever stops being true.
+    """
+
+    described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
+    assert described, "the photo yielded no Wall Planes at all"
+    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+    return np.maximum.reduce(mattes)
 
 
 def labels_for(photo: Path, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -198,10 +235,7 @@ def test_the_wall_found_is_the_wall_that_is_there(client: TestClient, photo: Pat
     """Overlap against a hand-labelled wall, which is the only way to check this at all."""
 
     session_id = prepare(client, photo)
-    plane_id = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"][0][
-        "plane_id"
-    ]
-    matte = matte_of(client, session_id, plane_id)
+    matte = wall_matte_of(client, session_id)
 
     wall, not_wall = labels_for(photo, matte.shape)
     found = matte >= 0.5
@@ -231,10 +265,7 @@ def test_shadowed_wall_stays_wall(client: TestClient, photo: Path) -> None:
     """
 
     session_id = prepare(client, photo)
-    plane_id = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"][0][
-        "plane_id"
-    ]
-    matte = matte_of(client, session_id, plane_id)
+    matte = wall_matte_of(client, session_id)
 
     wall, _ = labels_for(photo, matte.shape)
     if not wall.any():
