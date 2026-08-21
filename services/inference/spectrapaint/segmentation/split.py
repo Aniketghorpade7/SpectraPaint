@@ -15,6 +15,15 @@ in a photograph of a corner is three things that coincide:
 * a **shading-gradient reversal** (each wall grows darker toward the corner,
   so the horizontal luminance gradient changes sign there)
 
+Two of those three are implemented as cues of their own. **Vanishing-line
+geometry is not**, and saying so here is the point: what stands in for it is
+that every cue is a per-column statistic, which inherently answers to structure
+running down the photograph and ignores structure running across it. That is
+weaker than fitting the room's vanishing lines and knowing where a corner must
+be — a skirting board's shadow and a corner are equally vertical-ish to this
+code. The ticket names the cue, this module approximates it, and a photograph
+where the approximation fails is the thing to add to data/fixtures/rooms.
+
 "Coincide" is the operative word, and it is what the implementation checks.
 Each cue is computed as a signal over columns of the eroded wall interior:
 
