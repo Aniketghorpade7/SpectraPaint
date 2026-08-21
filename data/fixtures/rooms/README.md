@@ -8,19 +8,40 @@ input where the answer is already known.
 
 ## What to add
 
-For each room, two files with the same stem:
+For each room, three files with the same stem:
 
 | File | What it is |
 |---|---|
 | `<name>.jpg` | The photograph, straight off the phone. No cropping, no correction. |
-| `<name>.wall.png` | The answer: **white where the wall is, black everywhere else.** |
+| `<name>.wall.png` | Where the wall is: **white wall, black everything else.** |
+| `<name>.planes.png` | Where one Wall Plane ends and the next begins: **one flat colour per plane, black for non-wall.** |
 
-The mask must be the same pixel dimensions as the photo. Anything mid-grey is treated as "don't
-count this pixel" — use it along a boundary you are genuinely unsure about, rather than guessing,
-because a wrong label is worse than an absent one.
+Both masks must be the same pixel dimensions as the photo. In `<name>.wall.png` anything mid-grey is
+treated as "don't count this pixel" — use it along a boundary you are genuinely unsure about, rather
+than guessing, because a wrong label is worse than an absent one.
+
+`<name>.planes.png` answers the question `<name>.wall.png` cannot: ticket #7 splits the wall into
+Wall Planes, and "how many, and where is the join" is not derivable from a single wall mask. Two
+conventions make it checkable rather than merely suggestive:
+
+* **Colour a plane only where `<name>.wall.png` is white.** A pixel nobody could label as wall
+  cannot be assigned to a plane either, so uncertain pixels are black here.
+* **Planes are ordered left to right by centroid**, which is the order the service numbers
+  `wall_plane_N` in. Plane 1 in the label is the plane the service calls `wall_plane_1`.
+
+Label a plane only where the photograph supports it. A return wall reduced to a sliver behind a
+curtain is not a paintable surface, and calling it a plane asserts something the photo cannot
+show — say so in `origin.md` instead.
 
 Drawing one takes about fifteen minutes in any editor with a lasso and a paint bucket: fill the
 wall white, invert, fill the rest black, save as PNG.
+
+The labels currently here were traced as polygons instead, and the polygons are kept in
+[`tools/fixtures/label_rooms.py`](../../../tools/fixtures/label_rooms.py) — run it to regenerate the
+PNGs after an edit. Either way is fine; polygons were chosen because a diff of them says what
+somebody decided about a photograph, where a diff of a PNG says nothing at all. That tool also grows
+a "don't count this" band along every traced boundary automatically, on the grounds that a line
+drawn by eye over a curtain fold is not accurate to the pixel.
 
 ## What makes a set worth having
 
@@ -41,8 +62,20 @@ collection effort, two deliverables.
 ## Consent
 
 Only rooms whose owner is happy for the photograph to live in this repository. Record whose room
-each one is in `origin.md` beside the files. A photograph of somebody's home is not test data first
-and a home second.
+each one is in [`origin.md`](./origin.md) beside the files. A photograph of somebody's home is not
+test data first and a home second.
+
+A photograph whose provenance is unknown — found on the internet, of nobody's room in particular —
+is not a shortcut past this. The licence gate and `origin.md` both need an answer.
+
+## What the tests currently expect
+
+`measured.toml` beside these files records what wall detection actually scores on each photograph,
+for the metrics where it falls short of the targets in `tests/api/test_walls.py`. It exists because
+the first real photographs showed the pipeline does not clear two of those targets, for a reason no
+threshold edit fixes (#31). Adding a photograph does not require adding an entry: a fixture with no
+entry is held to the target, which is the right default — entries are for known, tracked shortfalls,
+and the lane fails if one is still present after the pipeline catches up.
 
 ## If this directory is empty
 
