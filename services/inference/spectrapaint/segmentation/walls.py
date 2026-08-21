@@ -27,6 +27,7 @@ from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.matte import refiner_alpha, wall_alpha
 from spectrapaint.segmentation.prompts import prompts_for
 from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
+from spectrapaint.segmentation.split import split_alpha_into_planes
 
 # Shown to the Dealer as-is when a photo has no wall worth painting.
 MESSAGE_NO_WALL_FOUND = (
@@ -89,12 +90,7 @@ def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
 
 
 def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) -> list[WallPlane]:
-    """Refine the semantic region into Wall Planes — one, for this ticket.
-
-    The remaining two "no wall" checks live here. The prompt check is the stricter one: a wall too
-    thin to hold a point away from its own boundary cannot be prompted for without risking a mask
-    of the ceiling instead.
-    """
+    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7)."""
 
     prompts = prompts_for(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
@@ -105,13 +101,35 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
     refined = refiner_alpha(graphs, photo_u8, prompts)
     alpha = wall_alpha(photo_u8, regions, refined)
 
-    plane = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)
-    if plane.coverage < MINIMUM_WALL_FRACTION:
+    # Single-plane guard: the matte as a whole must still cover enough.
+    single = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)
+    if single.coverage < MINIMUM_WALL_FRACTION:
         raise NoWallFound(
-            f"the refined matte covers {plane.coverage:.1%} of the photo, "
+            f"the refined matte covers {single.coverage:.1%} of the photo, "
             f"below the {MINIMUM_WALL_FRACTION:.0%} needed"
         )
-    return [plane]
+
+    # Split into Wall Planes using vertical structure — zero taps. When no
+    # corner is found the wall stays as one plane, so a flat wall is
+    # unchanged and every pixel still belongs to exactly one plane.
+    split_alphas = split_alpha_into_planes(photo_u8, alpha)
+
+    # Validate the partition: every wall pixel must be claimed exactly once,
+    # so that compositing never double-claims (dark seam).
+    if len(split_alphas) == 1:
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=split_alphas[0])]
+
+    wall_planes: list[WallPlane] = []
+    for index, plane_alpha in enumerate(split_alphas, start=1):
+        wall_planes.append(WallPlane(plane_id=f"wall_plane_{index}", alpha=plane_alpha))
+
+    total_coverage = sum(p.coverage for p in wall_planes)
+    # The sum of per-plane coverages must equal the original wall coverage
+    # (partition, not duplication). Allow tiny floating point drift.
+    assert abs(total_coverage - single.coverage) < 1e-5, (
+        f"partition coverage {total_coverage:.6f} != original {single.coverage:.6f}"
+    )
+    return wall_planes
 
 
 def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
