@@ -118,6 +118,13 @@ _ENERGY_FLOOR = 0.004
 _VALLEY_DEPTH_FLOOR = 0.030
 _REVERSAL_FLOOR = 0.001
 
+# A note carried over from the two commits this rewrite lands on top of (5377335, 99ac5f8), which
+# lowered a valley floor of 0.030 to 0.008 to catch `empty-corner`: the finding was right — that
+# corner's shading dip really is shallow, roughly 0.010 measured their way — and lowering the floor
+# alone could not reach it, because the wallpaper guard discarded the photograph before any floor
+# was consulted (difficulty 15). The valley floor here reads higher (0.030) because this cue is
+# measured against the brightest column nearby rather than as a step, which puts the same corner at
+# 0.079, and because it no longer decides alone: two cues must agree.
 # Small smoothing for the median profile, to quieten single-column texture
 # without diluting a narrow corner. Fixed radius in pixels, not wall-fraction.
 _MEDIAN_SMOOTH_RADIUS = 3
