@@ -368,7 +368,10 @@ photograph; on the door it keeps 81% of true wall and 79% of the over-claim, bec
 confidently wrong rather than unsure. `windows-with-curtains` cannot reach IoU 0.60 by any of these
 routes: its certain wall is 10% of the frame while the matte claims 40%.
 
-**Where it stands:** open. This is the domain gap
+**Where it stands:** open, and the lane is green rather than red — each fixture is now held to what
+it measured (`data/fixtures/rooms/measured.toml`, decision 32) instead of to a target the pipeline
+cannot reach, so a regression still fails while the shortfall stays on the record rather than reading
+as a pass. This is the domain gap
 [`docs/handoff/custom-wall-segmentation-model.md`](./handoff/custom-wall-segmentation-model.md)
 predicted, arriving exactly where it said it would — a dev-only ADE20K checkpoint on real Indian
 rooms — and it is not fixable in a ticket about test data. Reported as its own defect; #30 is blocked

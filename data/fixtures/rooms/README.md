@@ -68,6 +68,15 @@ test data first and a home second.
 A photograph whose provenance is unknown — found on the internet, of nobody's room in particular —
 is not a shortcut past this. The licence gate and `origin.md` both need an answer.
 
+## What the tests currently expect
+
+`measured.toml` beside these files records what wall detection actually scores on each photograph,
+for the metrics where it falls short of the targets in `tests/api/test_walls.py`. It exists because
+the first real photographs showed the pipeline does not clear two of those targets, for a reason no
+threshold edit fixes (#31). Adding a photograph does not require adding an entry: a fixture with no
+entry is held to the target, which is the right default — entries are for known, tracked shortfalls,
+and the lane fails if one is still present after the pipeline catches up.
+
 ## If this directory is empty
 
 The tests that need these files **skip, and say why**. They do not quietly pass: a green lane that
