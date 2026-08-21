@@ -68,8 +68,17 @@ const bridge: SpectraPaintBridge = {
     };
   },
 
-  render(sessionId: string, shadeCode: string): Promise<RenderResult> {
-    return ipcRenderer.invoke(RENDER_CHANNEL, sessionId, shadeCode) as Promise<RenderResult>;
+  render(
+    sessionId: string,
+    shadeCodeOrAssignments: string | Record<string, string>,
+    mode: 'realistic' | 'true_colour' = 'realistic',
+  ): Promise<RenderResult> {
+    return ipcRenderer.invoke(
+      RENDER_CHANNEL,
+      sessionId,
+      shadeCodeOrAssignments,
+      mode,
+    ) as Promise<RenderResult>;
   },
 
   walls(sessionId: string): Promise<WallsResult> {

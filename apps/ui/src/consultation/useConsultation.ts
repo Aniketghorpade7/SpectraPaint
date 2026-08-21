@@ -6,6 +6,14 @@ import type {
   WallsResult,
 } from '../../../desktop/src/bridge-types';
 import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
+import {
+  ALL_WALLS,
+  type Assignments,
+  nextAssignments,
+  type PaintTarget,
+  renderPayload,
+  toggleTarget,
+} from './accent';
 import { applyWallsEvent, INITIAL_WALLS_STATE, type WallsState } from './walls';
 
 /**
@@ -41,8 +49,13 @@ export interface Consultation {
   discard: () => void;
   /** The repaint's state on the Consultation surface. See render.ts for the reducer. */
   render: RenderState;
-  /** Repaint the Wall Plane in a Shade Code. Safe to call with the photo on screen. */
+  /** Repaint in a Shade Code: every wall, or just the selected one. Safe to call with the photo on
+   * screen. */
   applyShade: (shadeCode: string) => void;
+  /** Which wall the next Shade paints, and the Shade each wall carries (ticket #7). */
+  paint: { target: PaintTarget; assignments: Assignments };
+  /** Choose the wall the next Shade paints; the same wall again goes back to painting them all. */
+  selectWall: (planeId: string) => void;
   /** Show the original photo or the repaint after a successful render. */
   toggleBeforeAfter: () => void;
   /** Leave a failed repaint behind and keep the original photo on screen. */
@@ -89,6 +102,11 @@ export function useConsultation(): Consultation {
   const [state, setState] = useState<ConsultationState>({ phase: 'idle' });
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
   const [walls, setWalls] = useState<WallsState>(INITIAL_WALLS_STATE);
+  // Which wall the next Shade paints, and what each wall is already carrying. Held here rather than
+  // in the render state because it outlives a single repaint: an Accent Wall is built one wall at a
+  // time, and the second tap has to know what the first one did (ticket #7).
+  const [target, setTarget] = useState<PaintTarget>(ALL_WALLS);
+  const [assignments, setAssignments] = useState<Assignments>({});
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // A subscription must not outlive the surface: discarding, starting again, or unmounting
@@ -203,6 +221,8 @@ export function useConsultation(): Consultation {
     }
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
+    setTarget(ALL_WALLS);
+    setAssignments({});
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -211,9 +231,16 @@ export function useConsultation(): Consultation {
       if (state.phase !== 'ready' || !state.sessionId) return;
       setRender((previous) => applyRenderEvent(previous, { type: 'requested', shadeCode }));
 
+      // What this tap means depends on whether a wall is selected: every wall, or that one, with the
+      // others keeping the Shades they already have. Computed before the await so the request and
+      // the state it records cannot disagree.
+      const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
+      setAssignments(updated);
+      const payload = renderPayload(updated);
+
       let result: RenderResult;
       try {
-        result = await window.spectrapaint.render(state.sessionId, shadeCode);
+        result = await window.spectrapaint.render(state.sessionId, payload);
       } catch (error) {
         // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
         // must not sit on "Repainting…" with no way out.
@@ -248,7 +275,7 @@ export function useConsultation(): Consultation {
         );
       }
     },
-    [state.phase, state.sessionId],
+    [state.phase, state.sessionId, assignments, target, walls.planes],
   );
 
   const toggleBeforeAfter = useCallback(() => {
@@ -263,6 +290,10 @@ export function useConsultation(): Consultation {
     setWalls((previous) => applyWallsEvent(previous, { type: 'toggle' }));
   }, []);
 
+  const selectWall = useCallback((planeId: string) => {
+    setTarget((previous) => toggleTarget(previous, planeId));
+  }, []);
+
   return {
     state,
     start,
@@ -273,5 +304,7 @@ export function useConsultation(): Consultation {
     dismissRender,
     walls,
     toggleWalls,
+    paint: { target, assignments },
+    selectWall,
   };
 }

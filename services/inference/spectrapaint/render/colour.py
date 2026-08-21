@@ -101,12 +101,18 @@ def lab_to_linear_rgb(lab: np.ndarray) -> np.ndarray:
         axis=-1,
     )
 
-    # sRGB primary matrix (IEC 61966-2-1): XYZ -> linear sRGB.
-    linear = xyz @ np.array(
+    # sRGB primary matrix (IEC 61966-2-1): XYZ -> linear sRGB. Written in the orientation the
+    # standard prints it — one row per output channel — and transposed at use, because `xyz` here is
+    # a stack of row vectors. Without the transpose the product silently reads the matrix by
+    # columns: a neutral Lab decodes to unequal channels and every Shade renders as the wrong
+    # colour, which is what happened between issue #3 and #7 (difficulty 16). The neutral test in
+    # tests/render/test_colour.py is what now catches it.
+    XYZ_TO_LINEAR_SRGB = np.array(
         [
             [3.2404542, -1.5371385, -0.4985314],
             [-0.9692660, 1.8760108, 0.0415560],
             [0.0556434, -0.2040259, 1.0572252],
         ]
     )
+    linear = xyz @ XYZ_TO_LINEAR_SRGB.T
     return np.clip(linear, 0.0, 1.0)

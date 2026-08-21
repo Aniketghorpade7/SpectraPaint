@@ -992,3 +992,140 @@ raises.
 **Consequence:** the lane is green and means something — twelve tests, and a matte that starts
 painting more of a door than it does today fails. What it does *not* say is that wall detection is
 good enough; `measured.toml` is the standing record that on two of three real rooms it is not.
+
+---
+
+## 33. Wall Planes are a hard vertical partition of the wall matte, found by shading valley + vertical edge
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** `spectrapaint/segmentation/split.py` turns the single wall Alpha Matte from `matte.wall_alpha` into
+one to three Wall Planes by a hard vertical cut. The detector is deliberately **valley-primary**:
+
+* per-column median luminance `valley[x] = median(L[interior[:,x]])` — a corner is a dark valley where each
+  wall darkens toward it (shading-gradient reversal, spec). A valley is a local minimum whose depth
+  `max_median(neighbourhood) - valley` exceeds `0.030`.
+* per-column vertical-edge energy `energy[x] = mean |dL/dx| over interior rows` — the corner's line and the
+  vanishing-line cue. Energy is measured on **raw** (unsmoothed) columns; a 2%-width box smooth would dilute a
+  1-2 px corner 25× (Room 2: raw 0.0238 → smoothed 0.0070, below the old `_ENERGY_FLOOR 0.015`).
+
+A column becomes a seam only when a valley **and** a supporting edge coincide, or when a strong step
+(`|median_left - median_right| ≥ 0.09`) coincides with an edge. The strongest valleys/edges are ranked by
+`depth*2.0` (valley) or `energy + depth*0.5 + step*0.3` and suppressed by `0.18·wall_width` separation. Striped
+wallpaper (many repeating valleys/edges) is rejected when valley count would otherwise be >4.
+
+Partition is hard: `plane_alpha = original_coverage * hard_mask[:, left:right]` — soft only where wall meets
+non-wall (the original matte's feather), crisp where wall meets wall. Every wall pixel belongs to exactly one
+plane, so `sum(planes) == original` and no pixel is composited twice (no dark seam). Degenerate slivers
+(`coverage < 0.005` or `< height*2` interior pixels) are **merged** into a neighbour rather than deleted, so no
+wall pixels are lost; a sliver below `MINIMUM_WALL_FRACTION 0.02` is merged and the partition check in
+`walls.planes_from` degrades to a single plane with a warning rather than an `assert` (which is stripped under
+`-O` and would surface as a 500).
+
+`walls.planes_from` now validates the partition and re-normalises ids to `wall_plane_1..N` left-to-right.
+`render.engine.render_many` keeps the maths in `render/` (conventions §3): per-plane `Base Colour` measured
+inside each plane's matte, per-plane Light Map, composite in linear RGB in left-to-right order, single
+`sRGB` encode at the end. `api/renders.py` builds `plane_targets = [(alpha, target_shade)]` and calls it; the
+`assignments` map already expressed an Accent Wall, now with 2-3 keys. `apps/desktop/src/render-bridge.ts`
+discovers plane ids via `GET /planes` and assigns the Shade to every plane (single-Shade tap) or posts a
+per-plane map (Accent Wall); the `wall_plane_1` literal is now a fallback only.
+
+**Why:** the first implementation measured only `mean |dL/dx|` and compared a heavily smoothed absolute to
+`0.015`, with a `15%` side-fraction margin. On two real rooms (678×452 three-plane studio, 1280×720 phone
+photo with corner at x≈80) it returned one plane: the smoothing diluted the true corner below the floor, and
+the margin excluded return walls that are `≈4%` of width by construction — photographing a room *is* narrow
+strips at the frame edge. Lowering the floor to `0.003` produced wardrobe and curtain edges (Room 1: 138, 348;
+Room 2: 218, 701) because `|dL/dx|` alone cannot tell a corner from a curtain. The valley is what separates them,
+so it was promoted from veto to primary. The side-fraction was replaced by a minimum plane **area**
+(`0.04` of wall area and `0.03` width) — a texture line near the edge leaves no material wall on one side,
+a real corner does.
+
+**Consequence:** seams are full-height vertical cuts only; a corner that stops at a doorway head is not
+representable — acceptable for V1 and stated as a limit. `PreparedPhoto.wall_alpha` (single-plane convenience)
+is now dead and will be removed when callers have migrated. `_MAX_SEAMS = 2` caps at three planes, the
+typical 2-3 the spec names; more would be further slivers, not walls.
+
+---
+
+## 34. A seam is where two cues agree, and one seam is the most a photograph is allowed
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** `_find_seams` computes three cue signals over the columns of the eroded wall interior —
+edge energy, valley depth, and shading-gradient **reversal** (the smoothed median's slope to the
+right of a column minus its slope to the left) — takes the strongest few non-maximum-suppressed
+peaks of each, groups peaks that land within 3% of the width of one another, and calls a group a
+corner when **two or more distinct cues** are in it. The seam is placed at the group's energy peak
+where it has one. `_MAX_SEAMS` drops from 2 to **1**.
+
+This supersedes the valley-primary ranking in decision 33, which superseded the energy-primary one
+in the first version of this ticket. The partition, the merge of sliver planes and the area/width
+viability rules from decision 33 are unchanged.
+
+**Why:** decision 33's version did not split a real corner — not the unoccluded one either — and the
+cause was not a threshold. Its guard against striped wallpaper rejects a photograph outright above
+four valley candidates, and a real median-luminance profile has ten or twenty local minima because
+nothing suppressed non-maximal ones before the count (difficulty 15). Suppression alone was not
+enough: measured on the fixtures, **no single cue survives a photograph**. On `empty-corner` the
+strongest column energy in the whole wall is 2 px from the corner while no column near it is a clean
+median minimum; on `corner-with-clothesline` the deepest valley is the corner but the strongest
+reversal is a curtain fold 300 px away; on `windows-with-curtains` all three cues have a confident
+strongest column and they disagree.
+
+Agreement is what the ticket asked for in the first place — "three things that coincide" — and it is
+the only rule of the several tried that lands on both labelled corners (9 px and 22 px, against a
+tolerance of 2% of the width) while leaving a wall with no second plane alone. Reversal is measured
+as slopes over a window rather than as a single dark column because a corner's valley is rounded
+over tens of pixels: the darkest column moves photo to photo, the slopes either side do not.
+
+**One seam, not two,** because on all three fixtures the second-ranked group is a curtain fold or a
+stretch of wall the matte wrongly claimed (#31), never a third wall. Rooms with three visible walls
+exist and this is the number to raise — after there are fixtures with three labelled planes to raise
+it against. Raising it on this evidence would split a two-wall room into three.
+
+**Consequence:** three of the four plane tests in `tests/api/test_walls.py` went from failing to
+passing, and `test_a_real_photo_yields_one_wall_plane_with_a_soft_matte` had to be renamed and
+loosened: its `len(described) == 1` was correct only while #6 owned the answer, and the count now
+belongs to the labels. The floors kept (`_ENERGY_FLOOR`, `_VALLEY_DEPTH_FLOOR`, `_REVERSAL_FLOOR`)
+exist for the flat wall, whose signals are all zero and which must stay one plane.
+
+Worth naming plainly: these numbers are tuned against **two** labelled corners. That is enough to
+stop the algorithm being obviously wrong and not enough to call it right. #30's fixture set is the
+thing to grow before trusting any of them further.
+
+---
+
+## 35. An Accent Wall costs one extra tap, and painting the whole room still costs none
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-22
+
+**Decided:** with more than one Wall Plane on screen, each wall carries a chooser chip. Tapping a
+wall selects it and the next Shade lands only there; tapping the selected wall again goes back to
+painting every wall. Tapping a Shade with nothing selected paints them all, which is what the surface
+did before. The state — which wall is selected, and the Shade each wall carries — lives in
+`apps/ui/src/consultation/accent.ts` as pure functions, and the request carries a bare Shade Code
+while every wall matches and a per-plane map once they differ.
+
+**Why:** the ticket's last criterion is two planes carrying two Shades at once, and until now the
+service and the Electron bridge could both express it while the renderer could not — so the Dealer,
+who the criterion is about, could not produce an Accent Wall. The tap budget is three
+(ui-guidelines.md), so the common case had to stay where it was: one Shade over the whole room is
+still a single tap, and the accent case is two. A toggle rather than a separate "all walls" control
+because deselecting is then the same gesture as selecting, and a confirmation step is a tap the
+budget cannot afford.
+
+The chooser is a chip over each wall rather than the wash itself, and that is not cosmetic: a CSS
+mask clips what is *painted*, not what is *clickable*, so two full-size masked buttons would overlap
+and the upper one would swallow every tap meant for the lower. The chip is a real `<button>` with
+`aria-pressed`, positioned from the plane's own bounding box, at the 44px minimum.
+
+A bare Shade Code is sent while the walls match, rather than always sending a map: the bridge then
+discovers the plane ids itself, so a photo whose walls were re-split between two taps cannot produce
+a request naming a plane that no longer exists. Only walls the Dealer has actually chosen a Shade for
+appear in the map — an unpainted wall stays as photographed rather than being quietly given
+somebody else's Shade.
+
+**Consequence:** the logic is tested where conventions §6 puts it. `accent.ts` is pure, so it is
+vitest's (14 tests); the wire shape is the bridge's own test ("posts a per-plane map for an Accent
+Wall"); and two Shades over two planes in one request is seam 1's, against a two-plane stub added to
+`tests/api/conftest.py`. Nothing needed a DOM test.

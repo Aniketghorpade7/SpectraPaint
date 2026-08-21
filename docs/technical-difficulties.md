@@ -378,3 +378,123 @@ rooms — and it is not fixable in a ticket about test data. Reported as its own
 on it, and the slow lane is red until it lands. The red *is* the finding: the thresholds in
 `tests/api/test_walls.py` were described as regression floors chosen without measurements, and the
 first measurements say the pipeline does not clear them.
+
+---
+
+## 13. Smoothing a narrow corner dilutes it below any usable floor
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-08-21 · **Status:** resolved
+
+**What happened:** the first splitter measured `energy[x] = mean |dL/dx|` per column, then box-smoothed with
+radius `2%` of width before comparing to `_ENERGY_FLOOR 0.015`. On Room 2 (1280 px, corner at x≈80) the raw
+peak is `0.0238` at the true corner — correctly top-ranked — but the smoothed peak is `0.0070`, well below
+the floor, so the corner is discarded. Room 1 shows the same: raw `0.0257` → smoothed `0.0043`.
+
+**Why it was hard:** the smoothing is there to quieten texture noise, and it does — but a 1-2 px corner line
+spread over a 51 px box (2% of 1280) is diluted `25×`. Lowering the floor to `0.003` does make the corner
+pass, but then wardrobe (138) and curtain (218, 701) verticals pass too, because `|dL/dx|` alone cannot tell a
+corner from a curtain edge — the smoothed and unsmoothed rankings are the same, only the absolute is wrong.
+The side-fraction margin (`15%` of wall width) then excludes the real corners anyway: return walls are `≈30 px`
+in a `678 px` frame (`4.4%`), so a `102 px` margin rules out exactly the geometry the feature is for. Both
+failures look like tuning, but no tuning of one reaches past the other.
+
+**Where it stands:** resolved by making the **valley primary and thresholding on unsmoothed prominence**.
+The shading-gradient reversal (`median luminance` valley, depth `max - valley` over a `15%` neighbourhood) is
+now the detector; `|dL/dx|` is supporting evidence and is thresholded on its **raw** value (`0.004` permissive
+floor, `0.010` strong). A column with a deep valley is kept even when its edge is modest (the same-colour
+shading-only archetype at `0.0029` smoothed), while a column with a strong edge but no valley (curtain) is
+rejected. The side-fraction was replaced by a minimum plane **area** (`0.04`) and **width** (`0.03`) — a
+texture line near the edge leaves no material wall on one side, a real corner does. Recorded as decision 33.
+
+---
+
+## 14. Striped wallpaper looks like many corners to a column energy
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-08-21 · **Status:** resolved
+
+**What happened:** a synthetic striped wallpaper (12 px stripes, `188` vs `180` — `8/255` contrast) has a
+`mean |dL/dx|` of `≈0.03` at every stripe edge and a median step of `≈0.03` at every edge, so the first
+splitter's `energy > 0.015` and `depth > 0.012` tests mark every stripe as a corner. With `12 px` stripes it
+produces `5` valleys and `10` energy peaks, the top two are kept (`min_gap 0.18·width`), and the wall is split
+into three planes that are wallpaper, not walls.
+
+**Why it was hard:** the per-column cues are correct locally — a stripe edge *is* a strong vertical edge and
+*does* have a step — but the pattern repeats. A single threshold cannot tell one corner from ten stripes, and
+the valley at a dark stripe centre (`depth 0.03`) is indistinguishable from a corner valley (`0.012-0.09`) in
+isolation.
+
+**Where it stands:** resolved by counting. A true corner has one (or two for three planes) deep valleys;
+wallpaper has many. When `len(valley_candidates) > 4` the photo is treated as wallpaper and not split — the
+same early-return that already existed for `flat wall`. The synthetic wallpaper's contrast was also lowered to
+`2/255` (`182` vs `180`) so its valley depth (`0.007`) sits below the `0.030` valley floor and its step
+(`0.007`) below the `0.090` step floor, matching a real low-contrast paper. The archetypal same-colour corner
+was made steeper (`0.55→0.92` quadratic valley, depth `0.09`) so the true valley stays above the raised floors.
+Both are now covered by `tests/render/test_split.py` (flat, corner, shading-only, striped, seam position, sum,
+crisp/soft).
+
+---
+
+## 15. The guard against striped wallpaper threw away every real photograph
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 · **Status:** resolved
+
+Follows [difficulty 14](#14-striped-wallpaper-looks-like-many-corners-to-a-column-energy), whose fix
+caused this.
+
+**What happened:** the wallpaper guard rejects a photograph when more than four valley candidates
+are found, on the reasoning that a corner produces one valley and wallpaper produces many. It does,
+on a drawn image. On the three photographs in `data/fixtures/rooms/` it produced **10, 7 and 19**
+candidates, so every photograph was discarded before any seam was ranked — including a wholly
+unoccluded corner, where the correct seam was sitting in the candidate list.
+
+**Why it was hard:** the guard was tested and correct. A synthetic striped wall really does produce
+many valleys and a synthetic corner really does produce one, so both tests passed and kept passing
+through two rounds of review. A real median-luminance profile has ten or twenty shallow local minima
+from stains, scuffs and camera noise, and the guard counted every one of them — nothing suppressed
+non-maximal dips before the count. The failure is invisible from synthetic inputs by construction: a
+step edge drawn into an array has exactly one minimum, so no test built that way can produce the
+condition that trips it.
+
+The second trap sat behind the first. With suppression added, the guard passed and the seam went to
+the wrong column, because the deepest valley in `empty-corner` is the door frame at the far right —
+a region the matte should not have claimed at all (#31). One defect was hiding another.
+
+**Where it stands:** resolved by requiring two of three cues to agree rather than trusting any one
+of them, and by suppressing non-maximal peaks per cue before counting anything (decision 34). The
+lesson worth keeping is about where each test belongs: `tests/render/test_split.py` is the right
+place for the partition algebra, and it cannot answer "does this find a corner in a room" — only
+`data/fixtures/rooms/` can.
+
+---
+
+## 16. Every Shade rendered as the wrong colour, and every test agreed it was fine
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-22 · **Status:** resolved
+
+**What happened:** writing the Accent Wall test for #7's last criterion — two planes, two Shades,
+one request — the assertion "the wall assigned the bluest Shade is blue" failed. The wall was
+magenta. So was the other one, and the cause was not the Accent Wall: `lab_to_linear_rgb` computed
+`xyz @ MATRIX` where the sRGB primary matrix is written one row per output channel, which applies
+its **transpose**. Every Shade in the Catalogue had been decoding to the wrong colour since issue #3.
+
+How wrong: `PS-1001 "Morning Linen"`, Lab(97, 0.49, 0.85), a near-white, rendered as sRGB
+(255, 117, 211) — hot pink. Lab white decoded to (1.0, 0.193, 0.719) instead of (1, 1, 1).
+
+**Why it was hard:** nothing was subtly off, and everything passed. `tests/render/test_colour.py`
+covered the piecewise transfer function thoroughly and the D65 white-point constant, and never
+called `lab_to_linear_rgb` at all. The render tests asserted that a repainted wall is no longer the
+room's grey, and that Realistic and True Colour differ from each other — both of which are true of
+the wrong colour. So the one thing a paint visualiser exists to get right, "the wall is the colour of
+the chip", was the one thing no test asked.
+
+Two things made it invisible for four tickets. The photographs it was tested against are near-neutral
+walls, and the wrongness is a channel mix rather than a brightness error, so a render still looked
+like a plausible repaint of a room. And the wrong direction is the *easy* orientation to write: for a
+row-vector stack, `xyz @ M` reads naturally and is wrong, while `xyz @ M.T` reads awkwardly and is
+right.
+
+**Where it stands:** resolved — the matrix is transposed at use, with the trap named in a comment.
+The tests that now guard it are a reference table computed from the CIE formulae by hand rather than
+from this module, and a property test: a* = b* = 0 is grey by definition, so the three channels must
+come out equal. The property test is the one that matters, because a table of expected values can
+always be regenerated from a broken implementation by somebody who assumes it is right.

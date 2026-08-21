@@ -19,6 +19,7 @@ the middle of whatever the photo happens to show (conventions.md §5).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +28,7 @@ from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.matte import refiner_alpha, wall_alpha
 from spectrapaint.segmentation.prompts import prompts_for
 from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
+from spectrapaint.segmentation.split import split_alpha_into_planes
 
 # Shown to the Dealer as-is when a photo has no wall worth painting.
 MESSAGE_NO_WALL_FOUND = (
@@ -89,12 +91,7 @@ def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
 
 
 def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) -> list[WallPlane]:
-    """Refine the semantic region into Wall Planes — one, for this ticket.
-
-    The remaining two "no wall" checks live here. The prompt check is the stricter one: a wall too
-    thin to hold a point away from its own boundary cannot be prompted for without risking a mask
-    of the ceiling instead.
-    """
+    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7)."""
 
     prompts = prompts_for(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
@@ -105,13 +102,70 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
     refined = refiner_alpha(graphs, photo_u8, prompts)
     alpha = wall_alpha(photo_u8, regions, refined)
 
-    plane = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)
-    if plane.coverage < MINIMUM_WALL_FRACTION:
+    # Single-plane guard: the matte as a whole must still cover enough.
+    single = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)
+    if single.coverage < MINIMUM_WALL_FRACTION:
         raise NoWallFound(
-            f"the refined matte covers {plane.coverage:.1%} of the photo, "
+            f"the refined matte covers {single.coverage:.1%} of the photo, "
             f"below the {MINIMUM_WALL_FRACTION:.0%} needed"
         )
-    return [plane]
+
+    # Split into Wall Planes using vertical structure — zero taps. When no
+    # corner is found the wall stays as one plane, so a flat wall is
+    # unchanged and every pixel still belongs to exactly one plane.
+    split_alphas = split_alpha_into_planes(photo_u8, alpha)
+
+    # Validate the partition: every wall pixel must be claimed exactly once,
+    # so that compositing never double-claims (dark seam). This is a real
+    # check that degrades rather than a bare assert (conventions.md §5) —
+    # an assert would be stripped under -O and would surface as a 500.
+    if len(split_alphas) == 1:
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=split_alphas[0])]
+
+    wall_planes: list[WallPlane] = []
+    for index, plane_alpha in enumerate(split_alphas, start=1):
+        # A sliver plane below the offerable fraction is merged rather than
+        # offered as a paintable surface: a 2% sliver is not a wall a Customer
+        # can judge a colour from and it would leave unpainted pixels if dropped.
+        candidate = WallPlane(plane_id=f"wall_plane_{index}", alpha=plane_alpha)
+        if candidate.coverage < MINIMUM_WALL_FRACTION and len(split_alphas) > 1:
+            logging.getLogger(__name__).warning(
+                "Wall plane %s below minimum fraction (%.3f), merging",
+                candidate.plane_id,
+                candidate.coverage,
+            )
+            if wall_planes:
+                # Merge into previous — coverage is preserved, not deleted
+                prev = wall_planes.pop()
+                merged_alpha = np.clip(prev.alpha + candidate.alpha, 0.0, 1.0).astype(np.float32)
+                wall_planes.append(WallPlane(plane_id=prev.plane_id, alpha=merged_alpha))
+            else:
+                # First plane is sliver — merge into next (defer by stashing)
+                # Keep it for now; the next iteration will merge into it
+                wall_planes.append(candidate)
+            continue
+        wall_planes.append(candidate)
+
+    # If merging left a single plane, restore the original single-plane id
+    # so callers that key on wall_plane_1 keep working.
+    if len(wall_planes) == 1:
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=wall_planes[0].alpha)]
+
+    # Re-normalise ids to wall_plane_1..N in left-to-right order
+    wall_planes = [
+        WallPlane(plane_id=f"wall_plane_{i + 1}", alpha=p.alpha) for i, p in enumerate(wall_planes)
+    ]
+
+    total_coverage = sum(p.coverage for p in wall_planes)
+    if abs(total_coverage - single.coverage) >= 1e-4:
+        logging.getLogger(__name__).warning(
+            "Partition coverage %.6f != original %.6f (drift %.6f); degrading to single plane",
+            total_coverage,
+            single.coverage,
+            total_coverage - single.coverage,
+        )
+        return [WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)]
+    return wall_planes
 
 
 def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:

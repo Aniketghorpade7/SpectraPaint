@@ -18,7 +18,7 @@ from PIL import Image
 
 from spectrapaint.api.app import create_app
 from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID
-from tests.api.conftest import stub_preparation_stages
+from tests.api.conftest import stub_preparation_stages, two_plane_preparation_stages
 
 SECRET = "test-secret-not-a-real-one"
 
@@ -43,6 +43,12 @@ def to_png(contents: bytes) -> Image.Image:
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app(SECRET, preparation_stages=stub_preparation_stages))
+
+
+@pytest.fixture
+def accent_client() -> TestClient:
+    """A client whose photo has two Wall Planes, for the Accent Wall tests (ticket #7)."""
+    return TestClient(create_app(SECRET, preparation_stages=two_plane_preparation_stages))
 
 
 def auth(secret: str = SECRET) -> dict[str, str]:
@@ -227,3 +233,91 @@ def test_render_requires_the_secret(client: TestClient) -> None:
 
     assert response.status_code == 401
     assert response.json()["code"] == "unauthorised"
+
+
+# The two Shades furthest apart in the stand-in Catalogue: the reddest (a* +38) and the bluest
+# (b* -31). Chosen so "these two walls are not the same colour" needs no threshold to be obvious,
+# and so a swap between the two planes would be unmistakable rather than subtle.
+ACCENT_RED = "PS-6010"
+ACCENT_BLUE = "PS-12011"
+
+
+def _interior_pixels(image: Image.Image) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """One pixel well inside each of the two stub planes: left of the seam, and right of it."""
+
+    width, height = image.size
+    row = height // 2
+    return (
+        image.getpixel((round(width * 0.30), row)),
+        image.getpixel((round(width * 0.70), row)),
+    )
+
+
+def test_two_wall_planes_carry_different_shades_in_one_request(
+    accent_client: TestClient,
+) -> None:
+    """An Accent Wall: two planes, two Shades, one request (issue #7, final criterion).
+
+    True Colour, so each wall shows its Shade as the chip is and the assertion needs no allowance
+    for the room's light. This is the criterion the ``assignments`` map exists for — a caller
+    written against a single ``shade_code`` would have to be rewritten to gain it — and until now
+    nothing exercised two entries at once.
+    """
+
+    session_id = upload(accent_client, png_of(NEUTRAL_ROOM_SRGB))
+
+    response = accent_client.post(
+        f"/sessions/{session_id}/renders",
+        headers=auth(),
+        json={
+            "assignments": {"wall_plane_1": ACCENT_RED, "wall_plane_2": ACCENT_BLUE},
+            "mode": "true_colour",
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert response.headers["content-type"] == "image/png"
+
+    left, right = _interior_pixels(to_png(response.content))
+    assert left != right, "both Wall Planes came back the same colour, so only one Shade landed"
+    assert left[0] > left[2], f"the plane assigned the reddest Shade is not red: {left}"
+    assert right[2] > right[0], f"the plane assigned the bluest Shade is not blue: {right}"
+
+
+def test_an_accent_wall_leaves_no_dark_seam_between_the_planes(
+    accent_client: TestClient,
+) -> None:
+    """Criterion 4 where it would actually be seen: in the pixels of a two-Shade render.
+
+    A pixel claimed by both planes would be composited twice and come back darker than either wall.
+    Checked across the join rather than at it, because the seam column itself is a legitimate colour
+    change — what must not exist is a dark line *between* the two colours.
+    """
+
+    session_id = upload(accent_client, png_of(NEUTRAL_ROOM_SRGB))
+    response = accent_client.post(
+        f"/sessions/{session_id}/renders",
+        headers=auth(),
+        json={
+            "assignments": {"wall_plane_1": ACCENT_RED, "wall_plane_2": ACCENT_BLUE},
+            "mode": "true_colour",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    image = to_png(response.content)
+    width, height = image.size
+    row = height // 2
+    left, right = _interior_pixels(image)
+
+    def luminance(pixel: tuple[int, int, int]) -> float:
+        return 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]
+
+    floor = min(luminance(left), luminance(right))
+    seam = width // 2
+    across = [
+        luminance(image.getpixel((x, row))) for x in range(max(0, seam - 3), min(width, seam + 4))
+    ]
+    assert min(across) >= floor - 1.0, (
+        f"a pixel across the join is darker than both walls ({min(across):.1f} against "
+        f"{floor:.1f}) — the planes are compositing twice"
+    )

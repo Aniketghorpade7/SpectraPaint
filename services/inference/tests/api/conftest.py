@@ -64,6 +64,47 @@ def prepared_photo_of(contents: bytes) -> PreparedPhoto:
     return PreparedPhoto(linear=decoded.linear, srgb=decoded.srgb, planes=(plane,))
 
 
+def two_plane_mattes(shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """The stub rectangle cut down the middle into two Wall Planes.
+
+    A partition of the same matte, exactly as the splitter produces one (ticket #7): the outer edge
+    stays soft where the wall meets a non-wall, the cut between the two is hard so a wall-to-wall
+    corner stays crisp, and no pixel is claimed twice — so an Accent Wall composited from these
+    cannot show a dark seam for a reason the test itself introduced.
+    """
+
+    matte = rectangular_matte(shape)
+    width = shape[1]
+    seam = width // 2
+
+    left = matte.copy()
+    left[:, seam:] = 0.0
+    right = matte.copy()
+    right[:, :seam] = 0.0
+    return left, right
+
+
+def two_plane_photo_of(contents: bytes) -> PreparedPhoto:
+    """The same decode as :func:`prepared_photo_of`, with the matte split into two planes."""
+
+    decoded = decode_photo(contents)
+    left, right = two_plane_mattes(decoded.srgb.shape[:2])
+    return PreparedPhoto(
+        linear=decoded.linear,
+        srgb=decoded.srgb,
+        planes=(
+            WallPlane(plane_id="wall_plane_1", alpha=left),
+            WallPlane(plane_id="wall_plane_2", alpha=right),
+        ),
+    )
+
+
+def two_plane_preparation_stages(contents: bytes) -> list[Stage]:
+    """Preparation that hands back two Wall Planes, for the Accent Wall tests (ticket #7)."""
+
+    return [Stage(message="Reading your photo…", run=lambda: two_plane_photo_of(contents))]
+
+
 def stub_preparation_stages(contents: bytes) -> list[Stage]:
     """Preparation that decodes the photo and hands back a known Wall Plane.
 
