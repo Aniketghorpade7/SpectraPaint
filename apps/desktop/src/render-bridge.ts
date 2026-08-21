@@ -74,7 +74,13 @@ export function registerRenderBridge(
         const entries = Object.entries(shadeCodeOrAssignments as Record<string, unknown>);
         if (
           entries.length === 0 ||
-          entries.some(([k, v]) => typeof k !== 'string' || typeof v !== 'string' || k.length === 0 || (v as string).length === 0)
+          entries.some(
+            ([k, v]) =>
+              typeof k !== 'string' ||
+              typeof v !== 'string' ||
+              k.length === 0 ||
+              (v as string).length === 0,
+          )
         ) {
           return refusal('malformed_request');
         }
@@ -99,8 +105,13 @@ export function registerRenderBridge(
           });
           if (planesResp.ok) {
             const data = (await planesResp.json()) as { planes: { plane_id: string }[] };
-            const ids = data.planes.map((p) => p.plane_id).filter((id) => /^[a-z0-9_]{1,64}$/.test(id));
-            assignments = ids.length > 0 ? Object.fromEntries(ids.map((id) => [id, shadeCode])) : { [STUB_WALL_PLANE_ID]: shadeCode };
+            const ids = data.planes
+              .map((p) => p.plane_id)
+              .filter((id) => /^[a-z0-9_]{1,64}$/.test(id));
+            assignments =
+              ids.length > 0
+                ? Object.fromEntries(ids.map((id) => [id, shadeCode]))
+                : { [STUB_WALL_PLANE_ID]: shadeCode };
           } else {
             assignments = { [STUB_WALL_PLANE_ID]: shadeCode };
           }

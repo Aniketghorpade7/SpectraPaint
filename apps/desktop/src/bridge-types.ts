@@ -108,23 +108,23 @@ export interface SpectraPaintBridge {
    */
   onBootStatus(listener: (status: BootStatus) => void): () => void;
 
-   /**
-    * Repaint the Wall Planes and return the repainted photo as a data URL.
-    *
-    * Main builds the request: it names the Wall Planes and holds the secret,
-    * so the renderer asks for a Shade (or a Shade per plane for an Accent
-    * Wall) and gets back an image — it never touches the wire shape or a file.
-    * A refusal comes back as a `failed` result whose message is the service's
-    * own, safe to show as-is.
-    *
-    * A string Shade Code paints every plane the photo has; a map paints each
-    * plane in its own Shade. `mode` selects realistic (default) or true_colour.
-    */
-   render(
-     sessionId: string,
-     shadeCodeOrAssignments: string | Record<string, string>,
-     mode?: 'realistic' | 'true_colour',
-   ): Promise<RenderResult>;
+  /**
+   * Repaint the Wall Planes and return the repainted photo as a data URL.
+   *
+   * Main builds the request: it names the Wall Planes and holds the secret,
+   * so the renderer asks for a Shade (or a Shade per plane for an Accent
+   * Wall) and gets back an image — it never touches the wire shape or a file.
+   * A refusal comes back as a `failed` result whose message is the service's
+   * own, safe to show as-is.
+   *
+   * A string Shade Code paints every plane the photo has; a map paints each
+   * plane in its own Shade. `mode` selects realistic (default) or true_colour.
+   */
+  render(
+    sessionId: string,
+    shadeCodeOrAssignments: string | Record<string, string>,
+    mode?: 'realistic' | 'true_colour',
+  ): Promise<RenderResult>;
 
   /**
    * The Wall Planes found in this photo, each with its Alpha Matte as a data URL to draw.

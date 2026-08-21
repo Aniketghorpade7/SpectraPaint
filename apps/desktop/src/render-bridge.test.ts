@@ -39,9 +39,9 @@ function invokeRender(
     event: { sender: FakeSender },
     sessionId: unknown,
     shadeCode: unknown,
-    mode: unknown,
+    mode?: unknown,
   ) => Promise<RenderResult>;
-  return mode === undefined ? handler({ sender }, sessionId, shadeCode) : handler({ sender }, sessionId, shadeCode, mode);
+  return handler({ sender }, sessionId, shadeCode, mode);
 }
 
 function mockPlanesThenRender(planeIds: string[] = ['wall_plane_1']) {
@@ -141,7 +141,10 @@ describe('registerRenderBridge', () => {
     });
 
     // First call is planes, second is renders
-    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [string, RequestInit];
+    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [
+      string,
+      RequestInit,
+    ];
     const [url, init] = renderCall;
     expect(url).toBe(`http://127.0.0.1:1/sessions/${VALID_SESSION_ID}/renders`);
     expect(init.method).toBe('POST');
@@ -158,8 +161,11 @@ describe('registerRenderBridge', () => {
     const result = await invokeRender({ destroyed: false }, VALID_SESSION_ID, 'AP-2140');
 
     expect(result.status).toBe('ready');
-    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [string, RequestInit];
-    expect(JSON.parse((renderCall[1].body as string)).assignments).toEqual({
+    const renderCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/renders')) as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(renderCall[1].body as string).assignments).toEqual({
       wall_plane_1: 'AP-2140',
       wall_plane_2: 'AP-2140',
     });
@@ -184,7 +190,11 @@ describe('registerRenderBridge', () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.includes('/planes')) {
-        return { ok: true, status: 200, json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }) } as unknown as Response;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }),
+        } as unknown as Response;
       }
       return {
         ok: false,
@@ -208,7 +218,11 @@ describe('registerRenderBridge', () => {
   it('turns an unparseable error body into a generic failure, never a dead end', async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).includes('/planes')) {
-        return { ok: true, status: 200, json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }) } as unknown as Response;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ planes: [{ plane_id: 'wall_plane_1' }] }),
+        } as unknown as Response;
       }
       return { ok: false, status: 500, json: async () => null } as unknown as Response;
     });

@@ -73,7 +73,12 @@ const bridge: SpectraPaintBridge = {
     shadeCodeOrAssignments: string | Record<string, string>,
     mode: 'realistic' | 'true_colour' = 'realistic',
   ): Promise<RenderResult> {
-    return ipcRenderer.invoke(RENDER_CHANNEL, sessionId, shadeCodeOrAssignments, mode) as Promise<RenderResult>;
+    return ipcRenderer.invoke(
+      RENDER_CHANNEL,
+      sessionId,
+      shadeCodeOrAssignments,
+      mode,
+    ) as Promise<RenderResult>;
   },
 
   walls(sessionId: string): Promise<WallsResult> {
