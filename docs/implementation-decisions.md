@@ -900,3 +900,63 @@ other half: a green lane that checked nothing is worse than a red one, because i
 **Consequence:** the accuracy thresholds (IoU ≥ 0.60, shadowed-wall recall ≥ 0.80, non-wall coverage
 ≤ 0.20) are regression floors, not the measured evaluation §10 requires — and they are unverified
 against real rooms until the fixtures exist, which is difficulty 9.
+
+---
+
+## 30. Fixture labels are polygons in a tool, and a plane is coloured only where the wall is certain
+
+**Ticket:** #30 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** the three room fixtures are labelled by polygons held in
+`tools/fixtures/label_rooms.py`, which renders `<name>.wall.png` and `<name>.planes.png`. The tool
+grows a seven-pixel "do not count this pixel" band along every traced boundary, and occlusions too
+tangled to trace — hanging clothes, a suitcase, bedding — are marked uncertain wholesale.
+`<name>.planes.png` colours a plane only where `<name>.wall.png` is white, and planes are ordered
+left to right by centroid, matching the order the service numbers `wall_plane_N` in.
+
+**Why:** the README suggests painting the mask in an editor, which is fine and was not forbidden —
+polygons were chosen because a diff of them says what somebody decided about a photograph, where a
+diff of a PNG says nothing at all, and these labels will be argued about as the segmentation tickets
+land. The automatic band is the honest part: a line drawn by eye over a curtain fold is not accurate
+to the pixel, and the README is right that a wrong label is worse than an absent one. Colouring
+planes only inside certain wall follows from the same rule — a pixel nobody can call wall cannot be
+assigned to a plane either.
+
+`windows-with-curtains.jpg` is labelled as **one** plane, though a return wall is arguably visible at
+the left edge: it is a sliver perhaps 90 px wide and almost entirely behind a curtain, so calling it
+a plane would assert something the photograph cannot support. Recorded in
+`data/fixtures/rooms/origin.md` beside the consent rows.
+
+**Consequence:** the labels are cheap to correct — edit a polygon, re-run the tool — and expensive to
+correct silently, which is the right way round. A fourth photograph was left out because its
+provenance was unknown; the licence gate and `origin.md` both need an answer that "found on the
+internet" does not give.
+
+---
+
+## 31. The wall IoU counts only the pixels the label claims
+
+**Ticket:** #30 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** `test_the_wall_found_is_the_wall_that_is_there` now restricts both sides of the IoU to
+pixels the label calls wall or not-wall, ignoring the mid-grey "unsure" ones. The two accuracy tests
+also union every Wall Plane's matte instead of taking `planes[0]`, and `rooms()` no longer collects
+`*.planes.png` as though it were a photograph.
+
+**Why:** the README promises mid-grey means "do not count this pixel" and the IoU kept half of that
+promise — an unsure pixel could never enter the intersection, but a matte covering one still grew the
+union. That is backwards: an honest grey band cost IoU, so a careful labeller scored worse than one
+who guessed a hard edge and got it wrong. Worth 0.07–0.14 of IoU on these fixtures (0.88 → 0.95,
+0.66 → 0.77, 0.23 → 0.37). It changes what the test measures, not how hard it is to pass: the
+leakage assertion still counts every labelled non-wall pixel, so a matte that paints a door is caught
+there, where it belongs.
+
+Unioning the planes is not a preference. `<name>.wall.png` labels *the wall*, and one plane of three
+cannot overlap the whole of it — the test would have failed for a reason unrelated to whether the
+wall was found, the moment #7 lands.
+
+**Consequence:** the plane-count and seam-position assertions that `<name>.planes.png` exists for are
+**not** in this ticket. They fail on `main` today because splitting is #7's unmerged work, and a test
+asserting a feature that does not exist does not belong on the default branch; they land with #29,
+which is where the behaviour lands. `plane_labelled_rooms()` and `planes_label_path()` are here
+waiting for them.
