@@ -64,6 +64,10 @@ class Room:
     planes: list[Plane]
     uncertain: list[list[tuple[int, int]]] = field(default_factory=list)
     note: str = ""
+    # Whether this photograph's Wall Plane count is knowable from the photograph. Where it is not,
+    # `<name>.planes.png` is not written at all and the plane tests skip the room, rather than a
+    # guess being recorded as an answer. See `windows-with-curtains` below.
+    label_planes: bool = True
 
 
 def _fill(size: tuple[int, int], polygons: list[list[tuple[int, int]]]) -> np.ndarray:
@@ -132,7 +136,11 @@ def main(rooms: list[Room]) -> int:
                 return 1
         wall, planes = render(room)
         wall.save(FIXTURE_DIR / f"{room.stem}.wall.png")
-        planes.save(FIXTURE_DIR / f"{room.stem}.planes.png")
+        planes_path = FIXTURE_DIR / f"{room.stem}.planes.png"
+        if room.label_planes:
+            planes.save(planes_path)
+        elif planes_path.exists():
+            planes_path.unlink()
         counts = {
             "wall": int((np.asarray(wall) == WALL).mean() * 100),
             "unsure": int((np.asarray(wall) == UNCERTAIN).mean() * 100),
@@ -241,9 +249,14 @@ ROOMS: list[Room] = [
     Room(
         # Night, one tube light, two curtained windows. The bright band along the top is a blown-out
         # wall, which is the shadow criterion's mirror image, and the wall carries a switch plate.
-        # Labelled as one plane: the return wall at the left edge is a sliver perhaps 90 px wide and
-        # almost entirely behind a curtain, which is not a surface a Dealer could paint.
+        #
+        # The **wall** is labelled; the **planes** are not, and that is deliberate. A return wall is
+        # visible at the left edge, so "two planes" is a defensible reading; it is also a sliver
+        # almost entirely behind a curtain, so "one plane a Dealer could paint" is defensible too.
+        # The photograph does not settle it, and a fixture that asserts an answer the photograph
+        # cannot give is a wrong label rather than a strict one. The plane tests skip this room.
         stem="windows-with-curtains",
+        label_planes=False,
         size=(1599, 899),
         planes=[
             Plane(

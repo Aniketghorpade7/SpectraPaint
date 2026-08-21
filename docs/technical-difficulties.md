@@ -431,3 +431,36 @@ same early-return that already existed for `flat wall`. The synthetic wallpaper'
 was made steeper (`0.55→0.92` quadratic valley, depth `0.09`) so the true valley stays above the raised floors.
 Both are now covered by `tests/render/test_split.py` (flat, corner, shading-only, striped, seam position, sum,
 crisp/soft).
+
+---
+
+## 15. The guard against striped wallpaper threw away every real photograph
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 · **Status:** resolved
+
+Follows [difficulty 14](#14-striped-wallpaper-looks-like-many-corners-to-a-column-energy), whose fix
+caused this.
+
+**What happened:** the wallpaper guard rejects a photograph when more than four valley candidates
+are found, on the reasoning that a corner produces one valley and wallpaper produces many. It does,
+on a drawn image. On the three photographs in `data/fixtures/rooms/` it produced **10, 7 and 19**
+candidates, so every photograph was discarded before any seam was ranked — including a wholly
+unoccluded corner, where the correct seam was sitting in the candidate list.
+
+**Why it was hard:** the guard was tested and correct. A synthetic striped wall really does produce
+many valleys and a synthetic corner really does produce one, so both tests passed and kept passing
+through two rounds of review. A real median-luminance profile has ten or twenty shallow local minima
+from stains, scuffs and camera noise, and the guard counted every one of them — nothing suppressed
+non-maximal dips before the count. The failure is invisible from synthetic inputs by construction: a
+step edge drawn into an array has exactly one minimum, so no test built that way can produce the
+condition that trips it.
+
+The second trap sat behind the first. With suppression added, the guard passed and the seam went to
+the wrong column, because the deepest valley in `empty-corner` is the door frame at the far right —
+a region the matte should not have claimed at all (#31). One defect was hiding another.
+
+**Where it stands:** resolved by requiring two of three cues to agree rather than trusting any one
+of them, and by suppressing non-maximal peaks per cue before counting anything (decision 34). The
+lesson worth keeping is about where each test belongs: `tests/render/test_split.py` is the right
+place for the partition algebra, and it cannot answer "does this find a corner in a room" — only
+`data/fixtures/rooms/` can.

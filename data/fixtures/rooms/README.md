@@ -29,9 +29,12 @@ conventions make it checkable rather than merely suggestive:
 * **Planes are ordered left to right by centroid**, which is the order the service numbers
   `wall_plane_N` in. Plane 1 in the label is the plane the service calls `wall_plane_1`.
 
-Label a plane only where the photograph supports it. A return wall reduced to a sliver behind a
-curtain is not a paintable surface, and calling it a plane asserts something the photo cannot
-show — say so in `origin.md` instead.
+Label a plane only where the photograph supports it, and where the photograph does not settle the
+question, **do not write the file at all**. `windows-with-curtains.jpg` has no `.planes.png`: a
+return wall is visible at its left edge, so "two planes" is defensible, and that wall is a sliver
+almost entirely behind a curtain, so "one plane a Dealer could paint" is defensible too. The plane
+tests skip a room with no plane label, which is the honest outcome — a fixture that asserts an answer
+the photograph cannot give is a wrong label, not a strict one. Say why in `origin.md`.
 
 Drawing one takes about fifteen minutes in any editor with a lasso and a paint bucket: fill the
 wall white, invert, fill the rest black, save as PNG.

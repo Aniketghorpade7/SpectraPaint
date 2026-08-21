@@ -1044,3 +1044,51 @@ a real corner does.
 representable — acceptable for V1 and stated as a limit. `PreparedPhoto.wall_alpha` (single-plane convenience)
 is now dead and will be removed when callers have migrated. `_MAX_SEAMS = 2` caps at three planes, the
 typical 2-3 the spec names; more would be further slivers, not walls.
+
+---
+
+## 34. A seam is where two cues agree, and one seam is the most a photograph is allowed
+
+**Ticket:** #7 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-21
+
+**Decided:** `_find_seams` computes three cue signals over the columns of the eroded wall interior —
+edge energy, valley depth, and shading-gradient **reversal** (the smoothed median's slope to the
+right of a column minus its slope to the left) — takes the strongest few non-maximum-suppressed
+peaks of each, groups peaks that land within 3% of the width of one another, and calls a group a
+corner when **two or more distinct cues** are in it. The seam is placed at the group's energy peak
+where it has one. `_MAX_SEAMS` drops from 2 to **1**.
+
+This supersedes the valley-primary ranking in decision 33, which superseded the energy-primary one
+in the first version of this ticket. The partition, the merge of sliver planes and the area/width
+viability rules from decision 33 are unchanged.
+
+**Why:** decision 33's version did not split a real corner — not the unoccluded one either — and the
+cause was not a threshold. Its guard against striped wallpaper rejects a photograph outright above
+four valley candidates, and a real median-luminance profile has ten or twenty local minima because
+nothing suppressed non-maximal ones before the count (difficulty 15). Suppression alone was not
+enough: measured on the fixtures, **no single cue survives a photograph**. On `empty-corner` the
+strongest column energy in the whole wall is 2 px from the corner while no column near it is a clean
+median minimum; on `corner-with-clothesline` the deepest valley is the corner but the strongest
+reversal is a curtain fold 300 px away; on `windows-with-curtains` all three cues have a confident
+strongest column and they disagree.
+
+Agreement is what the ticket asked for in the first place — "three things that coincide" — and it is
+the only rule of the several tried that lands on both labelled corners (9 px and 22 px, against a
+tolerance of 2% of the width) while leaving a wall with no second plane alone. Reversal is measured
+as slopes over a window rather than as a single dark column because a corner's valley is rounded
+over tens of pixels: the darkest column moves photo to photo, the slopes either side do not.
+
+**One seam, not two,** because on all three fixtures the second-ranked group is a curtain fold or a
+stretch of wall the matte wrongly claimed (#31), never a third wall. Rooms with three visible walls
+exist and this is the number to raise — after there are fixtures with three labelled planes to raise
+it against. Raising it on this evidence would split a two-wall room into three.
+
+**Consequence:** three of the four plane tests in `tests/api/test_walls.py` went from failing to
+passing, and `test_a_real_photo_yields_one_wall_plane_with_a_soft_matte` had to be renamed and
+loosened: its `len(described) == 1` was correct only while #6 owned the answer, and the count now
+belongs to the labels. The floors kept (`_ENERGY_FLOOR`, `_VALLEY_DEPTH_FLOOR`, `_REVERSAL_FLOOR`)
+exist for the flat wall, whose signals are all zero and which must stay one plane.
+
+Worth naming plainly: these numbers are tuned against **two** labelled corners. That is enough to
+stop the algorithm being obviously wrong and not enough to call it right. #30's fixture set is the
+thing to grow before trusting any of them further.

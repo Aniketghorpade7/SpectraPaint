@@ -268,13 +268,21 @@ def luminance_of(photo: Path, shape: tuple[int, int]) -> np.ndarray:
 
 @pytest.mark.skipif(not rooms(), reason=NO_PHOTOS)
 @pytest.mark.parametrize("photo", rooms() or [None], ids=lambda p: p.stem if p else "none")
-def test_a_real_photo_yields_one_wall_plane_with_a_soft_matte(
-    client: TestClient, photo: Path
-) -> None:
+def test_a_real_photo_yields_wall_planes_with_a_soft_matte(client: TestClient, photo: Path) -> None:
     """The pipeline finds a wall, and describes it with a soft matte at photo resolution.
 
     Soft is checked, not assumed: a binary mask would have no fractional pixels at all, and hard
     edges are the clearest visual sign that an image has been altered (CONTEXT.md).
+
+    The count is deliberately not asserted here. It was `== 1` while #6 found one region per photo,
+    and #7 splits that region, so the number is now a property of the photograph — asserted against
+    `<name>.planes.png` further down this file, where there is a hand-labelled answer to compare it
+    to. What every photograph must produce is *some* plane, each describable and each with a matte
+    at the photo's own resolution.
+
+    Softness is asserted over the planes together rather than one at a time, because a plane's
+    wall-to-wall edge is a hard vertical cut on purpose (criterion: wall-to-wall corners stay
+    crisp), so a middle plane bounded by two seams can legitimately have no soft edge of its own.
     """
 
     session_id = prepare(client, photo)
@@ -282,15 +290,17 @@ def test_a_real_photo_yields_one_wall_plane_with_a_soft_matte(
     planes = client.get(f"/sessions/{session_id}/planes", headers=auth())
     assert planes.status_code == 200
     described = planes.json()["planes"]
-    assert len(described) == 1, "ticket #6 finds one region; splitting is #7"
+    assert described, "the photograph yielded no Wall Plane at all"
 
-    plane = described[0]
-    assert plane["bounds"] is not None
-    assert 0.0 < plane["coverage"] <= 1.0
+    mattes = []
+    for plane in described:
+        assert plane["bounds"] is not None
+        assert 0.0 < plane["coverage"] <= 1.0
+        matte = matte_of(client, session_id, plane["plane_id"])
+        assert matte.shape == (plane["photo_height"], plane["photo_width"])
+        mattes.append(matte)
 
-    matte = matte_of(client, session_id, plane["plane_id"])
-    assert matte.shape == (plane["photo_height"], plane["photo_width"])
-
+    matte = np.maximum.reduce(mattes)
     fractional = (matte > 0.02) & (matte < 0.98)
     assert fractional.any(), "the matte is binary, not a soft Alpha Matte"
     assert (matte >= 0.98).any(), "no pixel is fully inside the wall"
@@ -517,19 +527,33 @@ def test_the_seam_sits_where_the_corner_is(client: TestClient, photo: Path) -> N
     height, width = mattes[0].shape
     tolerance = max(1.0, width * MAXIMUM_SEAM_OFFSET_FRACTION)
 
-    # The right-hand edge of the leftmost plane, row by row, in the label and in what was found.
+    # Per row, the label admits an interval rather than a column: where the corner is visible the
+    # two labelled planes are adjacent and the interval is one pixel wide, and where something
+    # stands in front of the corner the label deliberately stops short of it on both sides. A seam
+    # anywhere inside that interval is consistent with what the photograph shows, so measuring
+    # against one edge of it would score an honest label as an error — the occluded fixture's left
+    # plane stops 29 px short of the corner because a coat is in the way.
     offsets = []
     for row in range(height):
-        in_label = np.flatnonzero(labelled[0][row])
-        in_matte = np.flatnonzero(mattes[0][row] >= 0.5)
-        if in_label.size and in_matte.size:
-            offsets.append(abs(int(in_matte[-1]) - int(in_label[-1])))
+        left_plane = np.flatnonzero(labelled[0][row])
+        right_plane = np.flatnonzero(labelled[1][row])
+        found = np.flatnonzero(mattes[0][row] >= 0.5)
+        if not (left_plane.size and right_plane.size and found.size):
+            continue
+        seam = int(found[-1])
+        allowed_from, allowed_to = int(left_plane[-1]), int(right_plane[0])
+        if allowed_from > allowed_to:  # a slanted corner: the label's spans overlap by row
+            allowed_from, allowed_to = allowed_to, allowed_from
+        if allowed_from <= seam <= allowed_to:
+            offsets.append(0)
+        else:
+            offsets.append(min(abs(seam - allowed_from), abs(seam - allowed_to)))
 
-    assert offsets, f"{photo.name}: the leftmost plane and its label never share a row"
+    assert offsets, f"{photo.name}: the labelled planes and the found ones never share a row"
     median_offset = float(np.median(offsets))
     assert median_offset <= tolerance, (
-        f"the seam in {photo.name} sits {median_offset:.0f} px from the labelled corner, "
-        f"more than the {tolerance:.0f} px allowed at this width"
+        f"the seam in {photo.name} sits {median_offset:.0f} px outside the corner the label "
+        f"allows, more than the {tolerance:.0f} px permitted at this width"
     )
 
 

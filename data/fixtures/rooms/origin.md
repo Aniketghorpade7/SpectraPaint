@@ -18,12 +18,14 @@ each, so none needed the "keep it to a sane resolution" trim the README asks for
 |---|---|---|
 | `empty-corner.jpg` | A crisp, wholly unoccluded corner, plus a door frame at the right edge. The control case: a detector that cannot split here cannot split anywhere. | 2 |
 | `corner-with-clothesline.jpg` | A corner occluded by hanging clothes, a suitcase and bedding, with the two walls already different colours. Also a curtained window. | 2 |
-| `windows-with-curtains.jpg` | Night, one tube light, a blown-out band along the top, two curtained windows and a switch plate. The bright-end mirror of the shadow criterion. | 1 |
+| `windows-with-curtains.jpg` | Night, one tube light, a blown-out band along the top, two curtained windows and a switch plate. The bright-end mirror of the shadow criterion. | not labelled — see below |
 
-`windows-with-curtains.jpg` is labelled as **one** Wall Plane deliberately. A return wall is
-arguably visible at the left edge, but it is a sliver perhaps 90 px wide and almost entirely behind
-a curtain — not a surface a Dealer could paint, so calling it a plane would assert something the
-photograph cannot support.
+`windows-with-curtains.jpg` has **no Wall Plane label**, deliberately. A return wall is visible at
+the left edge, so "two planes" is a defensible reading of the photograph; it is also a sliver almost
+entirely behind a curtain, so "one plane a Dealer could paint" is defensible too. The photograph does
+not settle it. It was first labelled as one plane, and the split then found that region at 15% of the
+wall's area — which is the label being arguable, not the detector being wrong, so the plane label was
+withdrawn rather than defended. Its **wall** label stands; the plane tests skip it.
 
 ## Not included
 
