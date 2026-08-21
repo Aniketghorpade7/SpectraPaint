@@ -28,6 +28,7 @@ from spectrapaint.api.app import create_app
 from spectrapaint.catalogue import CatalogueFileInvalid, CatalogueFileMissing, open_catalogue
 from spectrapaint.runtime.graphs import warm_in_background
 from spectrapaint.runtime.location import MODELS_DIR_ENV_VAR, ModelsMissing, resolve_models_dir
+from spectrapaint.storage import Store, resolve_storage_dir
 
 HOST = "127.0.0.1"
 SECRET_ENV_VAR = "SPECTRAPAINT_SECRET"
@@ -144,7 +145,7 @@ def main() -> None:
     warm_in_background()
 
     config = uvicorn.Config(
-        create_app(secret, catalogue),
+        create_app(secret, catalogue, store=Store(resolve_storage_dir())),
         log_level="info",
         # Every request would otherwise be logged with its path; the Dealer's machine has no use
         # for that, and Electron already logs the lifecycle events that matter.

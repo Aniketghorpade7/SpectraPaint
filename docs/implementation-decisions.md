@@ -1129,3 +1129,44 @@ somebody else's Shade.
 vitest's (14 tests); the wire shape is the bridge's own test ("posts a per-plane map for an Accent
 Wall"); and two Shades over two planes in one request is seam 1's, against a two-plane stub added to
 `tests/api/conftest.py`. Nothing needed a DOM test.
+
+
+## 36. A Consultation is saved the moment its photo is uploaded, and preparation is stored on first use
+
+**Ticket:** #11 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-22
+
+**Decided:** persistence is a `Store` (`spectrapaint/storage/`) — one SQLite database plus the images
+as files beside it, in the per-user application data directory (`platformdirs`, overridable with
+`SPECTRAPAINT_STORAGE_DIR`). `create_app(store=...)` takes it as an argument like every other
+dependency; production builds one at boot in `service.py`. Uploading writes the Consultation row and
+the original photo bytes immediately, so there is no save button to forget. The prepared photo (at
+preview scale, lossless PNG) and one Alpha Matte PNG per Wall Plane are written the first time any
+request reads the photo — the gate every render passes through — because that pair is exactly what a
+reopened Consultation needs in order to skip preparation. Every render is saved before its response
+is sent: the PNG bytes plus execution profile, mode, assignments, resolved Lab values, and Catalogue
+identity *and* version. The consultation id is the first session id; reopening mints a fresh live
+session id mapped back onto it.
+
+**Why:** auto-save has to be structural, not a UI habit — "the Dealer cannot lose work by forgetting
+to press something" is only true if saving happens below the point where forgetting lives. Storing
+the prepared artifacts rather than re-running preparation on reopen is what makes the "try another
+Shade skips preparation" criterion honest: the pipeline runs once per photo, ever. Recording resolved
+Lab values alongside shade codes means a saved render can still be interpreted after a Catalogue
+swap, which is the same reason identity and version are stamped.
+
+Two deliberate scope notes. The stored photo is at preview scale, not camera resolution — full-
+resolution rendering does not exist yet (preparation caps at 1280px), so "full-resolution" today
+means *lossless at the resolution actually rendered*; the original upload bytes are kept untouched
+for when that ticket lands. And "execution profile" is recorded but fixed to `preview` — V1 has no
+faster-vs-better-quality choice, so inventing one here would be a feature smuggled into a storage
+ticket; the column exists so renders saved before profiles arrive still say what made them.
+
+Deleting a Bundle moves its Consultations to the default Bundle ("Consultations") rather than
+deleting them: nothing is deleted automatically, and even the Dealer's explicit delete of a grouping
+is not a decision that the work inside stops existing.
+
+**Consequence:** seam 1 covers the whole surface against a throwaway store (`test_library.py`,
+15 tests): auto-save on upload, bundle CRUD without data loss, byte-for-byte replay of stored
+renders, metadata completeness, reopen skipping preparation (counted by how often a photo enters the
+pipeline), and the clean 409 for a Consultation closed before preparation finished. The contract test
+in `test_sessions.py` pins the new endpoints so none can appear silently.

@@ -3,12 +3,16 @@
 
 A photo enters the system only here, and the lifecycle is what every later endpoint hangs off.
 Uploading records the session and starts its preparation in the background — the bytes are
-validated so a corrupt or unsupported file is caught at the door, and preparation is where the photo
-is actually read (ticket #4). The render path (issue #3) consumes the prepared photo that same
-preparation produces, so a render never touches the upload bytes.
+validated so a corrupt or unsupported file is caught at the door, and preparation is where the
+photo is actually read (ticket #4). The render path (issue #3) consumes the prepared photo that
+same preparation produces, so a render never touches the upload bytes.
 
-The registry is deliberately in-memory: persistence to disk is ticket #11's concern, and an
-in-memory session dies with the process, which is correct for a single counter-side consultation.
+The registry itself stays in-memory — a live session dies with the process, which is correct — but
+from issue #11 everything worth keeping is written through to the
+:class:`~spectrapaint.storage.Store` as it happens: the upload becomes a Consultation the moment it
+arrives (auto-save), and the first time a request reads the prepared photo, that photo and its Alpha
+Mattes are stored too, which is what lets a reopened Consultation skip preparation. Ending a session
+clears memory only; the stored Consultation, its photo and every Render stay.
 """
 
 import io
@@ -17,6 +21,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 from uuid import uuid4
 
+import numpy as np
 from fastapi import APIRouter, File, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
@@ -33,6 +38,7 @@ from spectrapaint.api.preparation import (
     PreparedPhoto,
     Stage,
 )
+from spectrapaint.storage import Store
 
 router = APIRouter()
 
@@ -56,26 +62,79 @@ class SessionRegistry:
     A session is its preparation job: upload creates both at once, and the photo's bytes live only
     inside that job's stages. No automatic deletion: a session leaves only when the Dealer ends the
     consultation, and only then do requests against it fail.
+
+    When a Store is attached, each live session is also a stored Consultation with the same id, so
+    a Consultation is saved without anyone pressing save (issue #11). A session restored by
+    reopening maps to its original Consultation instead.
     """
 
-    def __init__(self, preparation_stages: Callable[[bytes], list[Stage]]) -> None:
+    def __init__(
+        self,
+        preparation_stages: Callable[[bytes], list[Stage]],
+        store: Store | None = None,
+    ) -> None:
         self._preparation_stages = preparation_stages
+        self._store = store
         self._sessions: dict[str, PreparationJob] = {}
+        # Live session id -> the Consultation its work belongs to. The same id on upload; the
+        # Consultation's original id after a reopen.
+        self._consultations: dict[str, str] = {}
+        self._persisted: set[str] = set()
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
         job = PreparationJob(self._preparation_stages(contents))
         self._sessions[session_id] = job
+        if self._store is not None:
+            # Auto-save: the photo exists as a Consultation from this moment, whatever happens next.
+            self._store.register_consultation(session_id, contents)
+            self._consultations[session_id] = session_id
         # Started here so preparation genuinely begins on upload (docs/design-decisions.md §13) and
         # runs behind the Dealer's next move. The job's thread is daemonic and short-lived: a
         # session deleted mid-preparation abandons at most a few milliseconds of work.
         job.start()
         return session_id
 
+    def restore(self, consultation_id: str, photo: PreparedPhoto) -> str:
+        """A live session for a reopened Consultation: already prepared, nothing left to wait for.
+
+        Returns a fresh live-session id — the Consultation keeps its own identity, and renders made
+        in this session are filed under it.
+        """
+
+        session_id = uuid4().hex
+        self._sessions[session_id] = PreparationJob.completed(photo)
+        self._consultations[session_id] = consultation_id
+        return session_id
+
+    def consultation_for(self, session_id: str) -> str | None:
+        """The Consultation this live session belongs to."""
+        return self._consultations.get(session_id)
+
+    def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
+        """Store what preparation produced, once per session.
+
+        Called from ``require_photo`` — the one gate every render passes — so the artifacts exist
+        before the first repaint does, and a reopened Consultation never re-runs preparation. A
+        second call is a no-op: preparation runs once per photo, so what was stored is final.
+        """
+
+        if self._store is None or session_id in self._persisted:
+            return
+        consultation_id = self._consultations.get(session_id)
+        if consultation_id is None:
+            return
+
+        mattes = [(plane.plane_id, _encode_matte(plane.alpha)) for plane in photo.planes]
+        self._store.save_preparation(consultation_id, _encode_photo(photo.srgb), mattes)
+        self._persisted.add(session_id)
+
     def job(self, session_id: str) -> PreparationJob | None:
         return self._sessions.get(session_id)
 
     def delete(self, session_id: str) -> bool:
+        """End a live session. Memory only: the stored Consultation stays, along with everything
+        ever rendered into it (issue #11 — nothing is deleted automatically)."""
         if session_id not in self._sessions:
             return False
         del self._sessions[session_id]
@@ -109,6 +168,11 @@ async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
             code=UNSUPPORTED_IMAGE,
             message=MESSAGE_PREPARATION_FAILED,
         )
+
+    # The one gate every later request passes through, so this is where the prepared photo and its
+    # Alpha Mattes get written to the library — before the first repaint, which is exactly what a
+    # reopened Consultation needs in order to skip preparation (issue #11).
+    _registry(request).persist_preparation(session_id, photo)
     return photo
 
 
@@ -217,3 +281,30 @@ async def _sse_stream(events: AsyncIterator[dict[str, str]]) -> AsyncIterator[st
 
     async for event in events:
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _encode_photo(srgb: np.ndarray) -> bytes:
+    """The prepared photo as lossless PNG, at the scale every render is made at.
+
+    This — not the camera original, which is kept separately as uploaded — is what a reopened
+    Consultation loads: it is exactly what preparation produced, so trying another Shade on it
+    starts from the same pixels without running preparation again.
+    """
+
+    buffer = io.BytesIO()
+    Image.fromarray(srgb, mode="RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _encode_matte(alpha: np.ndarray) -> bytes:
+    """One Wall Plane's Alpha Matte as an 8-bit grayscale PNG.
+
+    The matte is float32 in [0, 1]; 8 bits per pixel keeps its soft edge intact for display and
+    compositing while keeping the file small. Decoding divides by 255, the exact inverse of this
+    encode.
+    """
+
+    channel = np.clip(np.asarray(alpha, dtype=np.float32).squeeze(), 0.0, 1.0)
+    buffer = io.BytesIO()
+    Image.fromarray((channel * 255.0).round().astype(np.uint8), mode="L").save(buffer, format="PNG")
+    return buffer.getvalue()

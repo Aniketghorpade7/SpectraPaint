@@ -47,6 +47,8 @@ export interface Consultation {
   state: ConsultationState;
   start: () => void;
   discard: () => void;
+  /** Put a reopened Consultation on screen: already prepared, nothing left to wait for (issue #11). */
+  adopt: (sessionId: string, imageDataUrl: string) => void;
   /** The repaint's state on the Consultation surface. See render.ts for the reducer. */
   render: RenderState;
   /** Repaint in a Shade Code: every wall, or just the selected one. Safe to call with the photo on
@@ -226,6 +228,20 @@ export function useConsultation(): Consultation {
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
+  const adopt = useCallback(
+    (sessionId: string, imageDataUrl: string) => {
+      // A reopened Consultation arrives already prepared on the service: no stream to follow, no
+      // waiting. The walls are asked for once, exactly as a freshly prepared photo would (issue #11).
+      setRender(INITIAL_RENDER_STATE);
+      setWalls(INITIAL_WALLS_STATE);
+      setTarget(ALL_WALLS);
+      setAssignments({});
+      setState({ phase: 'ready', sessionId, imageDataUrl });
+      void loadWalls(sessionId);
+    },
+    [loadWalls],
+  );
+
   const applyShade = useCallback(
     async (shadeCode: string) => {
       if (state.phase !== 'ready' || !state.sessionId) return;
@@ -298,6 +314,7 @@ export function useConsultation(): Consultation {
     state,
     start,
     discard,
+    adopt,
     render,
     applyShade,
     toggleBeforeAfter,

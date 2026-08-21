@@ -10,6 +10,8 @@
     GET    /catalogue                             (what is loaded)     <- issue #5
     GET    /catalogue/shades                      (browse or search)   <- issue #5
     GET    /catalogue/shades/{shade_code}                              <- issue #5
+    GET|POST|PATCH|DELETE /bundles*          (the library)        <- issue #11
+    GET|POST /consultations/{id}/*           (reopen, history)    <- issue #11
 
 Every endpoint in the contract now exists.
 """
@@ -19,6 +21,7 @@ from collections.abc import Callable
 from fastapi import Depends, FastAPI
 
 from spectrapaint.api.auth import secret_required
+from spectrapaint.api.bundles import router as bundles_router
 from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
 from spectrapaint.api.planes import router as planes_router
@@ -27,12 +30,14 @@ from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
 from spectrapaint.catalogue import Catalogue, open_catalogue
+from spectrapaint.storage import Store
 
 
 def create_app(
     secret: str,
     catalogue: Catalogue | None = None,
     preparation_stages: Callable[[bytes], list[Stage]] = build_preparation_stages,
+    store: Store | None = None,
 ) -> FastAPI:
     """Build the service, guarded by the per-launch secret.
 
@@ -47,6 +52,11 @@ def create_app(
 
     ``preparation_stages`` is an argument for the same reason too: tests inject deterministic stages
     so the progress stream is assertable without timing luck (ticket #4).
+
+    ``store`` is where saved work lives. It is an argument so tests can point it at a throwaway
+    directory; when it is not given there is no persistence — an in-memory service that forgets
+    everything between restarts, which keeps existing behaviour exact for callers that have not
+    opted in. Production passes one built at :func:`spectrapaint.storage.resolve_storage_dir`.
     """
 
     app = FastAPI(
@@ -62,12 +72,14 @@ def create_app(
     )
 
     install_error_handlers(app)
-    app.state.session_registry = SessionRegistry(preparation_stages)
+    app.state.session_registry = SessionRegistry(preparation_stages, store)
     app.state.catalogue = open_catalogue() if catalogue is None else catalogue
+    app.state.store = store
     app.include_router(sessions_router)
     app.include_router(planes_router)
     app.include_router(renders_router)
     app.include_router(catalogue_router)
+    app.include_router(bundles_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

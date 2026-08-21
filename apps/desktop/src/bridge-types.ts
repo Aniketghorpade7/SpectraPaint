@@ -16,7 +16,7 @@ export interface BootStatus {
 
 export interface ServiceRequest {
   path: string;
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
 }
 
@@ -82,6 +82,13 @@ export type WallsResult =
 export type RenderResult =
   { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
 
+/**
+ * One stored image from the library (issue #11): a Consultation's photo as prepared, or one of its
+ * saved renders — always exactly the bytes that were written, as a data URL the renderer can draw.
+ */
+export type StoredImageResult =
+  { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
+
 export interface SpectraPaintBridge {
   /**
    * Call the inference service. The secret and the current base URL are added in the main
@@ -142,4 +149,11 @@ export interface SpectraPaintBridge {
 
   /** Try starting the service again after a failure, so an error is never a dead end. */
   retryBoot(): Promise<void>;
+
+  /**
+   * A stored image from the library (issue #11): `'photo'` for the Consultation's photo as
+   * preparation left it, or a render id for one of its saved renders. Main fetches the PNG with
+   * the secret in its header — the same rule as every image in this app — and returns a data URL.
+   */
+  storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult>;
 }

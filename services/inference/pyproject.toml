@@ -10,6 +10,7 @@ dependencies = [
     "pillow",            # validating that an uploaded file really is a decodable photo
     "numpy",             # the render engine and colour maths (spectrapaint.render)
     "onnxruntime",       # running the exported segmentation models (spectrapaint.runtime)
+    "platformdirs",      # the per-user application data directory (spectrapaint.storage)
 ]
 
 [dependency-groups]

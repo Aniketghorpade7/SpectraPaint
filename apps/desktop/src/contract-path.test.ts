@@ -12,6 +12,10 @@ describe('what the renderer is allowed to ask for', () => {
     expect(isPermittedRequest({ path: '/sessions', method: 'POST' })).toBe(true);
     expect(isPermittedRequest({ path: '/sessions/abc-123/planes' })).toBe(true);
     expect(isPermittedRequest({ path: '/sessions/abc-123', method: 'DELETE' })).toBe(true);
+    // Issue #11: renaming a Bundle is the one PATCH in the contract.
+    expect(isPermittedRequest({ path: '/bundles/bundle_abcdef123456', method: 'PATCH' })).toBe(
+      true,
+    );
   });
 
   it('permits the query strings the Catalogue endpoints need', () => {
