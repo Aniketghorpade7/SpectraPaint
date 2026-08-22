@@ -47,6 +47,8 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     toggleWalls,
     paint,
     selectWall,
+    renderMode,
+    toggleRenderMode,
   } = consultation;
   const catalogue = useCatalogue();
 
@@ -73,6 +75,9 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 {render.showingRender ? 'Show original photo' : 'Show repaint'}
               </Button>
             ) : null}
+            <Button onClick={toggleRenderMode} aria-pressed={renderMode === 'true_colour'}>
+              {renderMode === 'realistic' ? 'True Colour mode' : 'Realistic mode'}
+            </Button>
             <Button onClick={discard}>Discard photo</Button>
           </div>
         </div>
