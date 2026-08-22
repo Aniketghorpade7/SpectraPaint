@@ -498,3 +498,15 @@ The tests that now guard it are a reference table computed from the CIE formulae
 from this module, and a property test: a* = b* = 0 is grey by definition, so the three channels must
 come out equal. The property test is the one that matters, because a table of expected values can
 always be regenerated from a broken implementation by somebody who assumes it is right.
+
+---
+
+## 17. Grouping by raw Base Colour splits the same paint at different brightness
+
+**Ticket:** #8 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-08-22 · **Status:** resolved
+
+**What happened:** the first grouping implementation compared raw `estimate_base_colour` triples with Euclidean distance `< 0.08`. Two planes of the same white at `0.8` vs `0.5` shading yield bases `0.44` vs `0.27` (distance `0.22`) and were placed in different groups, so the room still flattened — the exact bug grouping exists to fix. `empty-corner.jpg` (two whites, one paint) split; `corner-with-clothesline.jpg` (off-white vs pink) correctly split, so the threshold looked right on one fixture and wrong on the other.
+
+**Why it was hard:** the base estimate deliberately picks the brightest genuinely-wall pixels (`90th` percentile), so a darker wall's base *is* darker — that is correct for the light map, but it means raw distance confounds paint colour with shading. The fix is not a looser threshold (that would merge the accent wall at `0.324` tint distance) but a different space: tint `base / luma` removes shading scale, so same paint yields same tint (`0.015` on empty-corner) while different paint stays apart (`0.324` on clothesline). The mistake is easy to repeat because the spec says "compare each plane's colour" without naming the space.
+
+**Where it stands:** resolved — grouping uses tint distance `< 0.08` (`_tint_of`), and a group re-estimates from the union matte so the seam stays interior. Recorded as implementation-decisions.md #36. The threshold is still tuned against two labelled corners; more fixtures are the only honest way to tighten it.

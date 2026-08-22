@@ -89,20 +89,31 @@ def render_many(
     """Recolour several Wall Planes, each with its own Shade, in one image.
 
     ``plane_targets`` is a list of ``(alpha, target_shade)`` where
-    ``target_shade`` is the Shade's linear RGB triple. Each plane's
-    Base Colour is measured inside *its own* matte (spec: a pre-existing
-    Accent Wall keeps its own), its Light Map derived from that, and the
-    planes are composited in the photo's left-to-right order. Alphas are an
-    exclusive partition, so the order does not matter and no pixel is
+    ``target_shade`` is the Shade's linear RGB triple. Base Colour is
+    estimated **per group of planes sharing the same existing paint**
+    (``docs/design-decisions.md:416``), never per plane — otherwise two
+    planes of the same white at different brightness would both divide to
+    1.0 and the room would flatten. A pre-existing Accent Wall keeps its
+    own Base Colour because its tint differs. Grouping is by the wall's
+    chromatic tint (base / luma), so shading differences do not split a
+    group. Each group's Light Map is derived from its shared base and the
+    planes are composited in the photo's left-to-right order. Alphas are
+    an exclusive partition, so the order does not matter and no pixel is
     composited twice (no dark seam). All maths — including every per-plane
     composite — runs in linear RGB; the single encode happens at the end
     (issue #3 criterion 2). This keeps the maths in :mod:`spectrapaint.render`
     (conventions.md §3) and the API thin.
     """
 
+    if not plane_targets:
+        encoded = encode_srgb(np.ascontiguousarray(linear_photo))
+        return (encoded * 255.0 + 0.5).astype(np.uint8)
+
+    alphas = [alpha for alpha, _ in plane_targets]
+    grouped_bases = _grouped_base_colours(linear_photo, alphas)
+
     result_linear = linear_photo.copy()
-    for alpha, target_shade in plane_targets:
-        base_colour = estimate_base_colour(linear_photo, alpha)
+    for (alpha, target_shade), base_colour in zip(plane_targets, grouped_bases, strict=True):
         light_map = light_map_of(linear_photo, base_colour)
         new_wall = new_wall_of(light_map, target_shade, light_tint)
         result_linear = composite_linear(result_linear, alpha, new_wall)
@@ -149,6 +160,15 @@ _BASE_PERCENTILE_BAND = 5.0
 # Luma weights for linear light, ITU-R BT.709 — the same primaries the sRGB
 # transfer function in render.colour is defined against.
 _LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722])
+
+# Grouping threshold: two Wall Planes whose chromatic tints are closer than
+# this Euclidean distance in tint space (base / luma) share one Base Colour.
+# Tint carries only chroma, so shading differences (same paint, different
+# brightness) do not split a group. Calibrated so empty-corner.jpg (two
+# whites at different brightness → same tint) groups, while
+# corner-with-clothesline.jpg (off-white vs pink) splits. See fixtures in
+# data/fixtures/rooms/ and issue #8's table.
+_GROUP_TINT_THRESHOLD = 0.08
 
 
 def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndarray:
@@ -225,6 +245,74 @@ def estimate_light_tint(linear_photo: np.ndarray) -> np.ndarray:
     if luma <= 0.0:
         return np.ones(3, dtype=linear_photo.dtype)
     return (median / luma).astype(linear_photo.dtype)
+
+
+def _tint_of(base_colour: np.ndarray) -> np.ndarray:
+    """Chromatic tint of a Base Colour: base / luma, brightness removed.
+
+    Two planes of the same paint at different brightness have the same tint,
+    so grouping by tint distance keeps them together while an Accent Wall
+    with a different chroma splits. Luma uses the same BT.709 weights as
+    the estimate itself.
+    """
+    luma = float(np.dot(_LUMA_WEIGHTS, base_colour))
+    if luma <= 0.0:
+        return base_colour
+    return base_colour / luma
+
+
+def _grouped_base_colours(linear_photo: np.ndarray, alphas: list[np.ndarray]) -> list[np.ndarray]:
+    """One Base Colour per plane, grouped by existing paint.
+
+    Steps per the spec's grouping rule:
+
+    1. Estimate a per-plane Base Colour with :func:`estimate_base_colour`
+       (fully-opaque, eroded, 90th-percentile mean RGB).
+    2. Cluster by tint distance (``_GROUP_TINT_THRESHOLD``). Same paint →
+       same tint → same group, so relative brightness survives.
+    3. For each group, re-estimate one Base Colour from the **union** of
+       its planes' interior pixels. A group of one reuses its single
+       estimate to avoid a second percentile pass; a group of several
+       merges alphas (partition → sum ≤ 1) and estimates once.
+
+    Returns a list aligned with ``alphas``: each entry is the shared
+    Base Colour its plane belongs to.
+    """
+    if len(alphas) <= 1:
+        return [estimate_base_colour(linear_photo, alphas[0])] if alphas else []
+
+    individual = [estimate_base_colour(linear_photo, a) for a in alphas]
+    tints = [_tint_of(b) for b in individual]
+
+    groups: list[list[int]] = []
+    assignment: list[int] = [-1] * len(alphas)
+    for idx, tint in enumerate(tints):
+        found = -1
+        for g_idx, members in enumerate(groups):
+            rep = members[0]
+            if float(np.linalg.norm(tint - tints[rep])) < _GROUP_TINT_THRESHOLD:
+                found = g_idx
+                break
+        if found == -1:
+            groups.append([idx])
+            assignment[idx] = len(groups) - 1
+        else:
+            groups[found].append(idx)
+            assignment[idx] = found
+
+    group_bases: list[np.ndarray] = []
+    for members in groups:
+        if len(members) == 1:
+            group_bases.append(individual[members[0]])
+        else:
+            # Union of the group's wall pixels — partition guarantees no double
+            # counting beyond 1.0, clip keeps the matte in [0,1].
+            # alphas are HxWx1; sum over members stays HxWx1.
+            stacked = np.stack([np.asarray(alphas[i], dtype=np.float32) for i in members], axis=0)
+            union = np.clip(np.sum(stacked, axis=0), 0.0, 1.0)
+            group_bases.append(estimate_base_colour(linear_photo, union))
+
+    return [group_bases[assignment[i]] for i in range(len(alphas))]
 
 
 def _interior(linear_photo: np.ndarray) -> np.ndarray:

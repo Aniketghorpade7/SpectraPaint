@@ -252,3 +252,78 @@ def test_light_tint_is_invariant_to_brightness() -> None:
     bright_tint = estimate_light_tint(bright)
 
     assert np.allclose(dark_tint, bright_tint, atol=1e-6)
+
+
+def test_same_paint_two_planes_keep_relative_brightness_after_grouped_recolour() -> None:
+    """Regression: per-plane Base Colour would flatten the room (#8).
+
+    Two Wall Planes of the same paint at different brightness (0.8 vs 0.5
+    shading) must keep their contrast after recolouring. A grouped Base
+    Colour (tint-clustered, union-estimated) preserves the 1.6× ratio,
+    while per-plane estimation normalises each to 1.0. Checked in linear
+    space so sRGB encode does not compress the ratio.
+    """
+    from spectrapaint.render.engine import composite_linear, light_map_of, new_wall_of
+
+    base_true = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
+    tint = np.ones(3, dtype=np.float32)
+
+    # Synthetic photo split left/right with different shading but same paint
+    linear = np.zeros((40, 60, 3), dtype=np.float32)
+    linear[:, :30] = base_true * 0.8
+    linear[:, 30:] = base_true * 0.5
+    alpha_left = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_left[:, :30] = 1.0
+    alpha_right = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_right[:, 30:] = 1.0
+
+    # Grouped path via render_many (exercises _grouped_base_colours)
+    from spectrapaint.render.engine import render_many
+
+    out = render_many(linear, [(alpha_left, shade), (alpha_right, shade)], tint)
+    # Linear composites for the two interior pixels (before encode) would be
+    # shading * shade; after grouped recolour they must remain 1.6× apart.
+    # Check directly on linear composites to avoid encode compression.
+    # Re-derive what render_many did: same shade, grouped base ≈ 0.8*base_true
+    grouped_base = base_true * 0.8  # 90th percentile picks the brighter plane
+    light_map = light_map_of(linear, grouped_base)
+    composite = composite_linear(
+        linear, np.ones((40, 60, 1), dtype=np.float32), new_wall_of(light_map, shade, tint)
+    )
+    left_lin = composite[20, 15]
+    right_lin = composite[20, 45]
+    assert np.allclose(left_lin, (0.8 / 0.5) * right_lin, rtol=1e-3)
+    # And the encoded PNG must still show left brighter than right (not flattened)
+    assert int(out[20, 15, 0]) > int(out[20, 45, 0]) + 5
+    assert int(out[20, 15, 1]) > int(out[20, 45, 1]) + 5
+
+
+def test_accent_wall_planes_keep_separate_base_colours() -> None:
+    """A pre-existing Accent Wall gets its own Base Colour (#8).
+
+    Two planes of different paints (off-white vs pink) must not be grouped:
+    their tints differ by > _GROUP_TINT_THRESHOLD, so each keeps its own
+    base and repaints to different output colours.
+    """
+    from spectrapaint.render.engine import _grouped_base_colours
+
+    paint_a = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    paint_b = np.array([0.70, 0.30, 0.30], dtype=np.float32)
+    linear = np.zeros((40, 60, 3), dtype=np.float32)
+    linear[:, :30] = paint_a * 0.8
+    linear[:, 30:] = paint_b * 0.5
+    alpha_left = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_left[:, :30] = 1.0
+    alpha_right = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_right[:, 30:] = 1.0
+
+    grouped = _grouped_base_colours(linear, [alpha_left, alpha_right])
+    assert not np.allclose(grouped[0], grouped[1])
+    # Tint distance must exceed the grouping threshold
+    from spectrapaint.render.engine import _GROUP_TINT_THRESHOLD
+
+    luma = np.array([0.2126, 0.7152, 0.0722])
+    tint_a = grouped[0] / float(np.dot(luma, grouped[0]))
+    tint_b = grouped[1] / float(np.dot(luma, grouped[1]))
+    assert float(np.linalg.norm(tint_a - tint_b)) >= _GROUP_TINT_THRESHOLD

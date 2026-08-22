@@ -1129,3 +1129,17 @@ somebody else's Shade.
 vitest's (14 tests); the wire shape is the bridge's own test ("posts a per-plane map for an Accent
 Wall"); and two Shades over two planes in one request is seam 1's, against a two-plane stub added to
 `tests/api/conftest.py`. Nothing needed a DOM test.
+
+---
+
+## 36. Base Colour is grouped by paint, and the room's light tints the Shade
+
+**Ticket:** #8 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-22
+
+**Decided:** `spectrapaint/render/engine.py` estimates one Base Colour per **group** of Wall Planes sharing the same existing paint, never per plane. Grouping is by chromatic **tint** (`base / luma`, BT.709) distance `< _GROUP_TINT_THRESHOLD 0.08` — brightness removed so two whites at different brightness (same paint, different shading) keep the same tint and share one base, while an off-white vs pink Accent Wall (`corner-with-clothesline.jpg`) splits at `0.32`. A group of one reuses its single `estimate_base_colour` (fully-opaque `>=0.99` eroded `1%` of shorter side, ranked by luminance `90th±5th` percentile, `mean RGB` over whole pixels); a group of several merges its plane mattes (`clip(sum(alphas),0,1)`) and estimates once, so the wall-to-wall seam stays interior rather than eroded. `render_many` then derives one Light Map per group and composites in linear RGB in left-to-right order, single `encode_srgb` at the end.
+
+Realistic mode multiplies `light_tint = median(interior)/luma` (`estimate_light_tint`, 5% edge band excluded, luma-normalised so grey is `(1,1,1)`); True Colour uses `_NEUTRAL_TINT`. `POST /sessions/{id}/renders` defaults `mode=realistic`, validates `"realistic" | "true_colour"` as `422`, and returns `X-SpectraPaint-Render-Mode` on every `201 PNG` so a reopened Consultation can reproduce what was shown and the realism measurement can select `true_colour`. `apps/ui/src/consultation/useConsultation.ts` holds `renderMode` (`realistic` default) and `toggleRenderMode` — repainting the current `assignments` in the new mode without a new Shade tap — and `ConsultationSurface` exposes it as `True Colour mode / Realistic mode` (`aria-pressed`).
+
+**Why:** the earlier `render_many` divided each plane by its own base, so `light_map` peaked at `1.0` per plane and the room flattened — the exact failure §4 exists to prevent. Comparing raw bases would repeat it: two planes of the same white at `0.8` vs `0.5` shading yield bases `0.44` vs `0.27` (distance `0.22`) and would split. Tint removes shading scale, so same paint groups and different paint splits on the three fixtures: `empty-corner.jpg` tint distance `0.015` → group, `corner-with-clothesline.jpg` `0.324` → split, `windows-with-curtains.jpg` (single plane, blown band at top avoided by `85–90` band, not `100%`) → neutral tint. Per-channel percentiles were rejected for the same reason the spec states: three different pixel sets would neutralise the wall's cast, which is the one thing the estimate must capture.
+
+**Consequence:** the threshold is a tuned constant against two labelled corners — enough to stop the algorithm being obviously wrong, not enough to call it right; growing `data/fixtures/rooms/` is the lever to tighten it. A mis-group is silent (wrong brightness ratio or a two-toned room rendered as one), so `measured.toml` remains the place to catch it. The header satisfies "recorded on every render" for the HTTP contract; the persisted stamp belongs to storage (`#11` `Bundle → Render`), where the same field will be written alongside catalogue identity and execution profile.
