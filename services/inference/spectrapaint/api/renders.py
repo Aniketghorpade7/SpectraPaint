@@ -131,7 +131,13 @@ async def create_render(
         content=png_bytes,
         status_code=status.HTTP_201_CREATED,
         media_type="image/png",
-        headers={"Content-Length": str(len(png_bytes))},
+        headers={
+            "Content-Length": str(len(png_bytes)),
+            # Recorded on every render per issue #8 — which mode produced
+            # this PNG, so a reopened Consultation can show the same image
+            # and the realism measurement (§10) can select true_colour.
+            "X-SpectraPaint-Render-Mode": body.mode,
+        },
     )
 
 

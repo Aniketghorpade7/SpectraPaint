@@ -43,6 +43,8 @@ export interface ConsultationState {
   progressMessage?: string;
 }
 
+export type RenderMode = 'realistic' | 'true_colour';
+
 export interface Consultation {
   state: ConsultationState;
   start: () => void;
@@ -66,6 +68,10 @@ export interface Consultation {
   walls: WallsState;
   /** Show or hide the detected-wall overlay. */
   toggleWalls: () => void;
+  /** Realistic tints by room light; True Colour shows the chip colour. Default realistic. */
+  renderMode: RenderMode;
+  /** Switch between Realistic and True Colour; repaints the current Shade if one is on screen. */
+  toggleRenderMode: () => void;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -104,6 +110,7 @@ export function useConsultation(): Consultation {
   const [state, setState] = useState<ConsultationState>({ phase: 'idle' });
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
   const [walls, setWalls] = useState<WallsState>(INITIAL_WALLS_STATE);
+  const [renderMode, setRenderMode] = useState<RenderMode>('realistic');
   // Which wall the next Shade paints, and what each wall is already carrying. Held here rather than
   // in the render state because it outlives a single repaint: an Accent Wall is built one wall at a
   // time, and the second tap has to know what the first one did (ticket #7).
@@ -225,6 +232,7 @@ export function useConsultation(): Consultation {
     setWalls(INITIAL_WALLS_STATE);
     setTarget(ALL_WALLS);
     setAssignments({});
+    setRenderMode('realistic');
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -256,7 +264,7 @@ export function useConsultation(): Consultation {
 
       let result: RenderResult;
       try {
-        result = await window.spectrapaint.render(state.sessionId, payload);
+        result = await window.spectrapaint.render(state.sessionId, payload, renderMode);
       } catch (error) {
         // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
         // must not sit on "Repainting…" with no way out.
@@ -291,7 +299,7 @@ export function useConsultation(): Consultation {
         );
       }
     },
-    [state.phase, state.sessionId, assignments, target, walls.planes],
+    [state.phase, state.sessionId, assignments, target, walls.planes, renderMode],
   );
 
   const toggleBeforeAfter = useCallback(() => {
@@ -310,6 +318,53 @@ export function useConsultation(): Consultation {
     setTarget((previous) => toggleTarget(previous, planeId));
   }, []);
 
+  const toggleRenderMode = useCallback(() => {
+    const next: RenderMode = renderMode === 'realistic' ? 'true_colour' : 'realistic';
+    setRenderMode(next);
+    // If a Shade is already on screen, repaint it in the new mode so the Dealer sees the
+    // difference without tapping again (CONTEXT.md: Realistic vs True Colour).
+    if (state.phase === 'ready' && state.sessionId && Object.keys(assignments).length > 0) {
+      const payload = renderPayload(assignments);
+      const shadeForState = Object.values(assignments)[0] ?? 'repaint';
+      setRender((previous) =>
+        applyRenderEvent(previous, { type: 'requested', shadeCode: shadeForState }),
+      );
+      void window.spectrapaint
+        .render(state.sessionId, payload, next)
+        .then((result: RenderResult) => {
+          if (result.status === 'ready') {
+            setRender((previous) =>
+              applyRenderEvent(previous, {
+                type: 'ready',
+                shadeCode: shadeForState,
+                imageDataUrl: result.imageDataUrl,
+              }),
+            );
+          } else {
+            setRender((previous) =>
+              applyRenderEvent(previous, {
+                type: 'failed',
+                shadeCode: shadeForState,
+                code: result.code,
+                message: result.message,
+              }),
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          console.error('[consultation] could not switch render mode:', error);
+          setRender((previous) =>
+            applyRenderEvent(previous, {
+              type: 'failed',
+              shadeCode: shadeForState,
+              code: 'render_failed',
+              message: RENDER_FAILED_MESSAGE,
+            }),
+          );
+        });
+    }
+  }, [renderMode, state.phase, state.sessionId, assignments]);
+
   return {
     state,
     start,
@@ -323,5 +378,7 @@ export function useConsultation(): Consultation {
     toggleWalls,
     paint: { target, assignments },
     selectWall,
+    renderMode,
+    toggleRenderMode,
   };
 }
