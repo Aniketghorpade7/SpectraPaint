@@ -36,15 +36,13 @@ BASE = np.array([0.55, 0.52, 0.48], dtype=np.float32)
 TINT = np.ones(3, dtype=np.float32)
 
 
-def _shading(shape=(7, 9, 1), seed=0, floor=0.05) -> np.ndarray:
+def _shading(shape=(7, 9, 1), floor=0.05) -> np.ndarray:
     """Smooth per-pixel illumination on the wall, kept away from zero.
 
     Smooth rather than random: the robust Light Map (#9) quiets *measured* grain, so an
     analytic check of the per-tap formula wants an input whose noise measures below the noise
-    floor and therefore leaves the division untouched. ``seed`` is kept for call-site
-    stability and deliberately ignored.
+    floor and therefore leaves the division untouched.
     """
-    del seed
     count = int(np.prod(shape))
     return np.linspace(floor, 1.0 + floor, count, dtype=np.float32).reshape(shape)
 
@@ -74,7 +72,7 @@ def test_core_property_shading_times_base_renders_shading_times_target() -> None
 def test_light_tint_is_part_of_the_analytical_output() -> None:
     """The spec's per-tap formula includes light_tint: s*base -> s*target*tint."""
     tint = np.array([1.06, 1.00, 0.92], dtype=np.float32)
-    shading = _shading(seed=3)
+    shading = _shading()
     photo = shading * BASE
 
     out = composite_linear(photo, _alpha(), new_wall_of(light_map_of(photo, BASE), SHADE, tint))
@@ -171,7 +169,7 @@ def test_saturated_base_colour_produces_no_runaway_values() -> None:
     from spectrapaint.render.engine import _LIGHT_MAP_CEILING
 
     saturated = np.array([0.99, 0.05, 0.02], dtype=np.float32)
-    shading = _shading(seed=2)
+    shading = _shading()
     rng = np.random.default_rng(9)
     # The blue channel is all noise on a deep red wall: its offset is up to
     # 2.5x the true base value, which is what made division there speckle.

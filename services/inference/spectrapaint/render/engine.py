@@ -23,7 +23,11 @@ from spectrapaint.imaging import box_mean, erode
 from spectrapaint.render.luts import encode_srgb
 
 
-def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarray:
+def light_map_of(
+    linear_photo: np.ndarray,
+    base_colour: np.ndarray,
+    alpha: np.ndarray | None = None,
+) -> np.ndarray:
     """Divide the linear photo by the wall's base colour (once per photo).
 
     The spec's division is the spine, but an uncontrolled phone photograph makes three refinements
@@ -42,6 +46,12 @@ def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarra
       ``_NOISE_FLOOR`` nothing is smoothed; above it, regions are blended toward their local mean
       in proportion to how much noise was measured and how dark the pixel is, so a well-lit wall
       keeps its texture while an underexposed one is quieted.
+
+    ``alpha`` is the Wall Plane matte, and the noise estimate and the smoothing are the wall's,
+    not the room's: without it a curtain's fold or a window's glare decides how much the wall is
+    smoothed (review of this ticket). With no matte given the whole frame is measured, which is
+    the right fallback for a caller that genuinely means the whole frame — and what synthetic
+    tests pass.
 
     A zero channel in ``base_colour`` would yield NaN (0/0) or infinity, which would travel
     through the composite into every pixel of the output. Both are mapped to 0 — an unlit result
@@ -64,9 +74,9 @@ def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarra
 
     light_map = np.clip(light_map, 0.0, _LIGHT_MAP_CEILING)
 
-    sigma = _measured_noise_sigma(light_map)
+    sigma = _measured_noise_sigma(light_map, alpha)
     if sigma > _NOISE_FLOOR:
-        light_map = _smooth_where_dark(light_map, sigma)
+        light_map = _smooth_where_dark(light_map, sigma, alpha)
 
     return light_map.astype(linear_photo.dtype)
 
@@ -91,39 +101,55 @@ def _brightness_weight_of(base_colour: np.ndarray) -> float:
     return float(np.clip((saturation - _SATURATION_BLEND_START) / span, 0.0, 1.0))
 
 
-def _measured_noise_sigma(light_map: np.ndarray) -> float:
+def _measured_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -> float:
     """A robust estimate of the Light Map's grain, from its own high-pass residual.
 
     The residual against a small local mean captures exactly what smoothing would remove — grain,
     not shadows, which vary too slowly to register at the probe radius. The median absolute
     deviation, scaled to a sigma, is robust the way a mean of squared residuals is not: one blown
     window or specular glint must not talk the estimate into smoothing the whole wall.
+
+    Only Wall Plane pixels vote when a matte is given. A curtain's folds or a window's glare are
+    not evidence about the wall, and it is exactly on cluttered photographs that they would push
+    the frame-wide estimate over the floor and start smoothing a clean wall.
     """
     luma = _luma_of(light_map)
     radius = max(1, round(min(luma.shape) * _NOISE_PROBE_RADIUS_FRACTION))
     residual = luma - box_mean(luma, radius)
+    if alpha is not None:
+        on_wall = np.asarray(alpha, dtype=np.float32).reshape(alpha.shape[0], -1)[..., 0] > 0.5
+        if on_wall.sum() >= _NOISE_MINIMUM_PIXELS:
+            residual = residual[on_wall]
     mad = float(np.median(np.abs(residual - np.median(residual))))
     return 1.4826 * mad
 
 
-def _smooth_where_dark(light_map: np.ndarray, sigma: float) -> np.ndarray:
+def _smooth_where_dark(
+    light_map: np.ndarray,
+    sigma: float,
+    alpha: np.ndarray | None = None,
+) -> np.ndarray:
     """Blend toward the local mean where the wall is dark, in proportion to measured noise.
 
     A normalised convolution: every pixel's local mean is taken weighted by its smoothing
-    strength ``s``, so pixels with no strength contribute nothing and are returned unchanged.
-    Strength rises with the noise actually measured for this photograph and falls with
-    brightness, which is what lets a well-lit wall keep its stains while an underexposed corner
-    is quieted (issue #9).
+    ``weight``, so pixels with no weight contribute nothing and are returned unchanged — and
+    because the matte folds into the same weight, the local mean never reaches past the wall's
+    edge to borrow a chair's Light Map values. Weight rises with the noise actually measured for
+    this photograph and falls with brightness, which is what lets a well-lit wall keep its
+    stains while an underexposed corner is quieted (issue #9).
     """
     strength = float(np.clip((sigma - _NOISE_FLOOR) / (_NOISE_SIGMA_FULL - _NOISE_FLOOR), 0.0, 1.0))
     luma = _luma_of(light_map)
     ramp = (_SMOOTHING_LIT_LUMA - luma) / (_SMOOTHING_LIT_LUMA - _SMOOTHING_DARK_LUMA)
-    s = (strength * np.clip(ramp, 0.0, 1.0))[..., None]
+    weight = strength * np.clip(ramp, 0.0, 1.0)
+    if alpha is not None:
+        weight = weight * np.asarray(alpha, dtype=np.float32).reshape(weight.shape)
+    weight = weight[..., None]
 
     radius = max(1, round(min(light_map.shape[:2]) * _SMOOTHING_RADIUS_FRACTION))
-    coverage = np.maximum(box_mean(s, radius), _SMOOTHING_COVERAGE_EPSILON)
-    local_mean = box_mean(light_map * s, radius) / coverage
-    return (1.0 - s) * light_map + s * local_mean
+    coverage = np.maximum(box_mean(weight, radius), _SMOOTHING_COVERAGE_EPSILON)
+    local_mean = box_mean(light_map * weight, radius) / coverage
+    return (1.0 - weight) * light_map + weight * local_mean
 
 
 def new_wall_of(
@@ -202,7 +228,7 @@ def render_many(
 
     result_linear = linear_photo.copy()
     for (alpha, target_shade), base_colour in zip(plane_targets, grouped_bases, strict=True):
-        light_map = light_map_of(linear_photo, base_colour)
+        light_map = light_map_of(linear_photo, base_colour, alpha)
         new_wall = new_wall_of(light_map, target_shade, light_tint)
         result_linear = composite_linear(result_linear, alpha, new_wall)
 
@@ -275,13 +301,27 @@ _SATURATION_BLEND_START = 0.20
 _SATURATION_BLEND_END = 0.60
 
 # Noise is measured as a robust high-pass sigma on the Light Map's luma, over a
-# window of this fraction of the photo's shorter side — small enough that it
-# probes grain, not shadows.
-_NOISE_PROBE_RADIUS_FRACTION = 0.01
+# window of this fraction of the photo's shorter side. Small on purpose: a
+# window wide enough to span shading gradients measures the room's lighting
+# instead of its grain (a 1%-of-side window at preview resolution reads shadow
+# falloff as noise and over-smooths clean wall).
+_NOISE_PROBE_RADIUS_FRACTION = 0.004
+
+# Fewer wall pixels than this cannot vote in the noise estimate — the MAD of a
+# handful of pixels is a coin toss, and a sliver of matte should fall back to
+# the whole frame rather than pretend it measured grain.
+_NOISE_MINIMUM_PIXELS = 1000
 
 # Measured noise below this means a clean photograph: skip smoothing entirely,
 # so a noise-free input keeps the exact division (and its texture untouched).
-_NOISE_FLOOR = 0.01
+# Tuned against the real fixtures measured through light_map_of with the wall
+# matte (see tests/render/test_light_map_fixtures.py, which pins this):
+# empty-corner.jpg — the flat-daylight control — measures 0.0045 wall-wide and
+# 0.0051 in its darkest quartile, so the floor sits ~40% above with margin;
+# the grainy-looking windows-with-curtains.jpg in fact measures *cleaner*
+# (0.0042 — phone night denoise), and only genuinely busy regions (the
+# clothesline plane, 0.017) cross it.
+_NOISE_FLOOR = 0.008
 
 # Measured noise at which dark regions get their *full* local-mean blend;
 # between the floor and this the strength rises linearly. In Light Map units:
@@ -290,10 +330,12 @@ _NOISE_SIGMA_FULL = 0.12
 
 # The darkness ramp smoothing follows: full local-mean blending where the
 # Light Map's luma is at or below DARK, none where it is at or above LIT, and
-# linearly between. Full light sits at 1.0 by construction, so texture around
-# the lit level survives; underexposed corners are quieted.
+# linearly between. Full light sits at 1.0 by construction, and LIT is set
+# above it with margin: grain rides on top of full light, so a lit pixel at
+# 1.0 must still count as "lit" or an ordinary grainy daylight photo would
+# start blending its brightest, best-textured band (review of this ticket).
 _SMOOTHING_DARK_LUMA = 0.30
-_SMOOTHING_LIT_LUMA = 1.00
+_SMOOTHING_LIT_LUMA = 1.15
 
 # The radius of the local mean used for smoothing, as a fraction of the photo's
 # shorter side. Wide enough to swallow grain, narrow enough to keep shadow

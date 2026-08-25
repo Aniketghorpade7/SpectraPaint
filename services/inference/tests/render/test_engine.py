@@ -135,6 +135,31 @@ def test_noise_is_smoothed_in_proportion_and_dark_walls_smoothed_more() -> None:
     assert clean.std() < 1e-4, "a noise-free wall was smoothed away from flat"
 
 
+def test_noise_smoothing_holds_at_preview_resolution() -> None:
+    """The same smoothing claim at the shipped preview size (review item 4).
+
+    `_SMOOTHING_RADIUS_FRACTION` is a fraction of the shorter side, so the
+    smoothing window is 3×3 on the 64×64 arrays above but 21×21 at preview
+    (480×640). This test pins that the behaviour — dark loses more
+    high-frequency energy than lit — holds there too, so the 64×64 check is
+    not testing a different filter from the one that ships.
+    """
+    paint = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    grain = 0.08 * np.random.default_rng(7).standard_normal((480, 640)).astype(np.float32)
+
+    def light_map(shading: np.ndarray) -> np.ndarray:
+        linear = np.clip(paint[None, None, :] * shading[..., None], 0.0, 1.0).astype(np.float32)
+        return light_map_of(linear, paint)
+
+    def texture_energy(map_: np.ndarray) -> float:
+        centred = map_[..., 1] - map_[..., 1].mean()
+        return float(np.sqrt(np.mean(centred * centred)))
+
+    lit_energy = texture_energy(light_map(np.full((480, 640), 0.95, dtype=np.float32) + grain))
+    dark_energy = texture_energy(light_map(np.full((480, 640), 0.25, dtype=np.float32) + grain))
+    assert dark_energy < lit_energy * 0.7
+
+
 def test_a_dark_wall_repainted_pale_degrades_gracefully() -> None:
     """The darkest wall repainted in the palest shade: finite bytes, no wild values (#9).
 
