@@ -25,6 +25,7 @@ lets a read run while a write commits.
 import json
 import os
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -44,7 +45,8 @@ _CREATE_BUNDLES = """
 CREATE TABLE IF NOT EXISTS bundles (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -100,30 +102,60 @@ class Store:
 
         self._connection = sqlite3.connect(directory / DATABASE_FILENAME, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         # WAL lets a render being saved and a list being browsed happen at once, which a
         # counter-side app does constantly: save one render, show the previous one.
         self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA foreign_keys=ON")
         with self._connection:
             self._connection.execute(_CREATE_BUNDLES)
             self._connection.execute(_CREATE_CONSULTATIONS)
             self._connection.execute(_CREATE_RENDERS)
             for statement in _CREATE_INDEXES:
                 self._connection.execute(statement)
+        self._ensure_bundles_schema()
 
     # -- bundles -------------------------------------------------------------------------------
 
-    def create_bundle(self, name: str) -> dict:
+    def _ensure_bundles_schema(self) -> None:
+        """Migrate existing databases to the is_default column (review item #4)."""
+        columns = {
+            row["name"] for row in self._connection.execute("PRAGMA table_info(bundles)").fetchall()
+        }
+        if "is_default" not in columns:
+            with self._lock, self._connection:
+                self._connection.execute(
+                    "ALTER TABLE bundles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"
+                )
+                # Backfill: the oldest bundle named Consultations becomes the default.
+                self._connection.execute(
+                    """
+                    UPDATE bundles SET is_default = 1 WHERE id = (
+                        SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1
+                    )
+                    """,
+                    (DEFAULT_BUNDLE_NAME,),
+                )
+
+    def create_bundle(self, name: str, *, is_default: bool = False) -> dict:
         bundle_id = f"bundle_{os.urandom(12).hex()}"
         created_at = _now()
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
-                "INSERT INTO bundles (id, name, created_at) VALUES (?, ?, ?)",
-                (bundle_id, name, created_at),
+                "INSERT INTO bundles (id, name, created_at, is_default) VALUES (?, ?, ?, ?)",
+                (bundle_id, name, created_at, 1 if is_default else 0),
             )
-        return {"bundle_id": bundle_id, "name": name, "created_at": created_at}
+        return {
+            "bundle_id": bundle_id,
+            "name": name,
+            "created_at": created_at,
+            "is_default": is_default,
+        }
 
     def rename_bundle(self, bundle_id: str, name: str) -> bool:
-        with self._connection:
+        if self.is_default_bundle(bundle_id):
+            return False
+        with self._lock, self._connection:
             cursor = self._connection.execute(
                 "UPDATE bundles SET name = ? WHERE id = ?", (name, bundle_id)
             )
@@ -136,22 +168,25 @@ class Store:
         if not self._bundle_exists(bundle_id):
             return False
 
+        if self.is_default_bundle(bundle_id):
+            return False
+
         default_id = self._default_bundle_id()
         if bundle_id == default_id:
             return False
 
-        with self._connection:
-            self._connection.execute("DELETE FROM bundles WHERE id = ?", (bundle_id,))
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET bundle_id = ? WHERE bundle_id = ?",
                 (default_id, bundle_id),
             )
+            self._connection.execute("DELETE FROM bundles WHERE id = ?", (bundle_id,))
         return True
 
     def list_bundles(self) -> list[dict]:
         self._default_bundle_id()
         rows = self._connection.execute(
-            "SELECT b.id AS bundle_id, b.name, b.created_at,"
+            "SELECT b.id AS bundle_id, b.name, b.created_at, b.is_default,"
             " (SELECT count(*) FROM consultations c WHERE c.bundle_id = b.id) AS consultation_count"
             " FROM bundles b ORDER BY b.created_at"
         ).fetchall()
@@ -163,15 +198,31 @@ class Store:
         ).fetchone()
         return row is not None
 
+    def is_default_bundle(self, bundle_id: str) -> bool:
+        row = self._connection.execute(
+            "SELECT is_default FROM bundles WHERE id = ?", (bundle_id,)
+        ).fetchone()
+        return bool(row and row["is_default"])
+
     def _default_bundle_id(self) -> str:
         """The default Bundle's id, creating it if this is the first ask."""
         row = self._connection.execute(
-            "SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1",
-            (DEFAULT_BUNDLE_NAME,),
+            "SELECT id FROM bundles WHERE is_default = 1 ORDER BY created_at LIMIT 1",
         ).fetchone()
         if row is not None:
             return str(row["id"])
-        return str(self.create_bundle(DEFAULT_BUNDLE_NAME)["bundle_id"])
+        # Fallback for databases predating is_default: look up by legacy name.
+        legacy = self._connection.execute(
+            "SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1",
+            (DEFAULT_BUNDLE_NAME,),
+        ).fetchone()
+        if legacy is not None:
+            with self._lock, self._connection:
+                self._connection.execute(
+                    "UPDATE bundles SET is_default = 1 WHERE id = ?", (str(legacy["id"]),)
+                )
+            return str(legacy["id"])
+        return str(self.create_bundle(DEFAULT_BUNDLE_NAME, is_default=True)["bundle_id"])
 
     def require_bundle(self, bundle_id: str) -> bool:
         return self._bundle_exists(bundle_id)
@@ -183,7 +234,7 @@ class Store:
         walking away mid-consultation cannot lose the Room Photo."""
         relative = f"{_PHOTO_DIR}/{consultation_id}.orig"
         self._write_bytes(relative, original_photo)
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "INSERT INTO consultations (id, bundle_id, original_path, created_at)"
                 " VALUES (?, ?, ?, ?)",
@@ -209,7 +260,7 @@ class Store:
             self._write_bytes(relative, matte_png)
             planes.append({"plane_id": plane_id, "matte_path": relative})
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET photo_path = ?, planes_json = ? WHERE id = ?",
                 (photo_relative, json.dumps(planes), consultation_id),
@@ -246,7 +297,7 @@ class Store:
     def place_consultation_in_bundle(self, consultation_id: str, bundle_id: str) -> None:
         """File one Consultation under one Bundle — how a job's photos travel together."""
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET bundle_id = ? WHERE id = ?",
                 (bundle_id, consultation_id),
@@ -285,7 +336,7 @@ class Store:
         render_id = os.urandom(16).hex()
         relative = f"{_RENDER_DIR}/{render_id}.png"
         self._write_bytes(relative, png)
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "INSERT INTO renders ("
                 " id, consultation_id, created_at, execution_profile, mode,"
@@ -342,10 +393,6 @@ class Store:
         return None if row is None else str(row["consultation_id"])
 
     # -- image plumbing --------------------------------------------------------------------------
-
-    def read_image(self, relative_path: str) -> bytes | None:
-        """Bytes from the store by recorded path — the only way file paths leave this class."""
-        return self._read_bytes(relative_path)
 
     def _write_bytes(self, relative_path: str, contents: bytes) -> None:
         path = self.directory / relative_path

@@ -79,7 +79,9 @@ class SessionRegistry:
         # Live session id -> the Consultation its work belongs to. The same id on upload; the
         # Consultation's original id after a reopen.
         self._consultations: dict[str, str] = {}
-        self._persisted: set[str] = set()
+        self._persisted: set[str] = (
+            set()
+        )  # guarded by consultation_id, not session_id (see persist_preparation)
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
@@ -112,22 +114,26 @@ class SessionRegistry:
         return self._consultations.get(session_id)
 
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
-        """Store what preparation produced, once per session.
+        """Store what preparation produced, once per consultation.
 
         Called from ``require_photo`` — the one gate every render passes — so the artifacts exist
         before the first repaint does, and a reopened Consultation never re-runs preparation. A
         second call is a no-op: preparation runs once per photo, so what was stored is final.
+        Guard on consultation_id, not session_id — a reopened session has a fresh id mapped to
+        the original consultation, so a session guard would re-encode and rewrite on every reopen.
         """
 
-        if self._store is None or session_id in self._persisted:
+        if self._store is None:
             return
         consultation_id = self._consultations.get(session_id)
         if consultation_id is None:
             return
+        if consultation_id in self._persisted:
+            return
 
         mattes = [(plane.plane_id, _encode_matte(plane.alpha)) for plane in photo.planes]
         self._store.save_preparation(consultation_id, _encode_photo(photo.srgb), mattes)
-        self._persisted.add(session_id)
+        self._persisted.add(consultation_id)
 
     def job(self, session_id: str) -> PreparationJob | None:
         return self._sessions.get(session_id)

@@ -1,3 +1,5 @@
+import { useCallback } from 'react';
+
 import { BootScreen } from './boot/BootScreen';
 import { useBoot } from './boot/useBoot';
 import { ConsultationSurface } from './consultation/ConsultationSurface';
@@ -19,6 +21,28 @@ export function App() {
   const consultation = useConsultation();
   const library = useLibrary();
 
+  const startInBundle = useCallback(
+    async (bundleId: string) => {
+      const sessionId = await consultation.start();
+      if (sessionId) {
+        // The service files every new Consultation into the default bundle; move it to the
+        // Dealer's chosen job before the Consultation surface takes over. Best-effort: a
+        // failure leaves it in the default bundle rather than blocking the photo.
+        try {
+          await window.spectrapaint.request({
+            path: `/bundles/${bundleId}/consultations`,
+            method: 'POST',
+            body: { consultation_id: sessionId },
+          });
+          void library.refreshBundles();
+        } catch (error) {
+          console.error('[app] could not file consultation into bundle:', error);
+        }
+      }
+    },
+    [consultation, library],
+  );
+
   if (!boot.finished) {
     return <BootScreen boot={boot} />;
   }
@@ -29,6 +53,7 @@ export function App() {
         library={library}
         onReopened={({ sessionId, imageDataUrl }) => consultation.adopt(sessionId, imageDataUrl)}
         onNewConsultation={() => void consultation.start()}
+        onNewConsultationInBundle={(bundleId) => void startInBundle(bundleId)}
       />
     );
   }

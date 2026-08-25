@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from spectrapaint.api.errors import (
     BUNDLE_NOT_FOUND,
     CONSULTATION_NOT_FOUND,
+    DEFAULT_BUNDLE_PROTECTED,
     MALFORMED_REQUEST,
     PREPARATION_UNAVAILABLE,
     RENDER_NOT_FOUND,
@@ -45,6 +46,7 @@ router = APIRouter(tags=["library"])
 MAX_BUNDLE_NAME_LENGTH = 80
 
 _MESSAGE_BUNDLE_NOT_FOUND = "That bundle is not in your library."
+_MESSAGE_DEFAULT_BUNDLE_PROTECTED = "The default bundle cannot be renamed or deleted."
 _MESSAGE_CONSULTATION_NOT_FOUND = "That consultation is not in your library."
 _MESSAGE_RENDER_NOT_FOUND = "That repaint is not in this consultation's history."
 _MESSAGE_PREPARATION_UNAVAILABLE = (
@@ -94,7 +96,20 @@ async def create_bundle(request: Request, body: BundleCreate) -> dict:
 
 @router.patch("/bundles/{bundle_id}")
 async def rename_bundle(request: Request, bundle_id: str, body: BundleCreate) -> dict:
-    renamed = _store(request).rename_bundle(bundle_id, _clean_name(body.name))
+    store = _store(request)
+    if not store.require_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=BUNDLE_NOT_FOUND,
+            message=_MESSAGE_BUNDLE_NOT_FOUND,
+        )
+    if store.is_default_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_409_CONFLICT,
+            code=DEFAULT_BUNDLE_PROTECTED,
+            message=_MESSAGE_DEFAULT_BUNDLE_PROTECTED,
+        )
+    renamed = store.rename_bundle(bundle_id, _clean_name(body.name))
     if not renamed:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,7 +121,20 @@ async def rename_bundle(request: Request, bundle_id: str, body: BundleCreate) ->
 
 @router.delete("/bundles/{bundle_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bundle(request: Request, bundle_id: str) -> None:
-    deleted = _store(request).delete_bundle(bundle_id)
+    store = _store(request)
+    if not store.require_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=BUNDLE_NOT_FOUND,
+            message=_MESSAGE_BUNDLE_NOT_FOUND,
+        )
+    if store.is_default_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_409_CONFLICT,
+            code=DEFAULT_BUNDLE_PROTECTED,
+            message=_MESSAGE_DEFAULT_BUNDLE_PROTECTED,
+        )
+    deleted = store.delete_bundle(bundle_id)
     if not deleted:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
