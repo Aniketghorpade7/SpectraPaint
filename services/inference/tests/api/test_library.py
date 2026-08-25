@@ -144,9 +144,7 @@ def test_deleting_a_bundle_moves_its_consultations_to_the_default_bundle(
 
     # The Consultation survives — under the default Bundle, not in the bin.
     default = next(
-        b
-        for b in client.get("/bundles", headers=auth()).json()["bundles"]
-        if b["is_default"] == 1
+        b for b in client.get("/bundles", headers=auth()).json()["bundles"] if b["is_default"] == 1
     )
     remaining = client.get(f"/bundles/{default['bundle_id']}/consultations", headers=auth())
     assert [c["consultation_id"] for c in remaining.json()["consultations"]] == [session_id]
