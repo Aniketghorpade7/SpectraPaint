@@ -19,12 +19,29 @@ deterministic.
 
 import numpy as np
 
-from spectrapaint.imaging import erode
+from spectrapaint.imaging import box_mean, erode
 from spectrapaint.render.luts import encode_srgb
 
 
 def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarray:
     """Divide the linear photo by the wall's base colour (once per photo).
+
+    The spec's division is the spine, but an uncontrolled phone photograph makes three refinements
+    necessary (issue #9); all three degrade toward the plain division as the photograph gets
+    easier, so a clean synthetic input still comes back as exactly ``photo / base``:
+
+    * **Saturation blend.** A saturated Base Colour has at least one channel near zero, and
+      dividing that channel amplifies sensor noise into runaway values and speckle. As the base's
+      saturation rises (between ``_SATURATION_BLEND_START`` and ``_SATURATION_BLEND_END``) the
+      Light Map therefore blends toward a single-brightness division — luma over luma, broadcast
+      across channels — which keeps the shading but throws away the poisoned channels.
+    * **A ceiling.** Even away from saturation, pixels far brighter than the full-light level are
+      noise, not scene; values above ``_LIGHT_MAP_CEILING`` are clamped.
+    * **Noise-proportional smoothing, where the wall is dark.** Noise is measured from the photo
+      itself (a robust high-pass estimate — see :func:`_measured_noise_sigma`). Below
+      ``_NOISE_FLOOR`` nothing is smoothed; above it, regions are blended toward their local mean
+      in proportion to how much noise was measured and how dark the pixel is, so a well-lit wall
+      keeps its texture while an underexposed one is quieted.
 
     A zero channel in ``base_colour`` would yield NaN (0/0) or infinity, which would travel
     through the composite into every pixel of the output. Both are mapped to 0 — an unlit result
@@ -35,7 +52,78 @@ def light_map_of(linear_photo: np.ndarray, base_colour: np.ndarray) -> np.ndarra
     """
     with np.errstate(divide="ignore", invalid="ignore"):
         light_map = linear_photo / base_colour
-    return np.nan_to_num(light_map, posinf=0.0, neginf=0.0, nan=0.0)
+    light_map = np.nan_to_num(light_map, posinf=0.0, neginf=0.0, nan=0.0)
+
+    weight = _brightness_weight_of(base_colour)
+    if weight > 0.0:
+        luma_base = float(np.dot(_LUMA_WEIGHTS.astype(base_colour.dtype), base_colour))
+        if luma_base > 0.0:
+            luma_photo = _luma_of(linear_photo)
+            brightness_only = (luma_photo / luma_base)[..., None]
+            light_map = (1.0 - weight) * light_map + weight * brightness_only
+
+    light_map = np.clip(light_map, 0.0, _LIGHT_MAP_CEILING)
+
+    sigma = _measured_noise_sigma(light_map)
+    if sigma > _NOISE_FLOOR:
+        light_map = _smooth_where_dark(light_map, sigma)
+
+    return light_map.astype(linear_photo.dtype)
+
+
+def _luma_of(image: np.ndarray) -> np.ndarray:
+    """BT.709 luma of an HxWx3 linear image, as HxW."""
+    return image @ _LUMA_WEIGHTS.astype(image.dtype)
+
+
+def _brightness_weight_of(base_colour: np.ndarray) -> float:
+    """How far the Base Colour's saturation pushes toward single-brightness division.
+
+    Saturation is ``(max - min) / max``, in [0, 1]. Mapped through
+    [_SATURATION_BLEND_START, _SATURATION_BLEND_END] to a blend weight: 0 keeps the three-channel
+    division exactly, 1 replaces it with luma-over-luma.
+    """
+    bright = float(np.max(base_colour))
+    if bright <= 0.0:
+        return 0.0
+    saturation = min(1.0, (bright - float(np.min(base_colour))) / bright)
+    span = _SATURATION_BLEND_END - _SATURATION_BLEND_START
+    return float(np.clip((saturation - _SATURATION_BLEND_START) / span, 0.0, 1.0))
+
+
+def _measured_noise_sigma(light_map: np.ndarray) -> float:
+    """A robust estimate of the Light Map's grain, from its own high-pass residual.
+
+    The residual against a small local mean captures exactly what smoothing would remove — grain,
+    not shadows, which vary too slowly to register at the probe radius. The median absolute
+    deviation, scaled to a sigma, is robust the way a mean of squared residuals is not: one blown
+    window or specular glint must not talk the estimate into smoothing the whole wall.
+    """
+    luma = _luma_of(light_map)
+    radius = max(1, round(min(luma.shape) * _NOISE_PROBE_RADIUS_FRACTION))
+    residual = luma - box_mean(luma, radius)
+    mad = float(np.median(np.abs(residual - np.median(residual))))
+    return 1.4826 * mad
+
+
+def _smooth_where_dark(light_map: np.ndarray, sigma: float) -> np.ndarray:
+    """Blend toward the local mean where the wall is dark, in proportion to measured noise.
+
+    A normalised convolution: every pixel's local mean is taken weighted by its smoothing
+    strength ``s``, so pixels with no strength contribute nothing and are returned unchanged.
+    Strength rises with the noise actually measured for this photograph and falls with
+    brightness, which is what lets a well-lit wall keep its stains while an underexposed corner
+    is quieted (issue #9).
+    """
+    strength = float(np.clip((sigma - _NOISE_FLOOR) / (_NOISE_SIGMA_FULL - _NOISE_FLOOR), 0.0, 1.0))
+    luma = _luma_of(light_map)
+    ramp = (_SMOOTHING_LIT_LUMA - luma) / (_SMOOTHING_LIT_LUMA - _SMOOTHING_DARK_LUMA)
+    s = (strength * np.clip(ramp, 0.0, 1.0))[..., None]
+
+    radius = max(1, round(min(light_map.shape[:2]) * _SMOOTHING_RADIUS_FRACTION))
+    coverage = np.maximum(box_mean(s, radius), _SMOOTHING_COVERAGE_EPSILON)
+    local_mean = box_mean(light_map * s, radius) / coverage
+    return (1.0 - s) * light_map + s * local_mean
 
 
 def new_wall_of(
@@ -169,6 +257,52 @@ _LUMA_WEIGHTS = np.array([0.2126, 0.7152, 0.0722])
 # corner-with-clothesline.jpg (off-white vs pink) splits. See fixtures in
 # data/fixtures/rooms/ and issue #8's table.
 _GROUP_TINT_THRESHOLD = 0.08
+
+# --- Robust Light Map (issue #9). All of these exist to be tuned against real
+# --- photographs; none is a derived constant. The fixtures they are meant to
+# --- be tuned against live in data/fixtures/rooms/ (see the issue's table).
+
+# The Light Map is clamped to [0, this]. A pixel this many times brighter than
+# the full-light level is noise or a specular glint, not scene shading.
+_LIGHT_MAP_CEILING = 4.0
+
+# As the Base Colour's saturation ((max - min) / max) rises from START to END,
+# the Light Map blends from three-channel division to single-brightness
+# division, because a saturated base has channels near zero whose division is
+# pure amplified noise. Below START: never blend (a neutral wall keeps its cast
+# exactly). Above END: always blend.
+_SATURATION_BLEND_START = 0.20
+_SATURATION_BLEND_END = 0.60
+
+# Noise is measured as a robust high-pass sigma on the Light Map's luma, over a
+# window of this fraction of the photo's shorter side — small enough that it
+# probes grain, not shadows.
+_NOISE_PROBE_RADIUS_FRACTION = 0.01
+
+# Measured noise below this means a clean photograph: skip smoothing entirely,
+# so a noise-free input keeps the exact division (and its texture untouched).
+_NOISE_FLOOR = 0.01
+
+# Measured noise at which dark regions get their *full* local-mean blend;
+# between the floor and this the strength rises linearly. In Light Map units:
+# on a wall one quarter lit, sensor grain reaches roughly this magnitude.
+_NOISE_SIGMA_FULL = 0.12
+
+# The darkness ramp smoothing follows: full local-mean blending where the
+# Light Map's luma is at or below DARK, none where it is at or above LIT, and
+# linearly between. Full light sits at 1.0 by construction, so texture around
+# the lit level survives; underexposed corners are quieted.
+_SMOOTHING_DARK_LUMA = 0.30
+_SMOOTHING_LIT_LUMA = 1.00
+
+# The radius of the local mean used for smoothing, as a fraction of the photo's
+# shorter side. Wide enough to swallow grain, narrow enough to keep shadow
+# gradients recognisably gradual rather than flattened.
+_SMOOTHING_RADIUS_FRACTION = 0.02
+
+# Floor for the normalised-convolution denominator, so a region with zero
+# smoothing weight cannot divide by zero (its output is not used anyway).
+_SMOOTHING_COVERAGE_EPSILON = 1e-6
 
 
 def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndarray:

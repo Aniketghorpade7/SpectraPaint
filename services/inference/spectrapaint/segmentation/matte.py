@@ -31,7 +31,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
-from spectrapaint.imaging import dilate, erode
+from spectrapaint.imaging import dilate, erode, guided_filter
 from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.prompts import PromptSet
 from spectrapaint.segmentation.semantic import SemanticRegions, pixel_values
@@ -97,55 +97,6 @@ def refiner_alpha(graphs: Graphs, photo_u8: np.ndarray, prompts: PromptSet) -> n
     # (batch, object, mask, height, width) -> the one mask that was asked for.
     logits = np.asarray(mask_logits, dtype=np.float32).reshape(-1, *mask_logits.shape[-2:])[0]
     return np.clip(_sigmoid(_resize(logits, photo_u8.shape[:2])), 0.0, 1.0).astype(np.float32)
-
-
-def _box_mean(values: np.ndarray, radius: int) -> np.ndarray:
-    """Mean of ``values`` over a square window, in time independent of the window size.
-
-    A summed-area table, so a wide window costs what a narrow one does. Written out rather than
-    taken from a library because the service depends on numpy and Pillow only, and this is the one
-    piece of the edge-aware pass that would otherwise want scipy.
-    """
-
-    padded = np.pad(values, radius + 1, mode="edge")
-    integral = padded.cumsum(axis=0).cumsum(axis=1)
-
-    height, width = values.shape
-    side = 2 * radius + 1
-    bottom = slice(side, side + height)
-    top = slice(0, height)
-    right = slice(side, side + width)
-    left = slice(0, width)
-
-    total = (
-        integral[bottom, right]
-        - integral[top, right]
-        - integral[bottom, left]
-        + integral[top, left]
-    )
-    return (total / float(side * side)).astype(np.float32)
-
-
-def guided_filter(guide: np.ndarray, target: np.ndarray, radius: int, epsilon: float) -> np.ndarray:
-    """Smooth ``target`` while following the edges of ``guide``.
-
-    The standard formulation: fit ``target ≈ a * guide + b`` over every window, then average the
-    coefficients. Where the guide has an edge the fit follows it; where the guide is flat the fit
-    degenerates to a local mean, which is exactly the behaviour wanted — sharp at the wall's
-    boundary, smooth across its shadows.
-    """
-
-    mean_guide = _box_mean(guide, radius)
-    mean_target = _box_mean(target, radius)
-    mean_product = _box_mean(guide * target, radius)
-    mean_square = _box_mean(guide * guide, radius)
-
-    covariance = mean_product - mean_guide * mean_target
-    variance = mean_square - mean_guide * mean_guide
-
-    a = covariance / (variance + epsilon)
-    b = mean_target - a * mean_guide
-    return (_box_mean(a, radius) * guide + _box_mean(b, radius)).astype(np.float32)
 
 
 def luminance_of(photo_u8: np.ndarray) -> np.ndarray:

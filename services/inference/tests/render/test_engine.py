@@ -30,11 +30,132 @@ def _linear_photo(shape=(9, 12, 3), seed=0) -> np.ndarray:
 
 
 def test_light_map_is_the_per_pixel_division() -> None:
-    linear = _linear_photo()
+    """A clean photograph of a neutral wall gets exactly ``photo / base``, untouched.
+
+    The robustness refinements (#9) must degrade to the plain division when they have nothing to
+    fix: a neutral base never triggers the saturation blend, and a noise-free photo measures below
+    the noise floor, so no smoothing runs.
+    """
     base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    shading = np.linspace(0.6, 1.0, 12, dtype=np.float32)[None, :, None]
+    linear = np.broadcast_to(base[None, None, :] * shading, (9, 12, 3)).copy()
+
     got = light_map_of(linear, base)
+
     assert got.shape == linear.shape
-    assert np.allclose(got, linear / base, atol=1e-6)
+    assert np.allclose(got, linear / base, atol=1e-5)
+
+
+def test_light_map_blends_to_single_brightness_as_the_base_saturates() -> None:
+    """Past _SATURATION_BLEND_END the Light Map is single-brightness: every channel equal.
+
+    A deep pink base has green and blue near zero; dividing those channels amplifies sensor
+    noise into speckle (#9). Blending to luma-over-luma keeps the shading and discards the
+    poisoned channels, so a noise-free input comes back as exactly its own shading.
+    """
+    deep_pink = np.array([0.60, 0.06, 0.06], dtype=np.float32)
+    shading = np.linspace(0.6, 1.0, 32, dtype=np.float32)
+    linear = np.broadcast_to(deep_pink[None, None, :] * shading[None, :, None], (24, 32, 3)).copy()
+
+    got = light_map_of(linear, deep_pink)
+
+    assert np.allclose(got[..., 0], shading[None, :], atol=1e-5)
+    assert np.allclose(got[..., 0], got[..., 1], atol=1e-6)
+    assert np.allclose(got[..., 1], got[..., 2], atol=1e-6)
+
+
+def test_light_map_of_a_moderately_saturated_wall_lies_between_the_two_extremes() -> None:
+    """The blend is a blend: strictly between pure division and pure brightness.
+
+    At mid-saturation the weight is neither 0 nor 1, so the Light Map must sit between the two
+    endpoints wherever they differ, and differ from both.
+    """
+    base = np.array([0.45, 0.25, 0.22], dtype=np.float32)
+    shading = np.linspace(0.6, 1.0, 16, dtype=np.float32)[None, :, None]
+    linear = np.broadcast_to(base[None, None, :] * shading, (16, 16, 3)).copy()
+    linear[..., 2] *= 1.15  # a smooth cast the division follows and brightness cannot
+
+    got = light_map_of(linear, base)
+
+    pure_division = linear / base
+    luma = linear @ BT709_LUMA.astype(np.float32)
+    luma_base = float(base @ BT709_LUMA.astype(np.float32))
+    pure_brightness = np.broadcast_to((luma / luma_base)[..., None], linear.shape)
+
+    low = np.minimum(pure_division, pure_brightness)
+    high = np.maximum(pure_division, pure_brightness)
+    assert (got >= low - 1e-5).all() and (got <= high + 1e-5).all()
+    differs_division = np.abs(got - pure_division) > 1e-4
+    differs_brightness = np.abs(got - pure_brightness) > 1e-4
+    assert differs_division.any() and differs_brightness.any()
+
+
+def test_a_deeply_saturated_wall_never_yields_runaway_values() -> None:
+    """One near-zero channel must not become a runaway channel in the output (#9).
+
+    The ceiling is the last guard: whatever the division produces, the returned Light Map stays
+    within [0, _LIGHT_MAP_CEILING].
+    """
+    from spectrapaint.render.engine import _LIGHT_MAP_CEILING
+
+    rng = np.random.default_rng(5)
+    deep_red = np.array([0.55, 0.03, 0.02], dtype=np.float32)
+    linear = rng.random((20, 20, 3), dtype=np.float32).astype(np.float32)
+
+    got = light_map_of(linear, deep_red)
+
+    assert np.isfinite(got).all()
+    assert (got >= 0.0).all()
+    assert (got <= _LIGHT_MAP_CEILING + 1e-6).all()
+
+
+def test_noise_is_smoothed_in_proportion_and_dark_walls_smoothed_more() -> None:
+    """Grain measured in the photo drives the smoothing; lit texture survives it (#9).
+
+    Two frames of the same paint, both carrying equal grain: one lit, one underexposed. After
+    the robust Light Map, the dark frame must have lost visibly more high-frequency energy than
+    the lit one — and a noise-free control keeps everything.
+    """
+    paint = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    grain = 0.08 * np.random.default_rng(6).standard_normal((64, 64)).astype(np.float32)
+
+    def light_map(shading: np.ndarray) -> np.ndarray:
+        linear = np.clip(paint[None, None, :] * shading[..., None], 0.0, 1.0).astype(np.float32)
+        return light_map_of(linear, paint)
+
+    def texture_energy(map_: np.ndarray) -> float:
+        centred = map_[..., 1] - map_[..., 1].mean()
+        return float(np.sqrt(np.mean(centred * centred)))
+
+    lit_energy = texture_energy(light_map(np.full((64, 64), 0.95, dtype=np.float32) + grain))
+    dark_energy = texture_energy(light_map(np.full((64, 64), 0.25, dtype=np.float32) + grain))
+    assert dark_energy < lit_energy * 0.7, "dark grain survived as if it were lit texture"
+
+    clean = light_map(np.full((64, 64), 0.95, dtype=np.float32))
+    assert clean.std() < 1e-4, "a noise-free wall was smoothed away from flat"
+
+
+def test_a_dark_wall_repainted_pale_degrades_gracefully() -> None:
+    """The darkest wall repainted in the palest shade: finite bytes, no wild values (#9).
+
+    The darkest quartile of an underexposed photograph is the input that produces runaway
+    values if the Light Map divides carelessly. Through render(), every output pixel must be a
+    sane sRGB byte — never NaN-derived garbage.
+    """
+    paint = np.array([0.055, 0.052, 0.048], dtype=np.float32)  # a very dark existing paint
+    grain = 0.02 * np.random.default_rng(7).standard_normal((48, 48)).astype(np.float32)
+    shading = np.clip(0.25 + grain, 0.0, 1.0).astype(np.float32)
+    linear = np.clip(paint[None, None, :] * shading[..., None], 0.0, 1.0).astype(np.float32)
+    alpha = np.ones((48, 48, 1), dtype=np.float32)
+    pale_shade = np.array([0.90, 0.87, 0.82], dtype=np.float32)  # near-white
+    tint = np.array([1.06, 1.00, 0.92], dtype=np.float32)
+
+    light_map = light_map_of(linear, paint)
+    out = render(linear, alpha, light_map, pale_shade, tint)
+
+    assert np.isfinite(light_map).all()
+    assert out.shape == linear.shape
+    assert (out >= 0).all() and (out <= 255).all()
 
 
 def test_light_map_of_never_yields_nan_or_inf() -> None:
