@@ -26,18 +26,10 @@ export function App() {
       const sessionId = await consultation.start();
       if (sessionId) {
         // The service files every new Consultation into the default bundle; move it to the
-        // Dealer's chosen job before the Consultation surface takes over. Best-effort: a
-        // failure leaves it in the default bundle rather than blocking the photo.
-        try {
-          await window.spectrapaint.request({
-            path: `/bundles/${bundleId}/consultations`,
-            method: 'POST',
-            body: { consultation_id: sessionId },
-          });
-          void library.refreshBundles();
-        } catch (error) {
-          console.error('[app] could not file consultation into bundle:', error);
-        }
+        // Dealer's chosen job. Use the library's placeConsultation so a non-2xx is surfaced
+        // as a message instead of vanishing — the raw request bridge returns { ok: false }
+        // without throwing, which the previous try/catch missed.
+        await library.placeConsultation(bundleId, sessionId);
       }
     },
     [consultation, library],

@@ -144,6 +144,10 @@ class SessionRegistry:
         if session_id not in self._sessions:
             return False
         del self._sessions[session_id]
+        # The live mapping is per-session; the persisted set is per-consultation and stays
+        # so a reopened session still guards on consultation_id. Without this pop the
+        # _consultations dict grows for the life of the process.
+        self._consultations.pop(session_id, None)
         return True
 
 

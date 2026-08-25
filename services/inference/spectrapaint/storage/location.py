@@ -10,8 +10,10 @@ Two ways a directory is found, in order:
    directory without touching the machine's real one, and how support can point an install at
    another disk.
 2. The per-user application data directory, via ``platformdirs`` (conventions.md §2). On
-   Windows this is ``%APPDATA%\\SpectraPaint`` — the packaged Electron build sets
-   ``SPECTRAPAINT_STORAGE_DIR`` to ``app.getPath('userData')`` so both halves share one library.
+   Windows this is ``%APPDATA%\\SpectraPaint`` — the packaged Electron build is expected to
+   set ``SPECTRAPAINT_STORAGE_DIR`` to ``app.getPath('userData')`` so both halves share one
+   library (wiring in ``apps/desktop`` main is TODO; until then this fallback is used for
+   local development and tests).
 
 Deliberately absent: any fallback to a directory inside the repository. A source checkout that
 quietly writes Bundles into its own tree looks identical to a working install until the packaged
@@ -46,7 +48,7 @@ def resolve_storage_dir(environ: Mapping[str, str] | None = None) -> Path:
     # appauthor=False: no phantom vendor folder on Windows — the directory is SpectraPaint's own.
     # Note: platformdirs' user_data_dir differs slightly from Electron's app.getPath('userData')
     # on Linux (~/.local/share/SpectraPaint vs ~/.config/SpectraPaint) and macOS
-    # (~/Library/Application Support/SpectraPaint variations). The packaged app passes
-    # SPECTRAPAINT_STORAGE_DIR to keep both halves on one directory; this default is for
-    # local development and tests.
+    # (~/Library/Application Support/SpectraPaint variations). The packaged app is expected
+    # to set SPECTRAPAINT_STORAGE_DIR to that path (wiring TODO in apps/desktop); this
+    # default is for local development and tests.
     return Path(user_data_dir(APP_NAME, appauthor=False))

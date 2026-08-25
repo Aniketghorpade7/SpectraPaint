@@ -113,7 +113,7 @@ export function useLibrary() {
         setMessage(
           'The shades already tried in this consultation could not be loaded. Please try again.',
         );
-        setRenders([]);
+        setRenders(null);
       } else {
         setRenders((history.body as { renders: RenderRecord[] }).renders ?? []);
       }
@@ -132,6 +132,14 @@ export function useLibrary() {
     },
     [request],
   );
+
+  const retryConsultation = useCallback(async () => {
+    if (openConsultationId) {
+      await openConsultation(openConsultationId);
+    } else {
+      await loadBundles();
+    }
+  }, [openConsultation, openConsultationId, loadBundles]);
 
   const backToBundle = useCallback(() => {
     setOpenConsultationId(null);
@@ -183,8 +191,8 @@ export function useLibrary() {
             (listed.body as { consultations: ConsultationSummary[] }).consultations ?? []
           ).map((c) => c.consultation_id);
         }
-      } catch {
-        // best-effort; delete still proceeds, undo just won't move anything back
+      } catch (error) {
+        console.error('[library] could not list consultations before delete:', error);
       }
 
       const response = await request(`/bundles/${bundleId}`, 'DELETE');
@@ -218,8 +226,32 @@ export function useLibrary() {
       return;
     }
     const newId = (created.body as { bundle_id: string }).bundle_id;
+    let failed = false;
     for (const cid of lastDeleted.consultationIds) {
-      await request(`/bundles/${newId}/consultations`, 'POST', { consultation_id: cid });
+      try {
+        const response = await request(`/bundles/${newId}/consultations`, 'POST', {
+          consultation_id: cid,
+        });
+        if (!response.ok) {
+          failed = true;
+          console.error(
+            '[library] could not restore consultation into bundle:',
+            cid,
+            response.body,
+          );
+        }
+      } catch (error) {
+        failed = true;
+        console.error('[library] could not restore consultation into bundle:', cid, error);
+      }
+    }
+    if (failed) {
+      setMessage(
+        'The bundle was restored but some consultations could not be moved back. Please try moving them manually.',
+      );
+      // Keep lastDeleted so the Dealer can retry; do not clear.
+      await loadBundles();
+      return;
     }
     setLastDeleted(null);
     await loadBundles();
@@ -291,6 +323,7 @@ export function useLibrary() {
     backToBundles,
     backToBundle,
     openConsultation,
+    retryConsultation,
     createBundle,
     renameBundle,
     deleteBundle,

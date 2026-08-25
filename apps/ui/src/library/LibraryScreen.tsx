@@ -359,7 +359,7 @@ function ConsultationHistory({
         <ErrorState
           message={library.message}
           actionLabel="Try again"
-          onAction={() => void library.refreshBundles()}
+          onAction={() => void library.retryConsultation()}
         />
       ) : null}
 

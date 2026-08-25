@@ -1161,9 +1161,15 @@ for when that ticket lands. And "execution profile" is recorded but fixed to `pr
 faster-vs-better-quality choice, so inventing one here would be a feature smuggled into a storage
 ticket; the column exists so renders saved before profiles arrive still say what made them.
 
-Deleting a Bundle moves its Consultations to the default Bundle ("Consultations") rather than
-deleting them: nothing is deleted automatically, and even the Dealer's explicit delete of a grouping
-is not a decision that the work inside stops existing.
+The default Bundle is structural — `bundles.is_default` (migrated from the legacy name match;
+if the legacy default was renamed, the oldest bundle is promoted), with server-side 409
+`default_bundle_protected` on rename/delete and an `RLock` around the shared sqlite connection
+(WAL + `PRAGMA foreign_keys=ON`, reparent before delete). Deleting a Bundle moves its
+Consultations to that default Bundle rather than deleting them: nothing is deleted automatically,
+and even the Dealer's explicit delete of a grouping is not a decision that the work inside stops
+existing. The wire carries `is_default` as `0`/`1` (not a bool/string), and the UI files new
+Consultations into the open Bundle via `POST /bundles/{id}/consultations` and offers Move/Undo
+(undo-by-recreate, with per-consultation error handling).
 
 **Consequence:** seam 1 covers the whole surface against a throwaway store (`test_library.py`,
 15 tests): auto-save on upload, bundle CRUD without data loss, byte-for-byte replay of stored
@@ -1183,4 +1189,35 @@ Realistic mode multiplies `light_tint = median(interior)/luma` (`estimate_light_
 **Why:** the earlier `render_many` divided each plane by its own base, so `light_map` peaked at `1.0` per plane and the room flattened — the exact failure §4 exists to prevent. Comparing raw bases would repeat it: two planes of the same white at `0.8` vs `0.5` shading yield bases `0.44` vs `0.27` (distance `0.22`) and would split. Tint removes shading scale, so same paint groups and different paint splits on the three fixtures: `empty-corner.jpg` tint distance `0.015` → group, `corner-with-clothesline.jpg` `0.324` → split, `windows-with-curtains.jpg` (single plane, blown band at top avoided by `85–90` band, not `100%`) → neutral tint. Per-channel percentiles were rejected for the same reason the spec states: three different pixel sets would neutralise the wall's cast, which is the one thing the estimate must capture.
 
 **Consequence:** the threshold is a tuned constant against two labelled corners — enough to stop the algorithm being obviously wrong, not enough to call it right; growing `data/fixtures/rooms/` is the lever to tighten it. A mis-group is silent (wrong brightness ratio or a two-toned room rendered as one), so `measured.toml` remains the place to catch it. The header satisfies "recorded on every render" for the HTTP contract; the persisted stamp belongs to storage (`#11` `Bundle → Render`), where the same field will be written alongside catalogue identity and execution profile.
+
+---
+
+## 38. Review fixes for #11: default Bundle flag, silent failures, and migration
+
+**Ticket:** #11 · **Contributor:** Anamika Chauhan (code written by an agent) · **Date:** 2026-08-25
+
+**Decided:** after review `c16f770` → `a56267f`, the library surface was made honest:
+`window.prompt` replaced by inline rename; `POST /bundles/{id}/consultations` now called from
+`useLibrary.placeConsultation` and from `App:startInBundle` (so a non-2xx surfaces a message, not a
+silent drop), with `BundleDetail` offering New consultation in-bundle and per-consultation Move;
+`openConsultation` leaves `renders` at `null` on history failure and `ConsultationHistory`'s Try
+again retries the consultation rather than refetching bundles; `bundles.is_default` migrated with a
+fallback that promotes the oldest bundle when the legacy default was renamed; `create_bundle`
+returns `is_default` as `0`/`1`; `delete_bundle` guards only via `is_default` (reparent before
+delete, `RLock` on reads+writes, `foreign_keys=ON`, dead `read_image` removed);
+`SessionRegistry.delete` now clears the live mapping and keeps the persisted set per consultation;
+`PreparationJob.completed` constructed via `cls([])` rather than `__new__` hand-sets; bundle delete
+undo re-creates and moves back with per-call error handling and a retained `lastDeleted` on partial
+failure. `storage/location.py` no longer claims the packaged Electron already sets
+`SPECTRAPAINT_STORAGE_DIR` — it notes the wiring is expected in `apps/desktop` and the default is
+for dev/tests. Tests: `default_bundle_protected` 409 covered, default located by `is_default`.
+
+**Why:** the blocking points were silent failures on the exact surface the ticket exists for —
+filing into a job and retrying a failed history — and a migration that preserved the name-matching
+bug it was meant to fix. The wire-type and lock/read notes were integrity invariants the review
+probed directly.
+
+**Consequence:** seam 1 now asserts the invariant (`default_bundle_protected`), the migration is
+idempotent and handles a renamed default, `is_default: number` is consistent across `GET`/`POST`,
+and undo is best-effort with a message rather than a silent half-restore.
 

@@ -164,13 +164,10 @@ class PreparationJob:
         on a reopened photo skips preparation.
         """
 
-        job = cls.__new__(cls)
-        job._stages = []
+        job = cls([])
         job._events = []
         job._terminal = {"phase": "done"}
         job._result = photo
-        job._lock = threading.Lock()
-        job._thread = threading.Thread(target=lambda: None, daemon=True)
         return job
 
     def _run(self) -> None:
