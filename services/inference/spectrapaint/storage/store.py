@@ -147,6 +147,48 @@ class Store:
                         ) AND NOT EXISTS (SELECT 1 FROM bundles WHERE is_default = 1)
                         """
                     )
+        # Repair already-migrated DBs where previous backfill created a phantom
+        # Consultations (count==1 but wrong bundle). Idempotent, runs every init.
+        with self._lock, self._connection:
+            count = self._connection.execute(
+                "SELECT COUNT(*) FROM bundles WHERE is_default = 1"
+            ).fetchone()[0]
+            if count != 1:
+                self._connection.execute("UPDATE bundles SET is_default = 0")
+                self._connection.execute(
+                    """
+                    UPDATE bundles SET is_default = 1 WHERE id = (
+                        SELECT id FROM bundles ORDER BY created_at LIMIT 1
+                    ) AND (SELECT COUNT(*) FROM bundles) > 0
+                    """
+                )
+            else:
+                default = self._connection.execute(
+                    "SELECT id, name FROM bundles WHERE is_default = 1"
+                ).fetchone()
+                if default and default["name"] == DEFAULT_BUNDLE_NAME:
+                    cnt_default = self._connection.execute(
+                        "SELECT COUNT(*) FROM consultations WHERE bundle_id = ?",
+                        (default["id"],),
+                    ).fetchone()[0]
+                    if cnt_default == 0:
+                        candidate = self._connection.execute(
+                            """
+                            SELECT id FROM bundles WHERE is_default = 0
+                            AND EXISTS (
+                                SELECT 1 FROM consultations WHERE bundle_id = bundles.id
+                            )
+                            ORDER BY created_at LIMIT 1
+                            """
+                        ).fetchone()
+                        if candidate:
+                            self._connection.execute(
+                                "UPDATE bundles SET is_default = 0 WHERE is_default = 1"
+                            )
+                            self._connection.execute(
+                                "UPDATE bundles SET is_default = 1 WHERE id = ?",
+                                (candidate["id"],),
+                            )
 
     def create_bundle(self, name: str, *, is_default: bool = False) -> dict:
         bundle_id = f"bundle_{os.urandom(12).hex()}"

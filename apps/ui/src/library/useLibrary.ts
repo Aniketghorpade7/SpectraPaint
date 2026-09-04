@@ -190,6 +190,8 @@ export function useLibrary() {
           consultationIds = (
             (listed.body as { consultations: ConsultationSummary[] }).consultations ?? []
           ).map((c) => c.consultation_id);
+        } else {
+          console.error('[library] could not list consultations before delete:', listed.body);
         }
       } catch (error) {
         console.error('[library] could not list consultations before delete:', error);
