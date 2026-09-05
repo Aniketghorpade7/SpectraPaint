@@ -41,11 +41,11 @@ def light_map_of(
       across channels — which keeps the shading but throws away the poisoned channels.
     * **A ceiling.** Even away from saturation, pixels far brighter than the full-light level are
       noise, not scene; values above ``_LIGHT_MAP_CEILING`` are clamped.
-    * **Noise-proportional smoothing, where the wall is dark.** Noise is measured from the photo
-      itself (a robust high-pass estimate — see :func:`_measured_noise_sigma`). Below
-      ``_NOISE_FLOOR`` nothing is smoothed; above it, regions are blended toward their local mean
-      in proportion to how much noise was measured and how dark the pixel is, so a well-lit wall
-      keeps its texture while an underexposed one is quieted.
+    * **Noise-proportional smoothing, where the wall is dark.** Noise is measured locally from the
+      photo itself (a robust high-pass estimate — see :func:`_local_noise_sigma`). Below
+      ``_NOISE_FLOOR`` nothing is smoothed; above it, each region is blended toward its local mean
+      in proportion to how much noise was measured in that neighbourhood and how dark the pixel is,
+      so a well-lit wall keeps its texture while an underexposed one is quieted.
 
     ``alpha`` is the Wall Plane matte, and the noise estimate and the smoothing are the wall's,
     not the room's: without it a curtain's fold or a window's glare decides how much the wall is
@@ -74,9 +74,12 @@ def light_map_of(
 
     light_map = np.clip(light_map, 0.0, _LIGHT_MAP_CEILING)
 
-    sigma = _measured_noise_sigma(light_map, alpha)
-    if sigma > _NOISE_FLOOR:
-        light_map = _smooth_where_dark(light_map, sigma, alpha)
+    # Use global sigma for the floor gate (robust decision whether to smooth at all)
+    global_sigma = _measured_noise_sigma(light_map, alpha)
+    # Use local sigma map for spatially-varying smoothing strength
+    sigma_map = _local_noise_sigma(light_map, alpha)
+    if global_sigma > _NOISE_FLOOR:
+        light_map = _smooth_where_dark(light_map, sigma_map, alpha)
 
     return light_map.astype(linear_photo.dtype)
 
@@ -101,23 +104,68 @@ def _brightness_weight_of(base_colour: np.ndarray) -> float:
     return float(np.clip((saturation - _SATURATION_BLEND_START) / span, 0.0, 1.0))
 
 
+def _local_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -> np.ndarray:
+    """Per-region noise estimate modulated from the global baseline.
+
+    The global MAD (see :func:`_measured_noise_sigma`) is a robust estimate of
+    the overall sensor grain. To make this spatially varying without mistaking
+    wall texture for noise, we compute a local high-frequency energy map and
+    scale the global sigma by the ratio of local energy to global energy. This
+    preserves the global noise floor while allowing regions with genuinely
+    higher grain (e.g., underexposed corners) to smooth more.
+    """
+    luma = _luma_of(light_map)
+    radius = max(1, round(min(luma.shape) * _NOISE_PROBE_RADIUS_FRACTION))
+    residual = luma - box_mean(luma, radius)
+
+    # Global baseline sigma
+    if alpha is not None:
+        alpha_f = np.asarray(alpha, dtype=np.float32)
+        if alpha_f.ndim == 3:
+            alpha_f = alpha_f[..., 0]
+        on_wall = alpha_f > _NOISE_MATTE_THRESHOLD
+        wall_residual = (
+            residual[on_wall] if on_wall.sum() >= _NOISE_MINIMUM_PIXELS else residual
+        )
+    else:
+        on_wall = None
+        wall_residual = residual
+    global_mad = float(np.median(np.abs(wall_residual - np.median(wall_residual))))
+    global_sigma = 1.4826 * global_mad
+
+    # Local high-frequency energy: variance of residual in a modest window
+    # (2% of side — wide enough for stable variance, narrow enough for spatial
+    # variation). Variance is more selective for grain than MAD on small windows.
+    energy_radius = max(1, round(min(luma.shape) * _LOCAL_ENERGY_WINDOW_FRACTION))
+    local_var = (
+        box_mean(residual * residual, energy_radius)
+        - box_mean(residual, energy_radius) ** 2
+    )
+    global_var = float(np.mean(local_var)) if alpha is None else float(np.mean(local_var[on_wall]))
+
+    # Scale global sigma by local/global variance ratio, clipped to avoid
+    # runaway amplification from texture. A clean wall has ratio ~1 everywhere.
+    if global_var > 0:
+        sigma_map = global_sigma * np.sqrt(np.clip(local_var / global_var, 0.25, 4.0))
+    else:
+        sigma_map = np.full_like(local_var, global_sigma, dtype=np.float32)
+
+    if alpha is not None:
+        sigma_map = sigma_map * (alpha_f > _NOISE_MATTE_THRESHOLD)
+
+    return sigma_map.astype(np.float32)
+
+
 def _measured_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -> float:
-    """A robust estimate of the Light Map's grain, from its own high-pass residual.
+    """Global robust noise estimate (kept for backward compatibility and tests).
 
-    The residual against a small local mean captures exactly what smoothing would remove — grain,
-    not shadows, which vary too slowly to register at the probe radius. The median absolute
-    deviation, scaled to a sigma, is robust the way a mean of squared residuals is not: one blown
-    window or specular glint must not talk the estimate into smoothing the whole wall.
-
-    Only Wall Plane pixels vote when a matte is given. A curtain's folds or a window's glare are
-    not evidence about the wall, and it is exactly on cluttered photographs that they would push
-    the frame-wide estimate over the floor and start smoothing a clean wall.
+    Computes a single sigma from the wall-wide residual MAD.
     """
     luma = _luma_of(light_map)
     radius = max(1, round(min(luma.shape) * _NOISE_PROBE_RADIUS_FRACTION))
     residual = luma - box_mean(luma, radius)
     if alpha is not None:
-        on_wall = np.asarray(alpha, dtype=np.float32).reshape(alpha.shape[0], -1)[..., 0] > 0.5
+        on_wall = np.asarray(alpha, dtype=np.float32)[..., 0] > _NOISE_MATTE_THRESHOLD
         if on_wall.sum() >= _NOISE_MINIMUM_PIXELS:
             residual = residual[on_wall]
     mad = float(np.median(np.abs(residual - np.median(residual))))
@@ -126,24 +174,28 @@ def _measured_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None
 
 def _smooth_where_dark(
     light_map: np.ndarray,
-    sigma: float,
+    sigma_map: np.ndarray,
     alpha: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Blend toward the local mean where the wall is dark, in proportion to measured noise.
+    """Blend toward the local mean where the wall is dark, in proportion to local measured noise.
 
     A normalised convolution: every pixel's local mean is taken weighted by its smoothing
     ``weight``, so pixels with no weight contribute nothing and are returned unchanged — and
     because the matte folds into the same weight, the local mean never reaches past the wall's
-    edge to borrow a chair's Light Map values. Weight rises with the noise actually measured for
-    this photograph and falls with brightness, which is what lets a well-lit wall keep its
-    stains while an underexposed corner is quieted (issue #9).
+    edge to borrow a chair's Light Map values. Weight rises with the noise actually measured in
+    each pixel's neighbourhood and falls with brightness, which is what lets a well-lit wall keep
+    its stains while an underexposed corner is quieted (issue #9).
     """
-    strength = float(np.clip((sigma - _NOISE_FLOOR) / (_NOISE_SIGMA_FULL - _NOISE_FLOOR), 0.0, 1.0))
+    # Per-pixel strength from local noise estimate
+    strength = np.clip((sigma_map - _NOISE_FLOOR) / (_NOISE_SIGMA_FULL - _NOISE_FLOOR), 0.0, 1.0)
     luma = _luma_of(light_map)
     ramp = (_SMOOTHING_LIT_LUMA - luma) / (_SMOOTHING_LIT_LUMA - _SMOOTHING_DARK_LUMA)
     weight = strength * np.clip(ramp, 0.0, 1.0)
     if alpha is not None:
-        weight = weight * np.asarray(alpha, dtype=np.float32).reshape(weight.shape)
+        alpha_f = np.asarray(alpha, dtype=np.float32)
+        if alpha_f.ndim == 3:
+            alpha_f = alpha_f[..., 0]
+        weight = weight * alpha_f
     weight = weight[..., None]
 
     radius = max(1, round(min(light_map.shape[:2]) * _SMOOTHING_RADIUS_FRACTION))
@@ -217,8 +269,10 @@ def render_many(
     composite — runs in linear RGB; the single encode happens at the end
     (issue #3 criterion 2). This keeps the maths in :mod:`spectrapaint.render`
     (conventions.md §3) and the API thin.
-    """
 
+    The Light Map is computed **once per photo per Base Colour group** (not per
+    tap), so a Shade change is just multiply–composite–encode.
+    """
     if not plane_targets:
         encoded = encode_srgb(np.ascontiguousarray(linear_photo))
         return (encoded * 255.0 + 0.5).astype(np.uint8)
@@ -226,9 +280,20 @@ def render_many(
     alphas = [alpha for alpha, _ in plane_targets]
     grouped_bases = _grouped_base_colours(linear_photo, alphas)
 
+    # Compute Light Map once per unique Base Colour group, then reuse for all
+    # planes in that group. This is the "once per photo" preparation the spec
+    # describes; the per-tap work is only multiply–composite–encode.
+    light_map_cache: dict[int, np.ndarray] = {}
+    for base_colour in grouped_bases:
+        base_id = id(base_colour)
+        if base_id not in light_map_cache:
+            # Use the first alpha that maps to this base_colour for the Light Map
+            idx = grouped_bases.index(base_colour)
+            light_map_cache[base_id] = light_map_of(linear_photo, base_colour, alphas[idx])
+
     result_linear = linear_photo.copy()
     for (alpha, target_shade), base_colour in zip(plane_targets, grouped_bases, strict=True):
-        light_map = light_map_of(linear_photo, base_colour, alpha)
+        light_map = light_map_cache[id(base_colour)]
         new_wall = new_wall_of(light_map, target_shade, light_tint)
         result_linear = composite_linear(result_linear, alpha, new_wall)
 
@@ -311,6 +376,17 @@ _NOISE_PROBE_RADIUS_FRACTION = 0.004
 # handful of pixels is a coin toss, and a sliver of matte should fall back to
 # the whole frame rather than pretend it measured grain.
 _NOISE_MINIMUM_PIXELS = 1000
+
+# A matte pixel is considered "on wall" when its coverage exceeds this threshold.
+# Not 1.0 exactly: the matte's interior is written as 1.0 but passes through a
+# float resize on the way here in some paths, and a pixel at 0.9999 is not a
+# boundary pixel.
+_NOISE_MATTE_THRESHOLD = 0.5
+
+# Window for local noise energy estimation, as a fraction of the photo's
+# shorter side. Wide enough for stable variance (2% ~ 14 px at 720p), narrow
+# enough to track spatial noise variation across the frame.
+_LOCAL_ENERGY_WINDOW_FRACTION = 0.02
 
 # Measured noise below this means a clean photograph: skip smoothing entirely,
 # so a noise-free input keeps the exact division (and its texture untouched).

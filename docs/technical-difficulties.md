@@ -501,6 +501,42 @@ always be regenerated from a broken implementation by somebody who assumes it is
 
 ---
 
+## 18. Local noise estimation mistook wall texture for sensor grain
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** the first implementation of local per-region noise estimation (`_local_noise_sigma`) computed a local MAD over a 5% window of the high-pass residual. On the `empty-corner.jpg` daylight fixture (the control that must stay below the noise floor), this produced a mean wall sigma of ~0.0097 — above the `_NOISE_FLOOR 0.008` — causing spurious smoothing of a clean wall. The global MAD correctly measured 0.0047 (well below floor). The local MAD was picking up wall texture (stains, scuffs, paint grain) as noise because the window was not wide enough to average out texture variations.
+
+**Why it was hard:** the symptom looked like a tuning problem (floor too low, window too small), but the root cause was conceptual: MAD over a local window cannot distinguish sensor grain from wall texture — both appear as high-frequency variation. The global MAD works because texture averages out over the whole wall. The phone's night mode on `windows-with-curtains.jpg` also denoised the image, making its global sigma *lower* than the daylight fixture (0.0040 vs 0.0047), so no global floor could make the night fixture smooth while leaving the day fixture sharp — the ordering is backwards.
+
+**Where it stands:** resolved by changing the local estimate to a variance-ratio modulation of the global sigma. The global MAD (`_measured_noise_sigma`) gates whether smoothing runs at all. If it exceeds the floor, a local variance map (`_local_noise_sigma`) scales the global sigma by `sqrt(local_var / global_var)`, clipped to [0.25, 4.0]. This preserves the robust global decision while allowing spatial variation where grain genuinely differs (e.g., underexposed corners). The fixture corpus may not exercise the dark-wall criterion at all (night mode denoises dark regions); this is recorded in implementation-decisions.md #37.
+
+---
+
+## 19. Alpha matte selector indexed rows, not pixels
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** `_measured_noise_sigma` and `_smooth_where_dark` used `alpha.reshape(H, -1)[..., 0] > 0.5` to select wall pixels. For an `(H, W, 1)` matte, `reshape(H, -1)` gives `(H, W)`, and `[..., 0]` then takes **column 0 only** — a length-H vector. `residual[on_wall]` therefore kept whole *rows* whose leftmost pixel happened to be wall. At 720 px height, `_NOISE_MINIMUM_PIXELS=1000` could never be met, so the alpha was ignored entirely on all preview resolutions. The frame-wide estimate the review objected to was still what ran.
+
+**Why it was hard:** the bug was a classic NumPy reshaping mistake that looked correct at a glance — `reshape(H, -1)` flattens the spatial dimensions, and `[..., 0]` looks like "channel 0". But it actually selects the first column. The fix is simply `alpha[..., 0] > threshold` to index the channel axis directly, giving an `(H, W)` boolean mask.
+
+**Where it stands:** fixed in both `_measured_noise_sigma` and `_smooth_where_dark`. The threshold `0.5` was also promoted to a named constant `_NOISE_MATTE_THRESHOLD` per conventions §4.
+
+---
+
+## 20. Performance gate silently fell back to plain division
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** `spikes/latency/bench_render_loop.py` had a `try/except ImportError` that set `_light_map_of = None` when the `spectrapaint` package wasn't installed. CI ran the gate as `uv run --python 3.12 --with "numpy>=2,<3" python spikes/latency/bench_render_loop.py --check` — **without `spectrapaint` installed**. The import failed, the fallback activated, the bench measured the old cheap `linear / base_colour` path, and the gate reported PASS. The PR description claimed "the gate now fails honestly" — false.
+
+**Why it was hard:** the failure was silent by design. The fallback was added for standalone benchmark runs, but in CI it masked the fact that the gate couldn't see the code it was supposed to guard. Conventions §5 forbids silent recovery without a log, and §7b makes the gate required. The gate passing on the wrong code path is exactly the "silent-recovery-without-a-log" the conventions forbid.
+
+**Where it stands:** fixed by making the import authoritative (dropping the `try/except`), installing `spectrapaint-inference` in the CI environment via `--with-editable services/inference` in `.github/workflows/fast-lane.yml`, and hoisting the Light Map computation out of the per-tap path in `render_many` so the gate measures the actual per-tap cost (multiply–composite–encode, ~36 ms at 1280×720).
+
+---
+
 ## 17. Grouping by raw Base Colour splits the same paint at different brightness
 
 **Ticket:** #8 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-08-22 · **Status:** resolved
