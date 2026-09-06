@@ -148,8 +148,8 @@ def _local_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -
     # variation). Variance is more selective for grain than MAD on small windows.
     energy_radius = max(1, round(min(luma.shape) * _LOCAL_ENERGY_WINDOW_FRACTION))
     local_var = (
-        box_mean(residual * residual, energy_radius)
-        - box_mean(residual, energy_radius) ** 2
+        box_mean(residual * residual, energy_radius) - box_mean(residual, energy_radius) ** 2
+    )
     )
     global_var = float(np.mean(local_var)) if alpha is None else float(np.mean(local_var[on_wall]))
 

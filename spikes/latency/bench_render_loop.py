@@ -191,11 +191,11 @@ def bench(width, height):
 
 def bench_tap(width, height):
     """Median milliseconds for one shade tap at this resolution, LUT gamma path.
-    
+
     The gate measures only this. It is the loop the customer watches, it is the
     stage measurement found to be the bottleneck, and it is the one a functional
     test cannot see regress.
-    
+
     The Light Map is now computed once per photo during preparation (not per tap), so the
     per-tap path is multiply–composite–encode only.
     """
