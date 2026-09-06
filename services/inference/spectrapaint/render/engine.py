@@ -124,10 +124,20 @@ def _local_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -
         if alpha_f.ndim == 3:
             alpha_f = alpha_f[..., 0]
         on_wall = alpha_f > _NOISE_MATTE_THRESHOLD
-        wall_residual = (
-            residual[on_wall] if on_wall.sum() >= _NOISE_MINIMUM_PIXELS else residual
-        )
+        if on_wall.sum() >= _NOISE_MINIMUM_PIXELS:
+            # Restrict to wall pixels only
+            wall_residual = residual[on_wall]
+            wall_luma = luma[on_wall]
+            # Further restrict to darkest quartile of wall (issue #9 criterion)
+            dark_wall = wall_luma < _SMOOTHING_DARK_LUMA
+            if dark_wall.any():
+                wall_residual = wall_residual[dark_wall]
+            # else: keep wall_residual as is (all wall pixels)
+        else:
+            # Not enough wall pixels, fall back to full frame
+            wall_residual = residual
     else:
+        # No alpha provided, use full frame
         on_wall = None
         wall_residual = residual
     global_mad = float(np.median(np.abs(wall_residual - np.median(wall_residual))))
@@ -159,15 +169,28 @@ def _local_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -
 def _measured_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -> float:
     """Global robust noise estimate (kept for backward compatibility and tests).
 
-    Computes a single sigma from the wall-wide residual MAD.
+    Computes a single sigma from the wall-wide residual MAD, but only over the
+    darkest quartile of the wall to match the issue's criterion that
+    "dark, underexposed walls are smoothed more".
     """
     luma = _luma_of(light_map)
     radius = max(1, round(min(luma.shape) * _NOISE_PROBE_RADIUS_FRACTION))
     residual = luma - box_mean(luma, radius)
     if alpha is not None:
-        on_wall = np.asarray(alpha, dtype=np.float32)[..., 0] > _NOISE_MATTE_THRESHOLD
+        # Wall-only restriction
+        alpha_f = np.asarray(alpha, dtype=np.float32)
+        if alpha_f.ndim == 3:
+            alpha_f = alpha_f[..., 0]
+        on_wall = alpha_f > _NOISE_MATTE_THRESHOLD
         if on_wall.sum() >= _NOISE_MINIMUM_PIXELS:
+            # Restrict to wall pixels only
             residual = residual[on_wall]
+            luma = luma[on_wall]
+            # Further restrict to darkest quartile of wall (issue #9 criterion)
+            dark_wall = luma < _SMOOTHING_DARK_LUMA
+            if dark_wall.any():
+                residual = residual[dark_wall]
+            # else: keep residual as wall pixels (no fall back needed)
     mad = float(np.median(np.abs(residual - np.median(residual))))
     return 1.4826 * mad
 
@@ -283,17 +306,21 @@ def render_many(
     # Compute Light Map once per unique Base Colour group, then reuse for all
     # planes in that group. This is the "once per photo" preparation the spec
     # describes; the per-tap work is only multiply–composite–encode.
-    light_map_cache: dict[int, np.ndarray] = {}
+    light_map_cache: dict[tuple[float, float, float], np.ndarray] = {}
     for base_colour in grouped_bases:
-        base_id = id(base_colour)
-        if base_id not in light_map_cache:
+        # Use tuple of values as key for reliable caching (arrays with same
+        # values should share Light Map computation)
+        base_key = tuple(base_colour.flat)
+        if base_key not in light_map_cache:
             # Use the first alpha that maps to this base_colour for the Light Map
-            idx = grouped_bases.index(base_colour)
-            light_map_cache[base_id] = light_map_of(linear_photo, base_colour, alphas[idx])
+            # Find index of first occurrence of this base colour
+            idx = next(i for i, bc in enumerate(grouped_bases) if tuple(bc.flat) == base_key)
+            light_map_cache[base_key] = light_map_of(linear_photo, base_colour, alphas[idx])
 
     result_linear = linear_photo.copy()
     for (alpha, target_shade), base_colour in zip(plane_targets, grouped_bases, strict=True):
-        light_map = light_map_cache[id(base_colour)]
+        base_key = tuple(base_colour.flat)
+        light_map = light_map_cache[base_key]
         new_wall = new_wall_of(light_map, target_shade, light_tint)
         result_linear = composite_linear(result_linear, alpha, new_wall)
 

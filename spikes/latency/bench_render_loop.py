@@ -191,13 +191,13 @@ def bench(width, height):
 
 def bench_tap(width, height):
     """Median milliseconds for one shade tap at this resolution, LUT gamma path.
-
+    
     The gate measures only this. It is the loop the customer watches, it is the
     stage measurement found to be the bottleneck, and it is the one a functional
     test cannot see regress.
-
-    The Light Map is now computed once per photo during preparation (not per
-    tap), so the per-tap path is multiply–composite–encode only.
+    
+    The Light Map is now computed once per photo during preparation (not per tap), so the
+    per-tap path is multiply–composite–encode only.
     """
     rng = np.random.default_rng(0)
     linear = rng.random((height, width, 3), dtype=np.float32)
@@ -206,10 +206,11 @@ def bench_tap(width, height):
     target_shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
     light_tint = np.array([1.06, 1.00, 0.92], dtype=np.float32)
 
-    # Per-tap path: multiply–composite–encode (Light Map is precomputed)
+    # Precompute Light Map once per photo (not per tap)
     light_map = _light_map_of(linear, base_colour, alpha)
 
     def full_tap_lut():
+        # Per-tap path: multiply–composite–encode
         w = light_map * target_shade * light_tint
         c = alpha * w + (1.0 - alpha) * linear
         return linear_to_srgb_lut(c)

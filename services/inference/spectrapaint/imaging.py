@@ -37,7 +37,58 @@ def erode(mask: np.ndarray, radius: int) -> np.ndarray:
     return _apply(mask, radius, ImageFilter.MinFilter)
 
 
-def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+
+def box_mean(values: np.ndarray, radius: int) -> np.ndarray:
+    """Mean of ``values`` over a square window, in time independent of the window size.
+
+    A summed-area table, so a wide window costs what a narrow one does. Written out rather than
+    taken from a library because the service depends on numpy and Pillow only, and this is the
+    one piece of the edge-aware pass that would otherwise want scipy.
+    """
+    padded = np.pad(values, radius + 1, mode="edge")
+    integral = padded.cumsum(axis=0).cumsum(axis=1)
+
+    height, width = values.shape
+    side = 2 * radius + 1
+    bottom = slice(side, side + height)
+    top = slice(0, height)
+    right = slice(side, side + width)
+    left = slice(0, width)
+
+    total = (
+        integral[bottom, right]
+        - integral[top, right]
+        - integral[bottom, left]
+        + integral[top, left]
+    )
+    return (total / float(side * side)).astype(np.float32)
+
+
+def box_mean(values: np.ndarray, radius: int) -> np.ndarray:
+    """Mean of ``values`` over a square window, in time independent of the window size.
+
+    A summed-area table, so a wide window costs what a narrow one does. Written out rather than
+    taken from a library because the service depends on numpy and Pillow only, and this is the
+    one piece of the edge-aware pass that would otherwise want scipy.
+    """
+    padded = np.pad(values, radius + 1, mode="edge")
+    integral = padded.cumsum(axis=0).cumsum(axis=1)
+
+    height, width = values.shape
+    side = 2 * radius + 1
+    bottom = slice(side, side + height)
+    top = slice(0, height)
+    right = slice(side, side + width)
+    left = slice(0, width)
+
+    total = (
+        integral[bottom, right]
+        - integral[top, right]
+        - integral[bottom, left]
+        + integral[top, left]
+    )
+    return (total / float(side * side)).astype(np.float32)
+
     """Grow a boolean region by ``radius`` pixels.
 
     With :func:`erode`, gives a ring around a region's boundary (dilated minus eroded), which is
