@@ -47,8 +47,10 @@ export type RenderMode = 'realistic' | 'true_colour';
 
 export interface Consultation {
   state: ConsultationState;
-  start: () => void;
+  start: () => Promise<string | null>;
   discard: () => void;
+  /** Put a reopened Consultation on screen: already prepared, nothing left to wait for (issue #11). */
+  adopt: (sessionId: string, imageDataUrl: string) => void;
   /** The repaint's state on the Consultation surface. See render.ts for the reducer. */
   render: RenderState;
   /** Repaint in a Shade Code: every wall, or just the selected one. Safe to call with the photo on
@@ -168,7 +170,7 @@ export function useConsultation(): Consultation {
     );
   }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (): Promise<string | null> => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
     setRender(INITIAL_RENDER_STATE);
@@ -181,7 +183,7 @@ export function useConsultation(): Consultation {
         case 'cancelled':
           // Walking away is a decision, not a failure — back to where the Dealer was, silently.
           setState({ phase: 'idle' });
-          break;
+          return null;
         case 'ready': {
           const { sessionId, imageDataUrl } = result;
           const unsubscribe = window.spectrapaint.onProgress(sessionId, (event) => {
@@ -203,11 +205,11 @@ export function useConsultation(): Consultation {
           });
           unsubscribeRef.current = unsubscribe;
           setState((previous) => ({ ...previous, sessionId, imageDataUrl }));
-          break;
+          return sessionId;
         }
         case 'failed':
           setState({ phase: 'failed', message: result.message });
-          break;
+          return null;
       }
     } catch (error) {
       // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
@@ -217,6 +219,7 @@ export function useConsultation(): Consultation {
         phase: 'failed',
         message: 'The photo could not be loaded. Please try another photo.',
       });
+      return null;
     }
   }, [endSession, loadWalls]);
 
@@ -233,6 +236,20 @@ export function useConsultation(): Consultation {
     setRenderMode('realistic');
     setState({ phase: 'idle' });
   }, [state, endSession]);
+
+  const adopt = useCallback(
+    (sessionId: string, imageDataUrl: string) => {
+      // A reopened Consultation arrives already prepared on the service: no stream to follow, no
+      // waiting. The walls are asked for once, exactly as a freshly prepared photo would (issue #11).
+      setRender(INITIAL_RENDER_STATE);
+      setWalls(INITIAL_WALLS_STATE);
+      setTarget(ALL_WALLS);
+      setAssignments({});
+      setState({ phase: 'ready', sessionId, imageDataUrl });
+      void loadWalls(sessionId);
+    },
+    [loadWalls],
+  );
 
   const applyShade = useCallback(
     async (shadeCode: string) => {
@@ -353,6 +370,7 @@ export function useConsultation(): Consultation {
     state,
     start,
     discard,
+    adopt,
     render,
     applyShade,
     toggleBeforeAfter,

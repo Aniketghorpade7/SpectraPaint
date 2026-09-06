@@ -8,6 +8,7 @@ import type {
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
+  StoredImageResult,
   WallsResult,
 } from './bridge-types';
 import {
@@ -20,6 +21,7 @@ import {
   PROGRESS_STREAM_STOP_CHANNEL,
   RENDER_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
+  STORED_IMAGE_CHANNEL,
   WALLS_CHANNEL,
 } from './channels';
 
@@ -91,6 +93,14 @@ const bridge: SpectraPaintBridge = {
 
   retryBoot(): Promise<void> {
     return ipcRenderer.invoke(BOOT_STATUS_RETRY_CHANNEL) as Promise<void>;
+  },
+
+  storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult> {
+    return ipcRenderer.invoke(
+      STORED_IMAGE_CHANNEL,
+      consultationId,
+      target,
+    ) as Promise<StoredImageResult>;
   },
 };
 

@@ -9,9 +9,24 @@
     GET    /catalogue                             -> { catalogue_id, version, shade_families, ... }
     GET    /catalogue/shades      ?q= &shade_family= &limit= &offset=
     GET    /catalogue/shades/{shade_code}         -> one Shade
+    GET    /bundles                               -> { bundles }                        (issue #11)
+    POST   /bundles               { name }        -> one Bundle
+    PATCH  /bundles/{id}          { name }        (rename)
+    DELETE /bundles/{id}                          (consultations move to the default Bundle)
+    GET    /bundles/{id}/consultations            -> { consultations }
+    POST   /bundles/{id}/consultations { consultation_id }   (file one into a Bundle)
+    GET    /consultations/{id}/renders            -> { renders } — every shade already tried
+    GET    /consultations/{id}/photo/png          (the photo as preparation left it)
+    GET    /consultations/{id}/renders/{rid}/png  (the stored render, byte-for-byte)
+    POST   /consultations/{id}/reopen             -> { session_id } — no preparation runs
 
 Encode-once is enforced structurally, by omission: a photo enters only through `POST /sessions`,
 and there is deliberately no endpoint accepting an image and a Shade together.
+
+The library endpoints (issue #11) replay stored work and never regenerate it: the two `png` routes
+serve exactly the bytes written when the work happened, and `reopen` rebuilds a live session from the
+photo and Alpha Mattes preparation already produced, so trying another Shade skips preparation.
+Nothing here deletes a Consultation or a Render.
 
 Note: the browser `EventSource` API cannot set custom headers, so the progress stream is consumed
 with a fetch-based streaming reader. Do not pass the secret as a query parameter.

@@ -499,6 +499,21 @@ from this module, and a property test: a* = b* = 0 is grey by definition, so the
 come out equal. The property test is the one that matters, because a table of expected values can
 always be regenerated from a broken implementation by somebody who assumes it is right.
 
+
+## 18. The contract-pinning test counts routes, and FastAPI keeps PATCH and DELETE apart
+
+**Ticket:** #11 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-08-22
+
+**Hit:** `test_the_contract_is_exactly_the_documented_surface` collects `(path, methods)` pairs from
+the live route table, and the first version of the new expected set wrote
+`("/bundles/{bundle_id}", {"PATCH", "DELETE"})` as one entry. It failed: FastAPI registers one route
+per method, so the collector emits two pairs for that path. The same trap was waiting on `/bundles`
+(GET+POST) and `/bundles/{bundle_id}/consultations` (GET+POST).
+
+**Resolution:** the expected set lists one pair per method, exactly as the collector sees them —
+which is also more honest about what the contract is. No production code changed.
+
+**Still open:** nothing.
 ---
 
 ## 17. Grouping by raw Base Colour splits the same paint at different brightness
@@ -510,3 +525,4 @@ always be regenerated from a broken implementation by somebody who assumes it is
 **Why it was hard:** the base estimate deliberately picks the brightest genuinely-wall pixels (`90th` percentile), so a darker wall's base *is* darker — that is correct for the light map, but it means raw distance confounds paint colour with shading. The fix is not a looser threshold (that would merge the accent wall at `0.324` tint distance) but a different space: tint `base / luma` removes shading scale, so same paint yields same tint (`0.015` on empty-corner) while different paint stays apart (`0.324` on clothesline). The mistake is easy to repeat because the spec says "compare each plane's colour" without naming the space.
 
 **Where it stands:** resolved — grouping uses tint distance `< 0.08` (`_tint_of`), and a group re-estimates from the union matte so the seam stays interior. Recorded as implementation-decisions.md #36. The threshold is still tuned against two labelled corners; more fixtures are the only honest way to tighten it.
+
