@@ -129,10 +129,8 @@ def _local_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None) -
             wall_residual = residual[on_wall]
             wall_luma = luma[on_wall]
             # Further restrict to darkest quartile of wall (issue #9 criterion)
-            dark_wall = wall_luma < _SMOOTHING_DARK_LUMA
-            if dark_wall.any():
-                wall_residual = wall_residual[dark_wall]
-            # else: keep wall_residual as is (all wall pixels)
+            dark_wall = wall_luma <= np.percentile(wall_luma, 25)
+            wall_residual = wall_residual[dark_wall] if dark_wall.any() else wall_residual
         else:
             # Not enough wall pixels, fall back to full frame
             wall_residual = residual
@@ -186,10 +184,8 @@ def _measured_noise_sigma(light_map: np.ndarray, alpha: np.ndarray | None = None
             residual = residual[on_wall]
             luma = luma[on_wall]
             # Further restrict to darkest quartile of wall (issue #9 criterion)
-            dark_wall = luma < _SMOOTHING_DARK_LUMA
-            if dark_wall.any():
-                residual = residual[dark_wall]
-            # else: keep residual as wall pixels (no fall back needed)
+            dark_wall = luma <= np.percentile(luma, 25)
+            residual = residual[dark_wall] if dark_wall.any() else residual
     mad = float(np.median(np.abs(residual - np.median(residual))))
     return 1.4826 * mad
 
