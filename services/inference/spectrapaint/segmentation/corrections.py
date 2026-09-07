@@ -110,6 +110,19 @@ def _plane_containing(planes: tuple[WallPlane, ...], x: int, y: int) -> WallPlan
     return None
 
 
+def check_addable(existing: tuple[WallPlane, ...], point: tuple[int, int]) -> None:
+    """Raise :class:`PointAlreadyCovered` if the tap already lands on an existing plane.
+
+    Split out of :func:`add_plane` so the route handler (api/planes.py) can run this before
+    loading SAM 2 at all — Split's and Merge's own preconditions never touch a model either, and
+    a tap that fails Add's precondition should not have to pay for an encoder it never needed.
+    """
+
+    x, y = point
+    if _plane_containing(existing, x, y) is not None:
+        raise PointAlreadyCovered(f"({x}, {y}) is already covered by an existing Wall Plane")
+
+
 def _nearest_pair(
     planes: tuple[WallPlane, ...],
     x: int,
@@ -207,8 +220,7 @@ def add_plane(
     """
 
     x, y = point
-    if _plane_containing(existing, x, y) is not None:
-        raise PointAlreadyCovered(f"({x}, {y}) is already covered by an existing Wall Plane")
+    check_addable(existing, point)
 
     prompts = single_point_prompt(graphs.refiner_decoder.config, photo_u8.shape[:2], x, y)
     refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])

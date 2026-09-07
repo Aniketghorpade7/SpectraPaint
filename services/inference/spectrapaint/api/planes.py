@@ -44,6 +44,7 @@ from spectrapaint.runtime.graphs import load as load_graphs
 from spectrapaint.segmentation.corrections import (
     CorrectionRefused,
     add_plane,
+    check_addable,
     merge_planes,
     order_left_to_right,
     split_plane,
@@ -149,11 +150,20 @@ async def add_wall(request: Request, session_id: str, body: TapPoint) -> dict[st
     session whose semantic pass found no wall region to encode against in the first place
     (difficulty 21) encodes here instead, once, and the result is cached on the job so a second
     Add on the same session never pays for it twice.
+
+    ``check_addable`` runs before either model call, not just before the decode: a tap that is
+    already covered is refused for free, the same way Split's and Merge's own preconditions
+    already are, rather than paying for an encoder it was never going to need.
     """
 
     prepared = await require_photo(request, session_id)
     point = _point_in_bounds(body, prepared)
     job = require_job(request, session_id)
+
+    try:
+        check_addable(prepared.planes, point)
+    except CorrectionRefused as failure:
+        raise _refused(failure) from None
 
     graphs = load_graphs()
     features = prepared.features
