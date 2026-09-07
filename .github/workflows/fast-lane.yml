@@ -102,7 +102,7 @@ jobs:
         # numpy is pinned to a major range: the baseline was recorded against numpy 2, and a major
         # version change is a reason to re-record rather than to trust the comparison.
         run: >
-          uv run --python 3.12 --with "numpy>=2,<3" --with "."
+          uv run --python 3.12 --with "numpy>=2,<3" --with "./services/inference"
           python spikes/latency/bench_render_loop.py --check
 
       - name: Measurements for re-recording the baseline
@@ -110,5 +110,5 @@ jobs:
         # the numbers on this runner today?" This prints them ready to paste.
         if: failure() && steps.gate.outcome == 'failure'
         run: >
-          uv run --python 3.12 --with "numpy>=2,<3" --with "."
+          uv run --python 3.12 --with "numpy>=2,<3" --with "./services/inference"
           python spikes/latency/bench_render_loop.py --json
