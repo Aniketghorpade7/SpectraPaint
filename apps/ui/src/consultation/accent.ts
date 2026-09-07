@@ -57,18 +57,30 @@ export function nextAssignments(
 /**
  * What to send the service: a bare Shade Code, or a Shade per wall.
  *
- * A single code when every wall is getting the same one, because the bridge then discovers the plane
- * ids itself and a photo whose walls were re-split between two taps cannot produce a request naming
- * a plane that no longer exists. A map only when the walls genuinely differ, and only for walls the
- * Dealer has actually chosen a Shade for — an unpainted wall stays the colour it is in the
- * photograph rather than being quietly given somebody else's Shade.
+ * A single code only when *every plane the photo has* is getting the same one, because the bridge
+ * then discovers the plane ids itself and a photo whose walls were re-split between two taps
+ * cannot produce a request naming a plane that no longer exists. A map otherwise — either the
+ * walls genuinely differ, or only some of them have a Shade yet — and only for walls the Dealer
+ * has actually chosen a Shade for, so an unpainted wall stays the colour it is in the photograph
+ * rather than being quietly given somebody else's Shade.
+ *
+ * `planes` is what makes that distinction correct rather than accidental: checking only whether
+ * every *assigned* code matches is trivially true the moment exactly one wall has been painted so
+ * far — a one-entry map has nothing to disagree with itself — which used to collapse "paint just
+ * this one wall" into a bare Shade Code the bridge would apply to every plane in the photo.
+ * Collapsing to a bare code now requires the assignment map to actually cover every plane, not
+ * merely agree with itself.
  */
-export function renderPayload(assignments: Assignments): string | Assignments {
+export function renderPayload(
+  assignments: Assignments,
+  planes: WallPlaneOverlay[],
+): string | Assignments {
   const codes = Object.values(assignments);
   const [first] = codes;
   if (first === undefined) return {};
 
-  const everyWallTheSame = codes.every((code) => code === first);
+  const coversEveryPlane = planes.length > 0 && Object.keys(assignments).length === planes.length;
+  const everyWallTheSame = coversEveryPlane && codes.every((code) => code === first);
   return everyWallTheSame ? first : assignments;
 }
 

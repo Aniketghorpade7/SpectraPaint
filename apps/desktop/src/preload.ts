@@ -2,18 +2,21 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import type {
   BootStatus,
+  CorrectionTool,
   CreateConsultationResult,
   ProgressStreamEvent,
   RenderResult,
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
+  TapPoint,
   WallsResult,
 } from './bridge-types';
 import {
   BOOT_STATUS_CHANNEL,
   BOOT_STATUS_GET_CHANNEL,
   BOOT_STATUS_RETRY_CHANNEL,
+  CORRECTIONS_CHANNEL,
   CREATE_CONSULTATION_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
@@ -27,9 +30,10 @@ import {
  * The only path between the renderer and everything else.
  *
  * `contextIsolation` is on and `nodeIntegration` is off, so this is the entire surface the React
- * app can see. Eight methods, deliberately: enough to call the contract, follow boot progress,
- * stream preparation progress, show which walls were found and repaint one, and nothing that hands
- * out the secret, the port, a filesystem handle or an arbitrary fetch.
+ * app can see. Nine methods, deliberately: enough to call the contract, follow boot progress,
+ * stream preparation progress, show which walls were found, correct them by tapping (ticket #10)
+ * and repaint one, and nothing that hands out the secret, the port, a filesystem handle or an
+ * arbitrary fetch.
  *
  * Note what is *not* here: no `getSecret()`, and no `baseUrl`. Exposing either would put the
  * secret one `console.log` away from a screenshot, and would break the moment a restart moves the
@@ -83,6 +87,10 @@ const bridge: SpectraPaintBridge = {
 
   walls(sessionId: string): Promise<WallsResult> {
     return ipcRenderer.invoke(WALLS_CHANNEL, sessionId) as Promise<WallsResult>;
+  },
+
+  correctWalls(sessionId: string, tool: CorrectionTool, point: TapPoint): Promise<WallsResult> {
+    return ipcRenderer.invoke(CORRECTIONS_CHANNEL, sessionId, tool, point) as Promise<WallsResult>;
   },
 
   bootStatus(): Promise<BootStatus> {

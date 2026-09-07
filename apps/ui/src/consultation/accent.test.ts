@@ -80,22 +80,40 @@ describe('nextAssignments', () => {
 
 describe('renderPayload', () => {
   it('sends a bare Shade Code when every wall carries the same one', () => {
-    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_2: 'PS-1001' })).toBe('PS-1001');
+    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_2: 'PS-1001' }, twoWalls)).toBe(
+      'PS-1001',
+    );
   });
 
   it('sends a map when the walls differ', () => {
-    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_2: 'PS-6010' })).toEqual({
+    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_2: 'PS-6010' }, twoWalls)).toEqual({
       wall_plane_1: 'PS-1001',
       wall_plane_2: 'PS-6010',
     });
   });
 
-  it('names only the walls a Shade was chosen for, so the rest stay as photographed', () => {
-    expect(renderPayload({ wall_plane_2: 'PS-6010' })).toBe('PS-6010');
-    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_3: 'PS-6010' })).toEqual({
-      wall_plane_1: 'PS-1001',
-      wall_plane_3: 'PS-6010',
+  it('never collapses a single targeted wall into "paint every plane" — the Accent Wall regression', () => {
+    // A room with two planes; only one has a Shade so far (the Dealer targeted it deliberately).
+    // A one-entry map trivially "agrees with itself", which used to be read as "every wall wants
+    // this Shade" and sent a bare Shade Code — painting the *other* wall too, though nothing was
+    // ever asked to give it a colour.
+    expect(renderPayload({ wall_plane_2: 'PS-6010' }, twoWalls)).toEqual({
+      wall_plane_2: 'PS-6010',
     });
+  });
+
+  it('names only the walls a Shade was chosen for, so the rest stay as photographed', () => {
+    const threeWalls = [...twoWalls, planeAt('wall_plane_3')];
+    expect(renderPayload({ wall_plane_1: 'PS-1001', wall_plane_3: 'PS-6010' }, threeWalls)).toEqual(
+      {
+        wall_plane_1: 'PS-1001',
+        wall_plane_3: 'PS-6010',
+      },
+    );
+  });
+
+  it('sends an empty map with nothing assigned yet', () => {
+    expect(renderPayload({}, twoWalls)).toEqual({});
   });
 });
 

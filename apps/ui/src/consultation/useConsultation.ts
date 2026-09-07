@@ -14,6 +14,12 @@ import {
   renderPayload,
   toggleTarget,
 } from './accent';
+import {
+  effectiveArmedTool,
+  toggleArmedTool,
+  type CorrectionTool,
+  type TapPoint,
+} from './corrections';
 import { applyWallsEvent, INITIAL_WALLS_STATE, type WallsState } from './walls';
 
 /**
@@ -70,6 +76,19 @@ export interface Consultation {
   renderMode: RenderMode;
   /** Switch between Realistic and True Colour; repaints the current Shade if one is on screen. */
   toggleRenderMode: () => void;
+  /** Which correction tool is armed right now (ticket #10) — Add auto-arms when the photo has no
+   * Wall Plane at all, since there is nothing else to do. The next tap on the photo performs it. */
+  armedTool: CorrectionTool | null;
+  /** Arm a correction tool; arming the already-armed tool disarms it — the same toggle
+   * toggleWalls/toggleTarget/toggleRenderMode already use, not a new interaction to learn. */
+  armTool: (tool: CorrectionTool) => void;
+  /** Perform the armed tool's correction at a tapped point, then disarm. A no-op with nothing
+   * armed or the photo not ready — safe to call from a click handler unconditionally. */
+  correctWallsAt: (point: TapPoint) => void;
+  /** The service's own message when the last correction tap was refused, safe to show as-is.
+   * Cleared on the next tool armed or the next successful correction. The existing walls are
+   * never touched by a refusal — this is a note beside them, never a dead end. */
+  correctionMessage?: string;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -81,6 +100,8 @@ const RENDER_FAILED_MESSAGE = 'The wall could not be repainted. Please try anoth
 
 const WALLS_UNAVAILABLE_MESSAGE =
   'The walls in this photo could not be shown. The photo can still be repainted.';
+
+const CORRECTION_FAILED_MESSAGE = 'That could not be done. The walls stay as they were.';
 
 /**
  * The phase transition the progress stream drives, as a pure function so it is testable without a
@@ -114,6 +135,12 @@ export function useConsultation(): Consultation {
   // time, and the second tap has to know what the first one did (ticket #7).
   const [target, setTarget] = useState<PaintTarget>(ALL_WALLS);
   const [assignments, setAssignments] = useState<Assignments>({});
+  // What the Dealer explicitly armed, if anything — corrections.effectiveArmedTool is what turns
+  // this into what is actually armed, so auto-arming Add on a zero-plane photo can never drift
+  // out of sync with whether a plane exists (ticket #10, implementation-decisions.md #37).
+  const [explicitTool, setExplicitTool] = useState<CorrectionTool | null>(null);
+  const [correctionMessage, setCorrectionMessage] = useState<string | undefined>(undefined);
+  const armedTool = effectiveArmedTool(explicitTool, walls.planes.length);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // A subscription must not outlive the surface: discarding, starting again, or unmounting
@@ -162,7 +189,13 @@ export function useConsultation(): Consultation {
       applyWallsEvent(
         previous,
         result.status === 'ready'
-          ? { type: 'found', planes: result.planes }
+          ? {
+              type: 'found',
+              planes: result.planes,
+              note: result.note,
+              photoWidth: result.photoWidth,
+              photoHeight: result.photoHeight,
+            }
           : { type: 'unavailable', message: result.message },
       ),
     );
@@ -231,6 +264,8 @@ export function useConsultation(): Consultation {
     setTarget(ALL_WALLS);
     setAssignments({});
     setRenderMode('realistic');
+    setExplicitTool(null);
+    setCorrectionMessage(undefined);
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -244,7 +279,7 @@ export function useConsultation(): Consultation {
       // the state it records cannot disagree.
       const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
       setAssignments(updated);
-      const payload = renderPayload(updated);
+      const payload = renderPayload(updated, walls.planes);
 
       let result: RenderResult;
       try {
@@ -308,7 +343,7 @@ export function useConsultation(): Consultation {
     // If a Shade is already on screen, repaint it in the new mode so the Dealer sees the
     // difference without tapping again (CONTEXT.md: Realistic vs True Colour).
     if (state.phase === 'ready' && state.sessionId && Object.keys(assignments).length > 0) {
-      const payload = renderPayload(assignments);
+      const payload = renderPayload(assignments, walls.planes);
       const shadeForState = Object.values(assignments)[0] ?? 'repaint';
       setRender((previous) =>
         applyRenderEvent(previous, { type: 'requested', shadeCode: shadeForState }),
@@ -347,7 +382,64 @@ export function useConsultation(): Consultation {
           );
         });
     }
-  }, [renderMode, state.phase, state.sessionId, assignments]);
+  }, [renderMode, state.phase, state.sessionId, assignments, walls.planes]);
+
+  const armTool = useCallback((tool: CorrectionTool) => {
+    setExplicitTool((previous) => toggleArmedTool(previous, tool));
+    setCorrectionMessage(undefined);
+  }, []);
+
+  const correctWallsAt = useCallback(
+    (point: TapPoint) => {
+      if (armedTool === null || state.phase !== 'ready' || !state.sessionId) return;
+      const tool = armedTool;
+      const sessionId = state.sessionId;
+      // One tap, one correction: disarm immediately rather than staying in a mode, matching
+      // ui-guidelines.md's "act, do not confirm" rule for the rest of this surface.
+      setExplicitTool(null);
+      setCorrectionMessage(undefined);
+
+      void (async () => {
+        let result: WallsResult;
+        try {
+          result = await window.spectrapaint.correctWalls(sessionId, tool, point);
+        } catch (error) {
+          // The bridge rejected without a result (not a service refusal). Never dead-end: the
+          // existing walls are untouched, so this is a note beside them, not a lost photo.
+          console.error('[consultation] could not correct the walls:', error);
+          setCorrectionMessage(CORRECTION_FAILED_MESSAGE);
+          return;
+        }
+
+        if (result.status === 'ready') {
+          setWalls((previous) =>
+            applyWallsEvent(previous, {
+              type: 'found',
+              planes: result.planes,
+              note: result.note,
+              photoWidth: result.photoWidth,
+              photoHeight: result.photoHeight,
+            }),
+          );
+          // A split or merge can retire a plane id the Dealer had targeted or already assigned a
+          // Shade to; fall back to painting every wall and drop the stale assignment rather than
+          // reference a plane that no longer exists (implementation-decisions.md #38).
+          const ids = new Set(result.planes.map((plane) => plane.planeId));
+          setTarget((previous) =>
+            previous.kind === 'plane' && !ids.has(previous.planeId) ? ALL_WALLS : previous,
+          );
+          setAssignments((previous) =>
+            Object.fromEntries(Object.entries(previous).filter(([planeId]) => ids.has(planeId))),
+          );
+        } else {
+          // The service's own message names the right tool instead — "already part of a wall,
+          // try Split" — and the existing walls stay exactly as they were.
+          setCorrectionMessage(result.message);
+        }
+      })();
+    },
+    [armedTool, state.phase, state.sessionId],
+  );
 
   return {
     state,
@@ -363,5 +455,9 @@ export function useConsultation(): Consultation {
     selectWall,
     renderMode,
     toggleRenderMode,
+    armedTool,
+    armTool,
+    correctWallsAt,
+    correctionMessage,
   };
 }

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
+import { registerCorrectionsBridge } from './corrections-bridge';
 import { registerCreateConsultationBridge } from './create-consultation';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
@@ -89,6 +90,7 @@ void app.whenReady().then(async () => {
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
   registerRenderBridge(() => sidecar, isTrustedSender);
   registerWallsBridge(() => sidecar, isTrustedSender);
+  registerCorrectionsBridge(() => sidecar, isTrustedSender);
   registerCreateConsultationBridge(
     () => sidecar,
     () => mainWindow,

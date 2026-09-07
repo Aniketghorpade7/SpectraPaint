@@ -74,10 +74,33 @@ export interface WallPlaneOverlay {
 /**
  * The walls found in a photo, or a failure carrying the service's own message — "no wall could be
  * found in that photo" being the case worth passing through verbatim.
+ *
+ * `note` is the service's plain-language explanation for an empty `planes` — automatic detection
+ * found nothing at all (ticket #10) — and `null` the rest of the time; never shown as an error,
+ * since the photo is still reachable through the correction surface's Add tool. `photoWidth`/
+ * `photoHeight` are top-level rather than read off `planes[0]`, because they must still be known
+ * when `planes` is empty: turning a tap into a point in the photo's own pixel space is exactly
+ * what the Add tool needs to do in that case.
  */
 export type WallsResult =
-  | { status: 'ready'; planes: WallPlaneOverlay[] }
+  | {
+      status: 'ready';
+      planes: WallPlaneOverlay[];
+      note: string | null;
+      photoWidth: number;
+      photoHeight: number;
+    }
   | { status: 'failed'; code: string; message: string };
+
+/** Which correction tool made the tap — Add, Split or Merge (ticket #10). */
+export type CorrectionTool = 'add' | 'split' | 'merge';
+
+/** Where the Dealer tapped, in the prepared photo's own pixel space — the same space
+ * `WallsResult`'s `photoWidth`/`photoHeight` describe. */
+export interface TapPoint {
+  x: number;
+  y: number;
+}
 
 export type RenderResult =
   { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
@@ -133,6 +156,17 @@ export interface SpectraPaintBridge {
    * ready" — so the renderer asks once and does not poll.
    */
   walls(sessionId: string): Promise<WallsResult>;
+
+  /**
+   * Correct the detected Wall Planes by tapping — Add, Split or Merge (ticket #10). `point` is
+   * the tapped pixel in the photo's own space (`WallsResult.photoWidth`/`photoHeight`); main
+   * resolves which plane(s) it affects, so the renderer never names a plane id for this. Returns
+   * the updated plane list in the exact shape `walls()` does, so a correction's result is handled
+   * exactly like a fresh load. A tap that does not satisfy its tool's precondition — already
+   * covered, not on a plane, not near a seam — comes back as a `failed` result carrying the
+   * service's own message, safe to show as-is; the existing planes are untouched.
+   */
+  correctWalls(sessionId: string, tool: CorrectionTool, point: TapPoint): Promise<WallsResult>;
 
   /**
    * The status right now. Read on mount, because the service can become ready before the boot
