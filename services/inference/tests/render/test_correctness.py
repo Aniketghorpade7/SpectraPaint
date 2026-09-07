@@ -36,10 +36,15 @@ BASE = np.array([0.55, 0.52, 0.48], dtype=np.float32)
 TINT = np.ones(3, dtype=np.float32)
 
 
-def _shading(shape=(7, 9, 1), seed=0, floor=0.05) -> np.ndarray:
-    """Random per-pixel illumination on the wall, kept away from zero."""
-    rng = np.random.default_rng(seed)
-    return rng.random(shape, dtype=np.float32) + np.float32(floor)
+def _shading(shape=(7, 9, 1), floor=0.05) -> np.ndarray:
+    """Smooth per-pixel illumination on the wall, kept away from zero.
+
+    Smooth rather than random: the robust Light Map (#9) quiets *measured* grain, so an
+    analytic check of the per-tap formula wants an input whose noise measures below the noise
+    floor and therefore leaves the division untouched.
+    """
+    count = int(np.prod(shape))
+    return np.linspace(floor, 1.0 + floor, count, dtype=np.float32).reshape(shape)
 
 
 def _alpha(shape=(7, 9, 1)) -> np.ndarray:
@@ -67,7 +72,7 @@ def test_core_property_shading_times_base_renders_shading_times_target() -> None
 def test_light_tint_is_part_of_the_analytical_output() -> None:
     """The spec's per-tap formula includes light_tint: s*base -> s*target*tint."""
     tint = np.array([1.06, 1.00, 0.92], dtype=np.float32)
-    shading = _shading(seed=3)
+    shading = _shading()
     photo = shading * BASE
 
     out = composite_linear(photo, _alpha(), new_wall_of(light_map_of(photo, BASE), SHADE, tint))
@@ -98,35 +103,39 @@ def test_shaded_region_stays_proportionally_darker_and_chroma_attenuates() -> No
     maths scales the whole vector toward black, so chroma attenuates
     proportionally.
     """
-    shading = np.array([[[1.0], [0.4]]], dtype=np.float32)  # lit vs shaded
-    photo = shading * BASE
+    shading = np.linspace(1.0, 0.4, 8, dtype=np.float32)[:, None, None]
+    photo = np.broadcast_to(shading * BASE, (8, 1, 3)).copy()
     light_map = light_map_of(photo, BASE)
-    alpha = np.ones((1, 2, 1), dtype=np.float32)
+    alpha = np.ones((8, 1, 1), dtype=np.float32)
 
     out = composite_linear(photo, alpha, new_wall_of(light_map, SHADE, TINT))
-    lit, shaded = out[0, 0], out[0, 1]
+    lit, shaded = out[0, 0], out[-1, 0]
+    factor = float(shading[0, 0, 0] / shading[-1, 0, 0])
 
     # Proportionally darker, channel by channel.
-    assert np.allclose(shaded, 0.4 * lit, rtol=1e-4)
+    assert np.allclose(lit, factor * shaded, rtol=1e-4)
 
     # Chroma (RGB span) attenuates by the same factor.
     chroma = lambda px: float(np.max(px) - np.min(px))  # noqa: E731
-    assert chroma(shaded) == pytest.approx(0.4 * chroma(lit), rel=1e-4)
+    assert chroma(shaded) == pytest.approx(chroma(lit) / factor, rel=1e-4)
     assert chroma(shaded) < chroma(lit)
 
 
 def test_texture_survives_the_recolour() -> None:
     """Fine shading texture is carried through unchanged, not flattened."""
-    shading = np.array([[[0.9], [0.5]]], dtype=np.float32)
-    photo = shading * BASE
+    shading = np.linspace(0.9, 0.5, 24, dtype=np.float32)[:, None, None]
+    photo = np.broadcast_to(shading * BASE, (24, 1, 3)).copy()
     light_map = light_map_of(photo, BASE)
-    alpha = np.ones((1, 2, 1), dtype=np.float32)
+    alpha = np.ones((24, 1, 1), dtype=np.float32)
 
     out = composite_linear(photo, alpha, new_wall_of(light_map, SHADE, TINT))
-    texel_a, texel_b = out[0, 0], out[0, 1]
+    # Interior texels: the frame's outermost rows are where edge padding puts
+    # step artefacts into the high-pass residual, and this check is about
+    # texture, not boundaries.
+    texel_a, texel_b = out[6, 0], out[-7, 0]
 
     # The brightness ratio between two texels is preserved exactly.
-    expected_ratio = 0.9 / 0.5
+    expected_ratio = float(shading[6, 0, 0] / shading[-7, 0, 0])
     assert np.allclose(texel_a, expected_ratio * texel_b, rtol=1e-4)
     # ... and the texture is still visible in the output.
     assert not np.allclose(texel_a, texel_b, atol=1e-3)
@@ -150,25 +159,36 @@ def test_alpha_semantics_blend_in_linear_space_analytically() -> None:
 
 
 def test_saturated_base_colour_produces_no_runaway_values() -> None:
-    """Deep-red wall: the near-zero blue channel amplifies, but never explodes."""
+    """Deep-red wall: the near-zero blue channel is blended away, never amplified (#9).
+
+    The blue channel here is pure noise up to 2.5x the true base value — exactly the input
+    three-channel division would turn into speckle. Past the saturation blend's end the Light
+    Map is single-brightness: one shading value shared by every channel, bounded by the ceiling,
+    so nothing can run away.
+    """
+    from spectrapaint.render.engine import _LIGHT_MAP_CEILING
+
     saturated = np.array([0.99, 0.05, 0.02], dtype=np.float32)
-    shading = _shading(seed=2)
+    shading = _shading()
     rng = np.random.default_rng(9)
     # The blue channel is all noise on a deep red wall: its offset is up to
-    # 2.5x the true base value, so the recovered Light Map amplifies hard.
+    # 2.5x the true base value, which is what made division there speckle.
     noise = rng.uniform(0.0, 0.05, size=shading.shape).astype(np.float32)
     photo = (shading * saturated).copy()
     photo[..., 2:3] += noise
 
     light_map = light_map_of(photo, saturated)
+
     assert np.isfinite(light_map).all()
-    assert light_map.max() > 2.0  # amplification really happened
+    assert (light_map >= 0.0).all()
+    assert (light_map <= _LIGHT_MAP_CEILING + 1e-6).all()
+    assert np.allclose(light_map[..., 0], light_map[..., 1], atol=1e-5)
+    assert np.allclose(light_map[..., 1], light_map[..., 2], atol=1e-5)
 
     new_wall = new_wall_of(light_map, SHADE, TINT)
     composite = composite_linear(photo, _alpha(), new_wall)
     assert np.isfinite(composite).all()
-    # The composite can exceed 1 in the noisy channel -- the encode must clip.
-    assert composite.max() > 1.0
+    assert composite.max() < _LIGHT_MAP_CEILING * SHADE.max() + 1e-4
 
     out = render(photo, _alpha(), light_map, SHADE, TINT)
     assert np.isfinite(out).all()

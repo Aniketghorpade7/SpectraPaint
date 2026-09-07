@@ -1192,6 +1192,18 @@ Realistic mode multiplies `light_tint = median(interior)/luma` (`estimate_light_
 
 ---
 
+
+## 37. The Light Map blends toward brightness as the wall saturates and is quieted by measured noise
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (code written by an agent) · **Date:** 2026-08-25
+
+**Decided:** `spectrapaint/render/engine.py:light_map_of` now takes an optional `alpha` matte and carries three refinements that all degrade to the plain `linear / base` division on clean, neutral input. (a) **Saturation blend** — saturation `(max-min)/max` mapped through `[_SATURATION_BLEND_START 0.20, _SATURATION_BLEND_END 0.60]` to a weight that blends the three-channel division toward a single-brightness `luma(photo)/luma(base)` division. (b) **Ceiling** — `clip(0, _LIGHT_MAP_CEILING 4.0)`. (c) **Noise-proportional smoothing where the wall is dark** — a global MAD high-pass sigma gates whether smoothing runs at all (`_measured_noise_sigma`); if it exceeds `_NOISE_FLOOR 0.008`, a per-region noise map (`_local_noise_sigma`) scales the global sigma by local high-frequency energy ratio, then `strength = (sigma-floor)/(0.12-floor)` is ramped by luma through `[_SMOOTHING_DARK_LUMA 0.30, _SMOOTHING_LIT_LUMA 1.15]` and folded with `alpha`, and a normalised convolution gives the local mean. `box_mean`/`guided_filter` moved from `segmentation/matte.py` to `spectrapaint/imaging.py` (engine already imported `erode` from there; the opposite direction would be a dependency in the wrong direction, conventions §3). `render_many` computes the Light Map **once per photo per Base Colour group** (not per tap), so a Shade tap is multiply–composite–encode. `spikes/latency/bench_render_loop.py` now measures the per-tap path only (Light Map is precomputed), and the import is authoritative — the gate fails loudly if the package is unavailable. Tuned against the three fixtures measured through `light_map_of` with the hand-labelled wall matte: `empty-corner` wall-wide `0.0047` sits well below the floor, `windows-with-curtains` `0.0040` naturally below (phone night-denoise), `corner-with-clothesline` neutral plane `0.0058` below, pink plane `0.017` above — the busy textured plane is the only one that crosses. Pinned by `tests/render/test_light_map_fixtures.py`.
+
+**Why:** a saturated Base Colour has a channel near zero and division there is pure amplified noise (speckle, review item 2's runaway values); blending toward luma keeps shading while discarding the poisoned channels. The probe was `0.01` (19×19) and read shading gradients as grain, so it was narrowed to `0.004` (7×7 at fixture res) — small enough to probe grain, not shadows. The floor was `0.01` and sat above the noise real photos carry; `0.008` puts the flat-daylight control well below with margin while genuinely busy regions still cross. `LIT` was `1.00` so a pixel at 65% of full light already took half the smoothing once the floor was crossed; `1.15` gives lit texture 15% margin above `1.0` where grain rides. Alternatives rejected: measuring noise on the whole frame (curtains/windows drove the only crossing, `0.0221` off-wall vs `0.0088` wall on `corner-with-clothesline`), smoothing without a darkness ramp (would quiet well-lit stains), absolute pixel radii (fraction keeps the same physical grain size across preview vs full-res). The initial local MAD approach mistook wall texture for noise; the variance-ratio modulation preserves the global floor while allowing spatial variation.
+
+**Consequence:** the per-tap recomputation is eliminated — Light Map is now computed once per photo per Base Colour group during preparation, so a Shade tap is back to multiply–composite–encode (~36 ms at 1280×720 vs 50–150 ms before). The gate measures this fast path and fails honestly if the package is missing. `box_mean` accumulates in float32 (integral ~5e6 on 2 MP) and hardcodes `.astype(np.float32)` — a float64 caller is downcast; pre-existing from `matte.py`. `_NOISE_MINIMUM_PIXELS 1000` guards the MAD of a sliver matte. The fixture corpus may not exercise the dark-wall criterion (night mode denoises the night fixture); see technical-difficulties.md #18.
+
+
 ## 38. Review fixes for #11: default Bundle flag, silent failures, and migration
 
 **Ticket:** #11 · **Contributor:** Anamika Chauhan (code written by an agent) · **Date:** 2026-08-25
@@ -1220,4 +1232,3 @@ probed directly.
 **Consequence:** seam 1 now asserts the invariant (`default_bundle_protected`), the migration is
 idempotent and handles a renamed default, `is_default: number` is consistent across `GET`/`POST`,
 and undo is best-effort with a message rather than a silent half-restore.
-
