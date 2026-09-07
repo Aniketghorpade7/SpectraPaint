@@ -10,6 +10,7 @@ dependencies = [
     "pillow",            # validating that an uploaded file really is a decodable photo
     "numpy",             # the render engine and colour maths (spectrapaint.render)
     "onnxruntime",       # running the exported segmentation models (spectrapaint.runtime)
+    "platformdirs",      # the per-user application data directory (spectrapaint.storage)
 ]
 
 [dependency-groups]
@@ -55,6 +56,8 @@ pythonpath = ["."]
 testpaths = ["tests"]
 # The fast lane runs `-m "not models"` on every push. Mark a test `models` when it needs weights,
 # and it becomes slow-lane only — see docs/design-decisions.md §9b.
+# Fixture tests load real photographs and hand labels; mark `fixtures` to run deliberately.
 markers = [
     "models: needs model weights; pull-request and nightly lanes only",
+    "fixtures: needs real room photographs and hand labels; pull-request and nightly lanes only",
 ]

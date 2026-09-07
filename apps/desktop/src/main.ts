@@ -8,6 +8,7 @@ import { registerCreateConsultationBridge } from './create-consultation';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
+import { registerStoredImageBridge } from './stored-image-bridge';
 import { registerWallsBridge } from './walls-bridge';
 import { SidecarStartError, startSidecar, type Sidecar } from './sidecar';
 
@@ -91,6 +92,7 @@ void app.whenReady().then(async () => {
   registerRenderBridge(() => sidecar, isTrustedSender);
   registerWallsBridge(() => sidecar, isTrustedSender);
   registerCorrectionsBridge(() => sidecar, isTrustedSender);
+  registerStoredImageBridge(() => sidecar, isTrustedSender);
   registerCreateConsultationBridge(
     () => sidecar,
     () => mainWindow,

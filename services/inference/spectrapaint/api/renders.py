@@ -39,6 +39,12 @@ from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["renders"])
 
+# Which execution profile produced a render. V1 has exactly one — the preview-scale path — so the
+# value is a named constant here rather than a request field. The column exists because the spec's
+# faster-vs-better-quality profiles will arrive as real choices later, and a render saved before
+# they do must still say what made it (issue #11: every render records its execution profile).
+EXECUTION_PROFILE = "preview"
+
 _MESSAGE_SHADE_NOT_FOUND = (
     "That Shade Code is not in this Catalogue. Please check the code on the chip, "
     "or search by name."
@@ -96,8 +102,11 @@ async def create_render(
 
     light_tint = estimate_light_tint(prepared.linear) if body.mode == "realistic" else _NEUTRAL_TINT
 
-    # Build per-plane linear targets; the maths lives in render/ (conventions §3)
+    # Build per-plane linear targets; the maths lives in render/ (conventions §3).
+    # The Lab values travel alongside, because a stored Render must say which real,
+    # saleable colours produced it — not just their codes (issue #11).
     plane_targets: list[tuple[np.ndarray, np.ndarray]] = []
+    resolved_lab: dict[str, list[float]] = {}
     for plane, shade_code in targets:
         shade = _catalogue(request).find_by_code(shade_code)
         if shade is None:
@@ -109,11 +118,15 @@ async def create_render(
         target_shade = lab_to_linear_rgb(
             np.asarray([shade.lab.l, shade.lab.a, shade.lab.b], dtype=np.float64)
         )
+        resolved_lab[shade.shade_code] = [shade.lab.l, shade.lab.a, shade.lab.b]
         plane_targets.append((plane.alpha, target_shade))
 
     rendered = render_many(prepared.linear, plane_targets, light_tint)
 
     png_bytes = _encode_png(rendered)
+
+    _save_render(request, session_id, body, rendered, png_bytes, resolved_lab)
+
     return Response(
         content=png_bytes,
         status_code=status.HTTP_201_CREATED,
@@ -125,6 +138,43 @@ async def create_render(
             # and the realism measurement (§10) can select true_colour.
             "X-SpectraPaint-Render-Mode": body.mode,
         },
+    )
+
+
+def _save_render(
+    request: Request,
+    session_id: str,
+    body: RenderRequest,
+    rendered: np.ndarray,
+    png_bytes: bytes,
+    resolved_lab: dict[str, list[float]],
+) -> None:
+    """File the finished render into the library under its Consultation.
+
+    Saving happens after the response's bytes exist but before they are sent, so what the Dealer
+    sees and what reopening shows can never disagree. A service built without a Store (tests that
+    do not exercise persistence) simply skips this.
+    """
+
+    store = getattr(request.app.state, "store", None)
+    consultation_id = request.app.state.session_registry.consultation_for(session_id)
+    if store is None or consultation_id is None:
+        return
+
+    catalogue = _catalogue(request)
+    height, width = rendered.shape[0], rendered.shape[1]
+    store.save_render(
+        consultation_id=consultation_id,
+        png=png_bytes,
+        width=int(width),
+        height=int(height),
+        execution_profile=EXECUTION_PROFILE,
+        mode=body.mode,
+        assignments=dict(body.assignments),
+        resolved_lab=resolved_lab,
+        catalogue_id=catalogue.catalogue_id,
+        catalogue_name=catalogue.catalogue_name,
+        catalogue_version=catalogue.version,
     )
 
 

@@ -2,12 +2,12 @@
 
 Three operations, one per tool the Dealer can arm on the Consultation surface — Add, Split, Merge —
 each taking nothing but the point the Dealer tapped, in the prepared photo's own pixel space. This
-mirrors implementation-decisions.md #38: the tapped point already carries the Dealer's intent (which
+mirrors implementation-decisions.md #40: the tapped point already carries the Dealer's intent (which
 tool they armed), so nothing here asks the caller to also resolve *which* plane or *which* pair of
 planes is meant — that geometry belongs here, next to the mattes it reads.
 
 **Add** decodes a new plane from the tap through SAM 2, against features preparation already
-encoded (or, for the one photo where it did not — difficulty 18 — a caller-supplied encode of its
+encoded (or, for the one photo where it did not — difficulty 21 — a caller-supplied encode of its
 own). **Split** and **Merge** need no model at all: a hard partition (segmentation/split.py) means
 every Wall Plane's matte is already disjoint from every other's, so splitting is a plain array cut
 and merging is a plain array sum. All three are therefore cheap enough to run on every tap without
@@ -145,7 +145,7 @@ def _next_plane_id(existing: Iterable[str]) -> str:
     """The next ``wall_plane_N`` id not already in use.
 
     Corrections retire and mint ids out of the left-to-right order the automatic splitter numbers
-    in (implementation-decisions.md #38: ids stay stable across a correction, so a Shade already
+    in (implementation-decisions.md #40: ids stay stable across a correction, so a Shade already
     assigned is never silently reassigned to a different wall) — a plain "count + 1" would
     eventually collide with an id an earlier correction already used, so this tracks the highest
     suffix actually in use instead.
@@ -256,7 +256,7 @@ def split_plane(
     :func:`merge_planes` returns, so a caller removes ``original`` from the plane list and puts
     the two halves in its place. Both halves mint fresh ids; the original's is retired. Nothing
     says which half — if either — should keep a Shade already assigned to the wall being split,
-    so neither does (implementation-decisions.md #38).
+    so neither does (implementation-decisions.md #40).
     """
 
     x, y = point
@@ -310,6 +310,6 @@ def merge_planes(
     first, second = pair
     merged_alpha = np.clip(first.alpha + second.alpha, 0.0, 1.0).astype(np.float32)
     # The larger plane's id survives, so a Shade already assigned to it keeps working
-    # (implementation-decisions.md #38) — an arbitrary but deterministic tie-break otherwise.
+    # (implementation-decisions.md #40) — an arbitrary but deterministic tie-break otherwise.
     survivor_id = first.plane_id if first.coverage >= second.coverage else second.plane_id
     return WallPlane(plane_id=survivor_id, alpha=merged_alpha), first, second

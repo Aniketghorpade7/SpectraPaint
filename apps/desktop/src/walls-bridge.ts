@@ -51,7 +51,7 @@ export interface PlaneDescription {
 }
 
 /** The shape every planes-listing and every correction answers with (implementation-decisions.md
- * #38/#40) — `note` and the top-level dimensions exist precisely for the photo that has none. */
+ * #40/#42) — `note` and the top-level dimensions exist precisely for the photo that has none. */
 export interface PlanesResponseBody {
   planes: PlaneDescription[];
   note: string | null;
@@ -101,7 +101,7 @@ export function registerWallsBridge(
  * plane, each becoming a data URL the renderer can draw directly.
  *
  * Shared by `registerWallsBridge` and `corrections-bridge.ts`: a correction's response has this
- * exact shape (implementation-decisions.md #38), so both fetch the same way rather than the
+ * exact shape (implementation-decisions.md #40), so both fetch the same way rather than the
  * correction bridge re-implementing this loop beside it.
  */
 export async function overlaysFrom(

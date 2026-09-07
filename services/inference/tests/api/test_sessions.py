@@ -183,6 +183,23 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/catalogue", frozenset({"GET"})),
         ("/catalogue/shades", frozenset({"GET"})),
         ("/catalogue/shades/{shade_code}", frozenset({"GET"})),
+        # Issue #11. The library: Bundles are managed (rename is PATCH; delete moves its
+        # Consultations to the default Bundle), a Consultation's history and stored images are
+        # replayed byte-for-byte, and reopen builds a live session from what preparation stored —
+        # no endpoint here regenerates anything.
+        ("/bundles", frozenset({"GET"})),
+        ("/bundles", frozenset({"POST"})),
+        ("/bundles/{bundle_id}", frozenset({"PATCH"})),
+        ("/bundles/{bundle_id}", frozenset({"DELETE"})),
+        ("/bundles/{bundle_id}/consultations", frozenset({"GET"})),
+        ("/bundles/{bundle_id}/consultations", frozenset({"POST"})),
+        ("/consultations/{consultation_id}/renders", frozenset({"GET"})),
+        ("/consultations/{consultation_id}/photo/png", frozenset({"GET"})),
+        (
+            "/consultations/{consultation_id}/renders/{render_id}/png",
+            frozenset({"GET"}),
+        ),
+        ("/consultations/{consultation_id}/reopen", frozenset({"POST"})),
     }
 
     actual = set()

@@ -23,7 +23,7 @@ still running is served when it finishes, not refused. The Dealer's UI asks for 
 as the photo is uploaded, and "not ready" would only mean it had to ask again.
 
 The other three are ticket #10's corrections, one per tool the Dealer can arm — Add, Split, Merge —
-each taking the one tap point that tool needs and nothing else (implementation-decisions.md #38).
+each taking the one tap point that tool needs and nothing else (implementation-decisions.md #40).
 All three answer with the same shape ``GET /sessions/{id}/planes`` does, so the Dealer's UI treats a
 correction's result exactly like a fresh load: replace the plane list, done. None of them touch the
 photo or re-run preparation — the segmentation work lives in ``segmentation/corrections.py``; this
@@ -95,7 +95,7 @@ def _planes_response(
     (:func:`_describe` already carries them there too, for a caller reading one plane in
     isolation) — a photo can legitimately have zero planes (no wall found at all), and the
     correction surface's Add tool needs the photo's own dimensions to turn a tap into a point in
-    this space precisely in that case (implementation-decisions.md §38,
+    this space precisely in that case (implementation-decisions.md §40,
     apps/ui/src/consultation/corrections.ts).
     """
 
@@ -113,7 +113,7 @@ class TapPoint(BaseModel):
 
     The same coordinate system ``GET /sessions/{id}/planes`` already describes via
     ``photo_width``/``photo_height`` — no new space for a client to learn
-    (implementation-decisions.md #38).
+    (implementation-decisions.md #40).
     """
 
     x: int = Field(ge=0)
@@ -147,7 +147,7 @@ async def add_wall(request: Request, session_id: str, body: TapPoint) -> dict[st
 
     SAM 2 decodes against the photo's already-encoded features (``prepared.features``); a
     session whose semantic pass found no wall region to encode against in the first place
-    (difficulty 18) encodes here instead, once, and the result is cached on the job so a second
+    (difficulty 21) encodes here instead, once, and the result is cached on the job so a second
     Add on the same session never pays for it twice.
     """
 

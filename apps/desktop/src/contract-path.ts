@@ -25,7 +25,7 @@ const CONTRACT_PATH = /^\/(?!\/)[A-Za-z0-9\-._~/]*$/;
  */
 const QUERY_STRING = /^[A-Za-z0-9*\-._%=&+]*$/;
 
-const ALLOWED_METHODS = new Set(['GET', 'POST', 'DELETE']);
+const ALLOWED_METHODS = new Set(['GET', 'POST', 'PATCH', 'DELETE']);
 
 export function isPermittedRequest(request: ServiceRequest | undefined | null): boolean {
   if (!request || typeof request.path !== 'string') return false;

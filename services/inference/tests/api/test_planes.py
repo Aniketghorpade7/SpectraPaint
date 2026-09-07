@@ -94,7 +94,7 @@ def test_a_photo_with_no_wall_still_states_its_own_dimensions(
 ) -> None:
     """The Add tool needs the photo's own pixel space to turn a tap into a point in it — and a
     zero-plane photo has no plane object left to read ``photo_width``/``photo_height`` from
-    (implementation-decisions.md #38), so the top-level fields are what it falls back to."""
+    (implementation-decisions.md #40), so the top-level fields are what it falls back to."""
     session_id = upload(no_wall_client)
 
     response = no_wall_client.get(f"/sessions/{session_id}/planes", headers=auth())

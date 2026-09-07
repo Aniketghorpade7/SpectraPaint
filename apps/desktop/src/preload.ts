@@ -9,6 +9,7 @@ import type {
   ServiceRequest,
   ServiceResponse,
   SpectraPaintBridge,
+  StoredImageResult,
   TapPoint,
   WallsResult,
 } from './bridge-types';
@@ -23,6 +24,7 @@ import {
   PROGRESS_STREAM_STOP_CHANNEL,
   RENDER_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
+  STORED_IMAGE_CHANNEL,
   WALLS_CHANNEL,
 } from './channels';
 
@@ -30,10 +32,10 @@ import {
  * The only path between the renderer and everything else.
  *
  * `contextIsolation` is on and `nodeIntegration` is off, so this is the entire surface the React
- * app can see. Nine methods, deliberately: enough to call the contract, follow boot progress,
- * stream preparation progress, show which walls were found, correct them by tapping (ticket #10)
- * and repaint one, and nothing that hands out the secret, the port, a filesystem handle or an
- * arbitrary fetch.
+ * app can see. Ten methods, deliberately: enough to call the contract, follow boot progress,
+ * stream preparation progress, show which walls were found, correct them by tapping (ticket #10),
+ * repaint one and read back a stored image (ticket #11), and nothing that hands out the secret,
+ * the port, a filesystem handle or an arbitrary fetch.
  *
  * Note what is *not* here: no `getSecret()`, and no `baseUrl`. Exposing either would put the
  * secret one `console.log` away from a screenshot, and would break the moment a restart moves the
@@ -99,6 +101,14 @@ const bridge: SpectraPaintBridge = {
 
   retryBoot(): Promise<void> {
     return ipcRenderer.invoke(BOOT_STATUS_RETRY_CHANNEL) as Promise<void>;
+  },
+
+  storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult> {
+    return ipcRenderer.invoke(
+      STORED_IMAGE_CHANNEL,
+      consultationId,
+      target,
+    ) as Promise<StoredImageResult>;
   },
 };
 

@@ -16,7 +16,7 @@ export type { CorrectionTool, TapPoint };
 /**
  * Which tool is actually armed right now: what the Dealer explicitly chose, or Add by default
  * when there is nothing else to do — automatic detection found no wall at all, and the
- * correction surface is the only way forward (implementation-decisions.md #37).
+ * correction surface is the only way forward (implementation-decisions.md #39).
  *
  * A derived value rather than its own piece of state, so auto-arming Add can never drift out of
  * sync with whether a plane actually exists the way a separately-set flag could: the moment a
@@ -33,7 +33,7 @@ export function effectiveArmedTool(
 /**
  * Arming the already-armed tool disarms it — the same toggle `toggleWalls`/`toggleTarget`/
  * `toggleRenderMode` already use, so this is not a new interaction to learn, only a familiar one
- * applied again (implementation-decisions.md #37).
+ * applied again (implementation-decisions.md #39).
  */
 export function toggleArmedTool(
   explicitlyArmed: CorrectionTool | null,
@@ -57,7 +57,7 @@ export function describeArmedTool(tool: CorrectionTool): string {
 /**
  * A tap's position on the photo, from where it landed on the rendered `<img>` element to the
  * pixel it names in the prepared photo — the coordinate space `photoWidth`/`photoHeight` already
- * describe (implementation-decisions.md #38).
+ * describe (implementation-decisions.md #40).
  *
  * Takes the *fraction* across the rendered element, not the click event itself, so the geometry
  * is testable without a browser: the one line that reads `getBoundingClientRect` stays in the

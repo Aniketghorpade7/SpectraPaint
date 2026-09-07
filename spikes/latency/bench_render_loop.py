@@ -58,6 +58,8 @@ from time import perf_counter  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from spectrapaint.render.engine import light_map_of as _light_map_of  # noqa: E402
+
 # Resolutions worth distinguishing. A modern phone shoots 12MP; the preview
 # candidates are what we would use while the dealer browses shades.
 RESOLUTIONS = [
@@ -148,8 +150,9 @@ def bench(width, height):
     results["srgb_to_linear"] = time_it(lambda: srgb_to_linear(photo))
     linear = srgb_to_linear(photo).astype(np.float32)
 
-    results["light_map"] = time_it(lambda: linear / base_colour)
-    light_map = (linear / base_colour).astype(np.float32)
+    _bench_alpha = np.ones((height, width, 1), dtype=np.float32)
+    results["light_map"] = time_it(lambda: _light_map_of(linear, base_colour, _bench_alpha))
+    light_map = _light_map_of(linear, base_colour, _bench_alpha).astype(np.float32)
 
     # ---- per shade tap --------------------------------------------------
     def multiply():
@@ -192,6 +195,9 @@ def bench_tap(width, height):
     The gate measures only this. It is the loop the customer watches, it is the
     stage measurement found to be the bottleneck, and it is the one a functional
     test cannot see regress.
+
+    The Light Map is now computed once per photo during preparation (not per tap), so the
+    per-tap path is multiply–composite–encode only.
     """
     rng = np.random.default_rng(0)
     linear = rng.random((height, width, 3), dtype=np.float32)
@@ -199,9 +205,12 @@ def bench_tap(width, height):
     base_colour = np.array([0.55, 0.52, 0.48], dtype=np.float32)
     target_shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
     light_tint = np.array([1.06, 1.00, 0.92], dtype=np.float32)
-    light_map = (linear / base_colour).astype(np.float32)
+
+    # Precompute Light Map once per photo (not per tap)
+    light_map = _light_map_of(linear, base_colour, alpha)
 
     def full_tap_lut():
+        # Per-tap path: multiply–composite–encode
         w = light_map * target_shade * light_tint
         c = alpha * w + (1.0 - alpha) * linear
         return linear_to_srgb_lut(c)

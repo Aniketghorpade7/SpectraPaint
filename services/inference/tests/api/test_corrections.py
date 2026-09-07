@@ -2,7 +2,7 @@
 
 Split and Merge need no model at all: a hard partition means every Wall Plane's matte is already
 disjoint from every other's (segmentation/split.py), so both are plain array operations
-(implementation-decisions.md #39, segmentation/corrections.py) — fully covered here, in the fast
+(implementation-decisions.md #41, segmentation/corrections.py) — fully covered here, in the fast
 lane, against the same stub planes tests/api/test_renders.py already uses.
 
 Add's own decode genuinely needs SAM 2, so only what runs *before* any model call — a tap that is
@@ -123,7 +123,7 @@ def test_split_cuts_the_plane_in_two_at_the_tapped_column(client: TestClient) ->
     assert response.status_code == 201, response.text
     planes = response.json()["planes"]
     assert len(planes) == 2
-    # Left-to-right order (implementation-decisions.md #39), and a crisp cut: wall-to-wall never
+    # Left-to-right order (implementation-decisions.md #41), and a crisp cut: wall-to-wall never
     # carries a soft edge (spec, "Corners").
     assert planes[0]["bounds"]["right"] <= planes[1]["bounds"]["left"]
     # The listing route agrees with what the correction itself returned.

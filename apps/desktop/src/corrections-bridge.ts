@@ -18,7 +18,7 @@ import {
  * assignments map on one channel rather than two. `tool` picks the service route; the point never
  * changes shape. Every response is resolved through `walls-bridge.ts`'s `overlaysFrom`, because a
  * correction's answer is exactly the same shape `GET .../planes` already is
- * (implementation-decisions.md #38) — fetching each plane's matte is the same work either way.
+ * (implementation-decisions.md #40) — fetching each plane's matte is the same work either way.
  */
 
 const ROUTE_FOR: Record<CorrectionTool, string> = {

@@ -161,6 +161,22 @@ class PreparationJob:
         """Begin preparation. Called once, by the session that owns the job."""
         self._thread.start()
 
+    @classmethod
+    def completed(cls, photo: PreparedPhoto) -> PreparationJob:
+        """A job whose work is already done — the shape a reopened Consultation arrives in.
+
+        Reopening (issue #11) loads the photo and Alpha Mattes stored when preparation first ran,
+        so there is no thread and no stage list: the stream replays exactly one ``done`` event and
+        the render path reads the photo immediately. That is the whole reason "try another Shade"
+        on a reopened photo skips preparation.
+        """
+
+        job = cls([])
+        job._events = []
+        job._terminal = {"phase": "done"}
+        job._result = photo
+        return job
+
     def _run(self) -> None:
         for stage in self._stages:
             with self._lock:
@@ -257,7 +273,7 @@ class PreparationJob:
         same session reuses it instead of paying the encoder again.
 
         Only reached for a session whose semantic pass found no plausible wall region at all —
-        preparation already caches the encode for every other session (difficulty 18). A no-op
+        preparation already caches the encode for every other session (difficulty 21). A no-op
         under the same "preparation must already have produced a photo" rule as ``replace_planes``.
         """
 
