@@ -82,11 +82,16 @@ class SessionRegistry:
         self._persisted: set[str] = (
             set()
         )  # guarded by consultation_id, not session_id (see persist_preparation)
+        # Original upload bytes per live session, kept for full-resolution export
+        # (issue #12). Preview preparation downscales; export re-renders from the
+        # original without re-running the model.
+        self._originals: dict[str, bytes] = {}
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
         job = PreparationJob(self._preparation_stages(contents))
         self._sessions[session_id] = job
+        self._originals[session_id] = contents
         if self._store is not None:
             # Auto-save: the photo exists as a Consultation from this moment, whatever happens next.
             self._store.register_consultation(session_id, contents)
@@ -112,6 +117,10 @@ class SessionRegistry:
     def consultation_for(self, session_id: str) -> str | None:
         """The Consultation this live session belongs to."""
         return self._consultations.get(session_id)
+
+    def original_bytes(self, session_id: str) -> bytes | None:
+        """The original upload bytes for this live session, if held in memory."""
+        return self._originals.get(session_id)
 
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
         """Store what preparation produced, once per consultation.
@@ -148,6 +157,7 @@ class SessionRegistry:
         # so a reopened session still guards on consultation_id. Without this pop the
         # _consultations dict grows for the life of the process.
         self._consultations.pop(session_id, None)
+        self._originals.pop(session_id, None)
         return True
 
 

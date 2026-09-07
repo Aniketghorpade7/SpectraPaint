@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
+  ExportResult,
   ProgressStreamEvent,
   RenderResult,
   WallsResult,
 } from '../../../desktop/src/bridge-types';
+import { applyExportEvent, INITIAL_EXPORT_STATE, type ExportState } from './export';
 import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
 import {
   ALL_WALLS,
@@ -91,6 +93,10 @@ export interface Consultation {
    * Cleared on the next tool armed or the next successful correction. The existing walls are
    * never touched by a refusal — this is a note beside them, never a dead end. */
   correctionMessage?: string;
+  /** Full-resolution JPEG export via the OS share sheet (issue #12) — non-blocking. */
+  exportState: ExportState;
+  exportRender: () => void;
+  dismissExport: () => void;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -132,6 +138,7 @@ export function useConsultation(): Consultation {
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
   const [walls, setWalls] = useState<WallsState>(INITIAL_WALLS_STATE);
   const [renderMode, setRenderMode] = useState<RenderMode>('realistic');
+  const [exportState, setExportState] = useState<ExportState>(INITIAL_EXPORT_STATE);
   // Which wall the next Shade paints, and what each wall is already carrying. Held here rather than
   // in the render state because it outlives a single repaint: an Accent Wall is built one wall at a
   // time, and the second tap has to know what the first one did (ticket #7).
@@ -208,6 +215,7 @@ export function useConsultation(): Consultation {
     unsubscribeRef.current = null;
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
+    setExportState(INITIAL_EXPORT_STATE);
     setState({ phase: 'uploading', progressMessage: LOADING_MESSAGE });
 
     try {
@@ -264,6 +272,7 @@ export function useConsultation(): Consultation {
     }
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
+    setExportState(INITIAL_EXPORT_STATE);
     setTarget(ALL_WALLS);
     setAssignments({});
     setRenderMode('realistic');
@@ -278,6 +287,7 @@ export function useConsultation(): Consultation {
       // waiting. The walls are asked for once, exactly as a freshly prepared photo would (issue #11).
       setRender(INITIAL_RENDER_STATE);
       setWalls(INITIAL_WALLS_STATE);
+      setExportState(INITIAL_EXPORT_STATE);
       setTarget(ALL_WALLS);
       setAssignments({});
       setState({ phase: 'ready', sessionId, imageDataUrl });
@@ -458,6 +468,50 @@ export function useConsultation(): Consultation {
     [armedTool, state.phase, state.sessionId],
   );
 
+  const exportRender = useCallback(() => {
+    if (state.phase !== 'ready' || !state.sessionId || Object.keys(assignments).length === 0)
+      return;
+    setExportState((previous) => applyExportEvent(previous, { type: 'requested' }));
+    const payload = renderPayload(assignments, walls.planes);
+    void window.spectrapaint
+      .export(state.sessionId, payload, renderMode)
+      .then((result: ExportResult) => {
+        if (result.status === 'ready') {
+          setExportState((previous) =>
+            applyExportEvent(previous, {
+              type: 'ready',
+              filename: result.filename,
+              filePath: result.filePath,
+            }),
+          );
+        } else if (result.status === 'cancelled') {
+          setExportState((previous) => applyExportEvent(previous, { type: 'cancelled' }));
+        } else {
+          setExportState((previous) =>
+            applyExportEvent(previous, {
+              type: 'failed',
+              code: result.code,
+              message: result.message,
+            }),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[consultation] export failed:', error);
+        setExportState((previous) =>
+          applyExportEvent(previous, {
+            type: 'failed',
+            code: 'export_failed',
+            message: 'The export could not be completed. Please try again.',
+          }),
+        );
+      });
+  }, [state.phase, state.sessionId, assignments, walls.planes, renderMode]);
+
+  const dismissExport = useCallback(() => {
+    setExportState((previous) => applyExportEvent(previous, { type: 'dismiss' }));
+  }, []);
+
   return {
     state,
     start,
@@ -477,5 +531,8 @@ export function useConsultation(): Consultation {
     armTool,
     correctWallsAt,
     correctionMessage,
+    exportState,
+    exportRender,
+    dismissExport,
   };
 }

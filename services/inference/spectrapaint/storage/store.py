@@ -344,6 +344,17 @@ class Store:
                 planes.append((str(plane["plane_id"]), matte))
             return photo, planes
 
+    def original_bytes(self, consultation_id: str) -> bytes | None:
+        """The original uploaded bytes for this Consultation, if stored."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path FROM consultations WHERE id = ?", (consultation_id,)
+            ).fetchone()
+            if row is None or row["original_path"] is None:
+                return None
+            return self._read_bytes(str(row["original_path"]))
+
     def consultation_exists(self, consultation_id: str) -> bool:
         with self._lock:
             row = self._connection.execute(

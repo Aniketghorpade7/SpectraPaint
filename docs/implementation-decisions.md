@@ -1326,3 +1326,56 @@ Two decisions #40 left open, resolved here because implementation forced an answ
 **Why:** `codes.every((code) => code === first)` is true of a one-entry array unconditionally — an array cannot disagree with its own only element. So the moment a Dealer targeted a single wall (`selectWall`) and tapped a Shade for the first time, `assignments` held exactly one entry, `renderPayload` read that as "every wall wants this Shade," and sent the bare Shade Code the render-bridge already treats as "paint every plane the photo has" (implementation-decisions.md §20) — repainting the *other* wall too, though nothing had ever assigned it anything. Tapping a second wall with a second colour then produced a genuine two-entry, two-code map, which correctly stayed a map — so the bug was invisible exactly in the case anyone would test first (one wall, one Shade) and only showed up once a Dealer built a real Accent Wall one tap at a time, which is precisely how it was found: by using the shipped feature, not by reading `accent.ts` or its own tests. `accent.test.ts` had a passing assertion for the buggy input (`renderPayload({wall_plane_2: 'PS-6010'})` expected to equal `'PS-6010'`) under a test named "names only the walls a Shade was chosen for" — the name and the assertion contradicted each other, and nothing caught it because `render-bridge.ts`'s own handling of a bare Shade Code is only exercised in isolation (`render-bridge.test.ts`), never chained to what a *partial* Accent Wall assignment actually produces.
 
 **Consequence:** the wrong assertion is replaced with the regression it should have been from the start (`accent.test.ts`, "never collapses a single targeted wall into 'paint every plane'"), plus a case for three planes and one for an empty map. Nothing about the wire shape changed — `renderPayload` still returns a bare code or a map, and the bridge still discovers plane ids for a bare code the same way — only the *rule for choosing between them* got the information it needed to be right rather than accidentally right. Worth naming for the next person reading this function: "every value in this map agrees with itself" is a different claim from "every wall has this value," and the two are indistinguishable at exactly one map size.
+
+---
+
+## 45. Export re-renders from the original upload bytes, and the JPEG leaves through a save dialog
+
+**Ticket:** #12 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-09-08
+
+**Decided:** `POST /sessions/{id}/exports` (`spectrapaint/api/exports.py`) re-renders the request's
+`assignments` at the photo's **original resolution** and returns a **JPEG** (quality 92, 4:4:4 so
+the matte edge does not smear, no EXIF). The full-resolution photo comes from the original upload
+bytes: the `SessionRegistry` keeps them in memory per live session (`_originals`, dropped on
+delete), with a `Store.original_bytes` fallback through `original_path` so a **reopened**
+Consultation exports full-res too — `restore` mints a session that has no originals in memory, but
+the store kept the upload (decision #37). The Alpha Mattes are the preview-scale ones upscaled
+bilinearly; the full-res boundary-band refinement pass is **not** re-run, so the export's wall
+edges are exactly as soft as the preview's — accepted for V1, and the known softness is stated
+here rather than hidden. The stored PNG archive is never handed out: a fresh JPEG is always
+rendered (design-decisions §9). The filename carries the Shade Code and name
+(`AP-2140-Almond-Cream.jpg`); an Accent Wall joins every Shade with `+`, the human name is
+sanitised for all three OSes while the code is kept verbatim, and the result is capped at 120
+characters. The endpoint does **not** file a Render into the store: a library Render is what a
+reopened Consultation must show unchanged, and the exported JPEG is a Customer artifact the app
+does not own.
+
+In the shell, a **dedicated export bridge** (`apps/desktop/src/export-bridge.ts`) — the pattern
+technical-difficulties #7 predicted — fetches the JPEG with the secret in main, writes it to a
+temp file, then opens the native save dialog and copies to the chosen path, revealing it with
+`shell.showItemInFolder`. On Windows there is no system share sheet to hand a file to, so
+**save dialog + reveal-in-folder is the share-sheet interpretation**: WhatsApp, email and print
+all consume a file from Explorer, and the dialog is the "choosing an export destination" native
+dialog the spec already assigns to main. The bridge returns `ready | cancelled | failed` with the
+service's plain-language message passed through, and the temp file is deleted unless it *is* the
+deliverable (the dialog-throw fallback returns the temp path itself). In the UI, export is its own
+state slice (`apps/ui/src/consultation/export.ts`, pure reducer, vitest-covered) driven fire-and-
+forget, so the Export button's in-flight state never blocks browsing — the acceptance criterion
+the slice exists for.
+
+**Why:** rendering from the original bytes rather than upscaling the stored preview PNG is the
+difference between a full-resolution render and an enlarged one — the Light Map, Base Colour and
+tint are re-derived at full res, so shadows and brightness behave exactly as a preview render
+would at that size. Keeping originals in memory per live session is bounded (auto-save already
+keeps them on disk) and avoids a second encode. JPEG rather than PNG is the design decision, not
+a new one — WhatsApp and email compress or reject nothing about a JPEG, and the customer's phone
+is where the file is going.
+
+**Consequence:** seam 1 covers every acceptance criterion against a 1600×1200 fixture — the
+browsing render is asserted capped at `MAX_PREPARED_DIMENSION` while the export is asserted at
+the photo's own size (the criterion is measured, not inferred from content types), JPEG magic and
+media type, filename carrying code and name, the archive never leaving as PNG, and a render
+succeeding straight after an export. The contract test in `test_sessions.py` pins the new route.
+Reopened Consultations export full-res through the store fallback, and `SPECTRAPAINT_STORAGE_DIR`
+tests that predate originals get preview-scale exports rather than a failure — degrade, never
+dead-end (conventions §5).

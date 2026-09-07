@@ -5,6 +5,7 @@ import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
 import { registerCorrectionsBridge } from './corrections-bridge';
 import { registerCreateConsultationBridge } from './create-consultation';
+import { registerExportBridge } from './export-bridge';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
@@ -90,6 +91,11 @@ void app.whenReady().then(async () => {
   registerServiceBridge(() => sidecar, isTrustedSender);
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
   registerRenderBridge(() => sidecar, isTrustedSender);
+  registerExportBridge(
+    () => sidecar,
+    () => mainWindow,
+    isTrustedSender,
+  );
   registerWallsBridge(() => sidecar, isTrustedSender);
   registerCorrectionsBridge(() => sidecar, isTrustedSender);
   registerStoredImageBridge(() => sidecar, isTrustedSender);
