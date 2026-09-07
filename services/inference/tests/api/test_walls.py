@@ -327,6 +327,50 @@ def test_a_real_photo_can_be_repainted(client: TestClient, photo: Path) -> None:
 
 @pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
 @pytest.mark.parametrize("photo", labelled_rooms() or [None], ids=lambda p: p.stem if p else "none")
+def test_the_add_tool_grows_a_plane_from_a_missed_wall(client: TestClient, photo: Path) -> None:
+    """Ticket #10's Add tool, against a real photograph: SAM 2 actually refines from the tap.
+
+    The point tapped is not chosen by hand. It is derived from the hand label this file already
+    loads for the accuracy checks below: a pixel the label calls wall that the automatic matte
+    does not currently cover — exactly the situation #31 catalogues (a door, curtains, hanging
+    clothes claimed instead of the wall behind them) and the situation the ticket names outright
+    (`windows-with-curtains.jpg`'s left-edge return wall). If a photograph's matte happens to
+    already cover every labelled wall pixel, it has nothing to prove here and is skipped rather
+    than forced to fail.
+    """
+
+    session_id = prepare(client, photo)
+    before = wall_matte_of(client, session_id)
+    wall_label, _not_wall_label = labels_for(photo, before.shape)
+
+    missed_y, missed_x = np.nonzero(wall_label & (before < 0.5))
+    if len(missed_y) == 0:
+        pytest.skip(f"{photo.stem}: the automatic matte already covers every labelled wall pixel")
+
+    # The median of the missed pixels, not an extreme one — a point representative of the missed
+    # region rather than sitting on its own noisy boundary against what already is covered.
+    y, x = int(np.median(missed_y)), int(np.median(missed_x))
+
+    response = client.post(f"/sessions/{session_id}/planes", headers=auth(), json={"x": x, "y": y})
+
+    assert response.status_code == 201, (
+        f"Add at a labelled wall pixel ({x}, {y}) on {photo.stem} the automatic matte missed "
+        f"was refused: {response.text}"
+    )
+    after = wall_matte_of(client, session_id)
+
+    # Not "the tapped pixel is now fully confident" — some missed regions are missed because
+    # they are genuinely hard from one point alone (corner-with-clothesline's sliver sits behind
+    # hanging clothes, occluding the wall SAM 2 is asked to find), and a single tap is not
+    # promised to resolve that outright. What the ticket's criterion actually asks is that the
+    # tap moved something: coverage over the region the label calls wall must not have gone
+    # backwards anywhere, and must have improved somewhere the automatic pass had missed.
+    assert (after >= before - 1e-6)[wall_label].all(), "Add made some labelled wall pixel worse"
+    assert after[y, x] > before[y, x], "Add made no difference at the point actually tapped"
+
+
+@pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
+@pytest.mark.parametrize("photo", labelled_rooms() or [None], ids=lambda p: p.stem if p else "none")
 def test_the_wall_found_is_the_wall_that_is_there(client: TestClient, photo: Path) -> None:
     """Overlap against a hand-labelled wall, which is the only way to check this at all."""
 
