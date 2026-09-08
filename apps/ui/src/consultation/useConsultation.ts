@@ -91,6 +91,9 @@ export interface Consultation {
    * Cleared on the next tool armed or the next successful correction. The existing walls are
    * never touched by a refusal — this is a note beside them, never a dead end. */
   correctionMessage?: string;
+  /** The failure code behind `correctionMessage`, when there is one. `session_not_found` is the
+   * one the surface reacts to differently — see `render.code` (issue #15). */
+  correctionCode?: string;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -104,6 +107,19 @@ const WALLS_UNAVAILABLE_MESSAGE =
   'The walls in this photo could not be shown. The photo can still be repainted.';
 
 const CORRECTION_FAILED_MESSAGE = 'That could not be done. The walls stay as they were.';
+
+/**
+ * Shown instead of the service's own `session_not_found` message (issue #15).
+ *
+ * A sidecar restart wipes the service's in-memory sessions, but never the Consultation itself —
+ * its photo and Wall Planes were already saved before this could happen (issue #11's auto-save).
+ * The backend's own wording, "start a new one," is technically true but sends the Dealer to lose
+ * work that reopening would recover intact; naming the actual recovery here is what keeps this
+ * from being a dead end that quietly fails every retry instead of a visibly working one.
+ */
+export const MESSAGE_SESSION_LOST =
+  'SpectraPaint had to restart. Please reopen this consultation from Bundles to continue — ' +
+  'nothing has been lost.';
 
 /**
  * The phase transition the progress stream drives, as a pure function so it is testable without a
@@ -142,6 +158,7 @@ export function useConsultation(): Consultation {
   // out of sync with whether a plane exists (ticket #10, implementation-decisions.md #39).
   const [explicitTool, setExplicitTool] = useState<CorrectionTool | null>(null);
   const [correctionMessage, setCorrectionMessage] = useState<string | undefined>(undefined);
+  const [correctionCode, setCorrectionCode] = useState<string | undefined>(undefined);
   const armedTool = effectiveArmedTool(explicitTool, walls.planes.length);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -195,6 +212,7 @@ export function useConsultation(): Consultation {
               type: 'found',
               planes: result.planes,
               note: result.note,
+              qualityNote: result.qualityNote,
               photoWidth: result.photoWidth,
               photoHeight: result.photoHeight,
             }
@@ -269,6 +287,7 @@ export function useConsultation(): Consultation {
     setRenderMode('realistic');
     setExplicitTool(null);
     setCorrectionMessage(undefined);
+    setCorrectionCode(undefined);
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -330,7 +349,10 @@ export function useConsultation(): Consultation {
             type: 'failed',
             shadeCode,
             code: result.code,
-            message: result.message,
+            // session_not_found means a sidecar restart, not that this Shade failed (issue #15);
+            // the service's own "start a new one" wording would send the Dealer to lose work that
+            // reopening recovers intact.
+            message: result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
           }),
         );
       }
@@ -382,7 +404,8 @@ export function useConsultation(): Consultation {
                 type: 'failed',
                 shadeCode: shadeForState,
                 code: result.code,
-                message: result.message,
+                message:
+                  result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
               }),
             );
           }
@@ -404,6 +427,7 @@ export function useConsultation(): Consultation {
   const armTool = useCallback((tool: CorrectionTool) => {
     setExplicitTool((previous) => toggleArmedTool(previous, tool));
     setCorrectionMessage(undefined);
+    setCorrectionCode(undefined);
   }, []);
 
   const correctWallsAt = useCallback(
@@ -415,6 +439,7 @@ export function useConsultation(): Consultation {
       // ui-guidelines.md's "act, do not confirm" rule for the rest of this surface.
       setExplicitTool(null);
       setCorrectionMessage(undefined);
+      setCorrectionCode(undefined);
 
       void (async () => {
         let result: WallsResult;
@@ -434,6 +459,7 @@ export function useConsultation(): Consultation {
               type: 'found',
               planes: result.planes,
               note: result.note,
+              qualityNote: result.qualityNote,
               photoWidth: result.photoWidth,
               photoHeight: result.photoHeight,
             }),
@@ -450,8 +476,14 @@ export function useConsultation(): Consultation {
           );
         } else {
           // The service's own message names the right tool instead — "already part of a wall,
-          // try Split" — and the existing walls stay exactly as they were.
-          setCorrectionMessage(result.message);
+          // try Split" — and the existing walls stay exactly as they were. Except for
+          // session_not_found (issue #15): the service's own wording ("start a new one") would
+          // send the Dealer to lose work that reopening recovers intact, so that one code gets a
+          // message of this surface's own.
+          setCorrectionMessage(
+            result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
+          );
+          setCorrectionCode(result.code);
         }
       })();
     },
@@ -477,5 +509,6 @@ export function useConsultation(): Consultation {
     armTool,
     correctWallsAt,
     correctionMessage,
+    correctionCode,
   };
 }

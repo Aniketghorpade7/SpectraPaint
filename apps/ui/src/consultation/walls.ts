@@ -34,6 +34,13 @@ export interface WallsState {
    * can be repainted, once the Dealer taps a wall in through the correction surface.
    */
   message?: string;
+  /**
+   * A warning about the photo itself, in plain language — dark, blurred or heavily clipped
+   * (ticket #15) — unrelated to `message`: the wall can be found perfectly well in a poor photo.
+   * Never shown as an error state, and never cleared by a correction, since it describes the photo
+   * rather than the planes found in it.
+   */
+  qualityNote?: string;
   /** The prepared photo's own pixel dimensions — known even with zero planes, which is what lets
    * a tap be turned into a point in that space before any plane has ever been found (ticket #10's
    * Add tool, on a photo with nothing detected at all). 0 means not yet known. */
@@ -53,6 +60,7 @@ export type WallsEvent =
       type: 'found';
       planes: WallPlaneOverlay[];
       note: string | null;
+      qualityNote?: string | null;
       photoWidth: number;
       photoHeight: number;
     }
@@ -67,6 +75,7 @@ export function applyWallsEvent(state: WallsState, event: WallsEvent): WallsStat
         planes: event.planes,
         wanted: state.wanted,
         message: event.note ?? undefined,
+        qualityNote: event.qualityNote ?? undefined,
         photoWidth: event.photoWidth,
         photoHeight: event.photoHeight,
       };

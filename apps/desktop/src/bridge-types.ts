@@ -81,12 +81,17 @@ export interface WallPlaneOverlay {
  * `photoHeight` are top-level rather than read off `planes[0]`, because they must still be known
  * when `planes` is empty: turning a tap into a point in the photo's own pixel space is exactly
  * what the Add tool needs to do in that case.
+ *
+ * `qualityNote` (issue #15) is unrelated to `note`: it is the service's plain-language warning
+ * about the photo itself — dark, blurred, heavily clipped — never a reason preparation refuses it,
+ * and never cleared by a correction, which only ever changes the planes.
  */
 export type WallsResult =
   | {
       status: 'ready';
       planes: WallPlaneOverlay[];
       note: string | null;
+      qualityNote: string | null;
       photoWidth: number;
       photoHeight: number;
     }

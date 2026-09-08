@@ -56,6 +56,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     armTool,
     correctWallsAt,
     correctionMessage,
+    correctionCode,
   } = consultation;
   const catalogue = useCatalogue();
   // The displayed image's own aspect ratio, read off it once it decodes. Sets the exact box the
@@ -216,8 +217,22 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 </p>
               ) : null}
               {walls.message ? <p className="consultation__wall-note">{walls.message}</p> : null}
-              {correctionMessage ? (
+              {walls.qualityNote ? (
+                // The photo's own warning (issue #15) — dark, blurred or heavily clipped — shown
+                // regardless of whether a wall was found, since it says nothing about the walls.
+                <p className="consultation__wall-note">{walls.qualityNote}</p>
+              ) : null}
+              {correctionMessage && correctionCode !== 'session_not_found' ? (
                 <p className="consultation__wall-note">{correctionMessage}</p>
+              ) : null}
+              {correctionMessage && correctionCode === 'session_not_found' ? (
+                // A sidecar restart, not a refused tap (issue #15) — the walls the Dealer sees are
+                // frozen at whatever they were, and no further tap here can ever succeed.
+                <ErrorState
+                  message={correctionMessage}
+                  actionLabel="Go to Bundles"
+                  onAction={discard}
+                />
               ) : null}
               {render.phase === 'rendering' ? (
                 <ProgressMessage>Repainting the wall…</ProgressMessage>
@@ -225,8 +240,10 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
               {render.phase === 'failed' && render.message ? (
                 <ErrorState
                   message={render.message}
-                  actionLabel="Choose another Shade"
-                  onAction={dismissRender}
+                  actionLabel={
+                    render.code === 'session_not_found' ? 'Go to Bundles' : 'Choose another Shade'
+                  }
+                  onAction={render.code === 'session_not_found' ? discard : dismissRender}
                 />
               ) : null}
             </div>
