@@ -92,6 +92,10 @@ def _planes_response(
     regardless of what preparation originally said. Only ``list_planes`` ever passes
     ``prepared.note`` through.
 
+    ``quality_note``, unlike ``note``, is always ``prepared.quality_note`` — it describes the photo
+    itself (dark, blurred, heavily clipped), not the state of its Wall Planes, so a correction
+    changing the planes has no reason to change it (issue #15, ``spectrapaint.quality``).
+
     ``photo_width``/``photo_height`` are top-level, not just repeated on each plane
     (:func:`_describe` already carries them there too, for a caller reading one plane in
     isolation) — a photo can legitimately have zero planes (no wall found at all), and the
@@ -104,6 +108,7 @@ def _planes_response(
     return {
         "planes": [_describe(plane) for plane in planes],
         "note": note,
+        "quality_note": prepared.quality_note,
         "photo_width": int(width),
         "photo_height": int(height),
     }

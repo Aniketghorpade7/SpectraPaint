@@ -138,3 +138,28 @@ def no_wall_found_preparation_stages(contents: bytes) -> list[Stage]:
     """Preparation that finds no wall at all — the manual-fallback path (ticket #10)."""
 
     return [Stage(message="Reading your photo…", run=lambda: no_wall_found_photo_of(contents))]
+
+
+def poor_quality_photo_of(contents: bytes) -> PreparedPhoto:
+    """The same genuine decode, with a Wall Plane found and a quality note attached regardless.
+
+    Stands in for what ``spectrapaint.quality.assess_quality`` sets on a dark, blurred or heavily
+    clipped photo (issue #15) — this contract test asks only whether the note the pipeline attaches
+    reaches the Dealer, not whether any particular photo triggers one; that heuristic is exercised
+    directly, on synthetic images, by tests/render/test_quality.py.
+    """
+
+    decoded = decode_photo(contents)
+    plane = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=rectangular_matte(decoded.srgb.shape[:2]))
+    return PreparedPhoto(
+        linear=decoded.linear,
+        srgb=decoded.srgb,
+        planes=(plane,),
+        quality_note="This photo is quite dark, so the colours shown may look muted.",
+    )
+
+
+def poor_quality_preparation_stages(contents: bytes) -> list[Stage]:
+    """Preparation that finds a wall but flags the photo's own quality (ticket #15)."""
+
+    return [Stage(message="Reading your photo…", run=lambda: poor_quality_photo_of(contents))]

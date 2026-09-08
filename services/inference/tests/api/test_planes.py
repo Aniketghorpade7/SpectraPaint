@@ -12,7 +12,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from spectrapaint.api.app import create_app
-from tests.api.conftest import no_wall_found_preparation_stages, stub_preparation_stages
+from tests.api.conftest import (
+    no_wall_found_preparation_stages,
+    poor_quality_preparation_stages,
+    stub_preparation_stages,
+)
 
 SECRET = "test-secret-not-a-real-one"
 
@@ -33,6 +37,12 @@ def client() -> TestClient:
 def no_wall_client() -> TestClient:
     """A session whose photo yields no Wall Planes at all — automatic detection's empty answer."""
     return TestClient(create_app(SECRET, preparation_stages=no_wall_found_preparation_stages))
+
+
+@pytest.fixture
+def poor_quality_client() -> TestClient:
+    """A session whose photo is flagged as poor quality but still yields a Wall Plane."""
+    return TestClient(create_app(SECRET, preparation_stages=poor_quality_preparation_stages))
 
 
 def auth() -> dict[str, str]:
@@ -58,6 +68,26 @@ def test_a_found_wall_is_listed_with_no_note(client: TestClient) -> None:
     body = response.json()
     assert len(body["planes"]) == 1
     assert body["note"] is None
+    assert body["quality_note"] is None
+
+
+def test_a_poor_quality_photo_still_lists_its_wall_with_a_quality_note(
+    poor_quality_client: TestClient,
+) -> None:
+    """Issue #15: a dark, blurred or heavily clipped photo proceeds — with a note, never a refusal.
+
+    Distinct from ``note``: the wall was still found, so this is a warning beside a working
+    Consultation, not the empty-planes fallback ``note`` covers.
+    """
+    session_id = upload(poor_quality_client)
+
+    response = poor_quality_client.get(f"/sessions/{session_id}/planes", headers=auth())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["planes"]) == 1
+    assert body["note"] is None
+    assert isinstance(body["quality_note"], str) and body["quality_note"]
 
 
 def test_finding_no_wall_does_not_fail_the_session(no_wall_client: TestClient) -> None:
