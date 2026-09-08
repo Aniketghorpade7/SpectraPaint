@@ -21,7 +21,7 @@ soft edge band, which is what lets it assert that the composite stays clean at a
 import numpy as np
 
 from spectrapaint.api.preparation import PreparedPhoto, Stage, decode_photo
-from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID, WallPlane
+from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID, MESSAGE_NO_WALL_FOUND, WallPlane
 
 # The test matte's geometry, as production's stub had it (docs/implementation-decisions.md §18).
 STUB_WIDTH_FRACTION = 0.60
@@ -114,3 +114,27 @@ def stub_preparation_stages(contents: bytes) -> list[Stage]:
     """
 
     return [Stage(message="Reading your photo…", run=lambda: prepared_photo_of(contents))]
+
+
+def no_wall_found_photo_of(contents: bytes) -> PreparedPhoto:
+    """The same genuine decode, with zero Wall Planes and the note automatic detection leaves.
+
+    Stands in for what ticket #10 makes ``build_preparation_stages`` produce when the real pipeline
+    catches ``NoWallFound`` instead of failing the job — a photo the contract tests can exercise
+    without a model in sight (conventions.md §6), since the real "detection finds nothing" path has
+    no fixture of its own to run against yet (data/fixtures/rooms/README.md).
+    """
+
+    decoded = decode_photo(contents)
+    return PreparedPhoto(
+        linear=decoded.linear,
+        srgb=decoded.srgb,
+        planes=(),
+        note=MESSAGE_NO_WALL_FOUND,
+    )
+
+
+def no_wall_found_preparation_stages(contents: bytes) -> list[Stage]:
+    """Preparation that finds no wall at all — the manual-fallback path (ticket #10)."""
+
+    return [Stage(message="Reading your photo…", run=lambda: no_wall_found_photo_of(contents))]

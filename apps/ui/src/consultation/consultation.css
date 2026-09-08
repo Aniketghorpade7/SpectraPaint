@@ -69,12 +69,41 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-4);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Wraps only the image itself — never the caption text below it — and sets the exact box the
+   wall overlay, the wall-chip buttons and the correction tap-layer all align to.
+
+   Both rules here are load-bearing, not decoration, and both were found by screenshotting the
+   actual rendered layout while verifying ticket #10's tap-layer, not by reading the CSS:
+
+   `position: relative` — the three children above are all `position: absolute; inset: 0`, and
+   without a positioned ancestor that resolves against the *viewport* (the initial containing
+   block) instead of the photo. Before this, the wash covered the whole window and the wall-chip
+   buttons were never actually aligned with the wall they claimed to sit over.
+
+   `aspect-ratio`, set inline from the displayed image's own natural size once it loads — an
+   `object-fit: contain` image can legitimately render narrower or shorter than the box around
+   it (letterboxing), and `inset: 0` on a sibling only ever matches *that box*, never the
+   letterboxed image inside it. Matching the frame's aspect ratio to the photo's own is what
+   closes that gap without measuring pixels on every resize. */
+.consultation__frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .consultation__photo {
-  /* Contain, never cover: the Customer's room is judged whole, against neutral grey. */
-  max-width: 100%;
-  max-height: 100%;
+  /* Contain, never cover: the Customer's room is judged whole, against neutral grey. Fills the
+     frame — the frame is what is constrained to the stage's available space and shaped to the
+     photo's own aspect ratio, not the image tag itself. */
+  display: block;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 
@@ -146,4 +175,25 @@
   border-color: var(--grey-6);
   background: var(--grey-6);
   color: var(--grey-0);
+}
+
+/* The correction surface itself (ticket #10): a real `<button>` covering the whole frame, with no
+   chrome of its own — the room photo is what it sits on, and it is on screen only while a
+   correction tool is armed, one at a time. Crosshair rather than pointer: this button means "tap
+   a point", not "activate a control". */
+.consultation__tap-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: crosshair;
+}
+
+.consultation__tap-layer:focus-visible {
+  outline: 2px solid var(--grey-5);
+  outline-offset: -2px;
 }

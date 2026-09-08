@@ -155,12 +155,15 @@ def _registry(request: Request) -> SessionRegistry:
     return request.app.state.session_registry
 
 
-async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
-    """The session's prepared photo, or a clean error.
+def require_job(request: Request, session_id: str) -> PreparationJob:
+    """The session's job, or a clean error — the lookup ``require_photo`` already does, exposed
+    on its own for a route that also needs to *mutate* the session afterwards.
 
-    Waits for the session's background preparation to reach its terminal event, then returns the
-    photo it produced. Public so the render endpoint shares the same message and response shape as
-    every other session-scoped route.
+    Ticket #10's correction routes are the only callers: they read the current photo through
+    ``require_photo`` as normal, then write a correction back through this job's
+    ``replace_planes``/``cache_features``. Kept separate from ``require_photo`` rather than
+    changing its return type, so the two existing routes that only ever read (``planes.py``,
+    ``renders.py``) stay exactly as they were.
     """
 
     job = _registry(request).job(session_id)
@@ -170,7 +173,23 @@ async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
             code=SESSION_NOT_FOUND,
             message=_MESSAGE_SESSION_NOT_FOUND,
         )
+    return job
 
+
+async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
+    """The session's prepared photo, or a clean error.
+
+    Waits for the session's background preparation to reach its terminal event, then returns the
+    photo it produced — or, since ticket #10, the same photo with its Wall Planes as any
+    correction since has left them: ``PreparationJob`` mutates its own cached result in place
+    rather than preparation running again, so this always reads the session's current state, not
+    a stale first answer.
+
+    Public so the render endpoint shares the same message and response shape as every other
+    session-scoped route.
+    """
+
+    job = require_job(request, session_id)
     photo = await job.photo()
     if photo is None:
         raise ServiceError(

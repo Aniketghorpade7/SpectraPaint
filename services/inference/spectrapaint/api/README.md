@@ -3,7 +3,11 @@
     GET    /health                                -> { status }
     POST   /sessions              (photo upload) -> { session_id }
     GET    /sessions/{id}/events                  (progress stream)
-    GET    /sessions/{id}/planes
+    GET    /sessions/{id}/planes                  -> { planes, note }
+    POST   /sessions/{id}/planes  { x, y }         (Add a missed wall)
+    POST   /sessions/{id}/planes/split { x, y }    (Split a merged corner)
+    POST   /sessions/{id}/planes/merge { x, y }    (Merge a wrongly-split corner)
+    GET    /sessions/{id}/planes/{plane_id}/matte
     POST   /sessions/{id}/renders { assignments, mode }
     DELETE /sessions/{id}
     GET    /catalogue                             -> { catalogue_id, version, shade_families, ... }
@@ -68,6 +72,26 @@ contract anyway, because an Accent Wall is two planes with two Shades in one req
 
 An assignment naming an unknown plane is refused rather than ignored: nothing in a returned PNG
 would reveal that the render answered a different question than the one asked.
+
+## The correction endpoints (ticket #10)
+
+Three POSTs under `planes.py`, one per tool the Dealer can arm on the Consultation surface — Add,
+Split, Merge — each taking nothing but `{ "x": int, "y": int }`, the tapped point in the prepared
+photo's own pixel space (the same space `photo_width`/`photo_height` on `GET .../planes` already
+describe). All three answer with the same shape `GET .../planes` does — `{ planes, note }` — so a
+correction's result is handled exactly like a fresh load. None of them touch the photo or re-run
+preparation; the segmentation work lives in `segmentation/corrections.py`, this module is only the
+HTTP translation.
+
+| | |
+|---|---|
+| `POST /sessions/{id}/planes` | Add. `201`. The point must not already be covered by a plane. |
+| `POST /sessions/{id}/planes/split` | Split. `201`. The point must be inside an existing plane. |
+| `POST /sessions/{id}/planes/merge` | Merge. `200`. The point must be near where two planes meet. |
+
+A tap that does not satisfy its tool's precondition is `422 malformed_request`, with a message
+naming the right tool instead — see `segmentation.corrections.CorrectionRefused` and its
+subclasses, and `docs/implementation-decisions.md` §39–41.
 
 ## The Catalogue endpoints
 

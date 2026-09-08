@@ -165,10 +165,19 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/sessions/{session_id}/events", frozenset({"GET"})),
         # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
-        # Issue #6. What walls the photo has, and the matte for one of them. Both GET: neither
-        # takes an image, so encode-once is still structural.
+        # Issue #6. What walls the photo has, and the matte for one of them. GET, never taking an
+        # image, so encode-once is still structural. Ticket #10 adds a POST on the same path,
+        # its own route object rather than a merged method set (FastAPI registers one per
+        # decorator, even sharing a path): a tapped point, never a Shade or an image, adding a
+        # Wall Plane (the Add tool) rather than naming what to render — still nothing this rule
+        # forbids.
         ("/sessions/{session_id}/planes", frozenset({"GET"})),
+        ("/sessions/{session_id}/planes", frozenset({"POST"})),
         ("/sessions/{session_id}/planes/{plane_id}/matte", frozenset({"GET"})),
+        # Ticket #10's other two correction tools. Same shape as Add: a tapped point in, the
+        # updated plane list out, no photo and no re-preparation.
+        ("/sessions/{session_id}/planes/split", frozenset({"POST"})),
+        ("/sessions/{session_id}/planes/merge", frozenset({"POST"})),
         # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
         # there is nothing here that writes, and nothing that takes an image.
         ("/catalogue", frozenset({"GET"})),

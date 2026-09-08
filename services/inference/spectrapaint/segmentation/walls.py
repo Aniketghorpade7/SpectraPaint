@@ -25,15 +25,17 @@ from dataclasses import dataclass
 import numpy as np
 
 from spectrapaint.runtime.graphs import Graphs
-from spectrapaint.segmentation.matte import refiner_alpha, wall_alpha
+from spectrapaint.segmentation.matte import RefinerFeatures, decode_alpha, encode_photo, wall_alpha
 from spectrapaint.segmentation.prompts import prompts_for
 from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
 from spectrapaint.segmentation.split import split_alpha_into_planes
 
-# Shown to the Dealer as-is when a photo has no wall worth painting.
+# Shown to the Dealer as-is when a photo has no wall worth painting. Not a dead end (conventions.md
+# §5, ticket #10): preparation still finishes, so this is the note on an otherwise-ready photo with
+# zero Wall Planes, and the correction surface's Add tool is where the Dealer goes next.
 MESSAGE_NO_WALL_FOUND = (
-    "No wall could be found in that photo. Please try a photo taken further back, with more of the "
-    "wall in view."
+    "No wall could be found in that photo automatically. Tap where a wall is to add it, or try a "
+    "photo taken further back, with more of the wall in view."
 )
 
 # Below this fraction of the frame there is no wall worth offering to repaint. A wall glimpsed
@@ -47,11 +49,13 @@ FIRST_WALL_PLANE_ID = "wall_plane_1"
 
 
 class NoWallFound(Exception):
-    """This photo has no wall to paint.
+    """Automatic detection found no wall to paint in this photo.
 
     Carries a plain-language ``message`` the UI may show as-is, and the usual ``detail`` for the
     log — a Dealer cannot act on a coverage fraction, and whoever reads the log cannot act without
-    one (conventions.md §5).
+    one (conventions.md §5). Since ticket #10, preparation catches this rather than letting it fail
+    the session: the photo still becomes a ready, zero-plane consultation the Dealer can tap a wall
+    into, and this is where that note comes from.
     """
 
     def __init__(self, detail: str) -> None:
@@ -90,8 +94,18 @@ def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
     return regions
 
 
-def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) -> list[WallPlane]:
-    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7)."""
+def planes_from(
+    graphs: Graphs,
+    photo_u8: np.ndarray,
+    regions: SemanticRegions,
+    features: RefinerFeatures,
+) -> list[WallPlane]:
+    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7).
+
+    ``features`` is the photo's already-encoded SAM 2 output (:func:`encode_photo`), supplied
+    rather than computed here so preparation can hold onto it: ticket #10's corrections decode
+    against the same features without paying the encode a second time.
+    """
 
     prompts = prompts_for(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
@@ -99,7 +113,7 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
             "no point sits far enough inside the wall region to prompt the refiner with"
         )
 
-    refined = refiner_alpha(graphs, photo_u8, prompts)
+    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
     alpha = wall_alpha(photo_u8, regions, refined)
 
     # Single-plane guard: the matte as a whole must still cover enough.
@@ -171,8 +185,11 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
 def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
     """Every Wall Plane in the photo, in one call.
 
-    Preparation runs the two halves as separate stages so it can report progress between them;
-    this is the same pipeline for callers that have nothing to report to.
+    Preparation runs the stages separately so it can report progress between them and keep the
+    encoded features afterwards; this is the same pipeline for callers that have nothing to report
+    to and nothing to hold onto once it returns.
     """
 
-    return planes_from(graphs, photo_u8, wall_regions(graphs, photo_u8))
+    regions = wall_regions(graphs, photo_u8)
+    features = encode_photo(graphs, photo_u8)
+    return planes_from(graphs, photo_u8, regions, features)
