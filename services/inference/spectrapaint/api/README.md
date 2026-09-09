@@ -3,7 +3,7 @@
     GET    /health                                -> { status }
     POST   /sessions              (photo upload) -> { session_id }
     GET    /sessions/{id}/events                  (progress stream)
-    GET    /sessions/{id}/planes                  -> { planes, note }
+    GET    /sessions/{id}/planes                  -> { planes, note, quality_note }
     POST   /sessions/{id}/planes  { x, y }         (Add a missed wall)
     POST   /sessions/{id}/planes/split { x, y }    (Split a merged corner)
     POST   /sessions/{id}/planes/merge { x, y }    (Merge a wrongly-split corner)
@@ -78,8 +78,9 @@ would reveal that the render answered a different question than the one asked.
 Three POSTs under `planes.py`, one per tool the Dealer can arm on the Consultation surface — Add,
 Split, Merge — each taking nothing but `{ "x": int, "y": int }`, the tapped point in the prepared
 photo's own pixel space (the same space `photo_width`/`photo_height` on `GET .../planes` already
-describe). All three answer with the same shape `GET .../planes` does — `{ planes, note }` — so a
-correction's result is handled exactly like a fresh load. None of them touch the photo or re-run
+describe). All three answer with the same shape `GET .../planes` does —
+`{ planes, note, quality_note }` — so a correction's result is handled exactly like a fresh load.
+None of them touch the photo or re-run
 preparation; the segmentation work lives in `segmentation/corrections.py`, this module is only the
 HTTP translation.
 

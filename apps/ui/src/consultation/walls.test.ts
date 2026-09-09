@@ -45,6 +45,23 @@ describe('applyWallsEvent', () => {
     expect(state.photoHeight).toBe(720);
   });
 
+  it('holds the photo’s own quality note, independent of the wall note', () => {
+    // Ticket #15: a poor photo still has its wall found — the two notes describe different things.
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, {
+      type: 'found',
+      planes: [plane],
+      note: null,
+      qualityNote: 'This photo is quite dark, so the colours shown may look muted.',
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
+
+    expect(state.message).toBeUndefined();
+    expect(state.qualityNote).toBe(
+      'This photo is quite dark, so the colours shown may look muted.',
+    );
+  });
+
   it('keeps the Dealer’s choice to hide the overlay when new planes arrive', () => {
     const hidden = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'toggle' });
 

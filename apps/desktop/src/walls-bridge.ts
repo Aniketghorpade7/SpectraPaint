@@ -51,10 +51,13 @@ export interface PlaneDescription {
 }
 
 /** The shape every planes-listing and every correction answers with (implementation-decisions.md
- * #40/#42) — `note` and the top-level dimensions exist precisely for the photo that has none. */
+ * #40/#42) — `note` and the top-level dimensions exist precisely for the photo that has none.
+ * `quality_note` (issue #15) is unrelated to `note`: it describes the photo itself — dark, blurred,
+ * heavily clipped — and stays the same across a correction, which only ever changes the planes. */
 export interface PlanesResponseBody {
   planes: PlaneDescription[];
   note: string | null;
+  quality_note: string | null;
   photo_width: number;
   photo_height: number;
 }
@@ -137,6 +140,7 @@ export async function overlaysFrom(
     status: 'ready',
     planes: overlays,
     note: body.note,
+    qualityNote: body.quality_note,
     photoWidth: body.photo_width,
     photoHeight: body.photo_height,
   };
