@@ -165,6 +165,8 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/sessions/{session_id}/events", frozenset({"GET"})),
         # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
+        # Issue #12. Full-resolution JPEG for the OS share sheet; same assignments as renders.
+        ("/sessions/{session_id}/exports", frozenset({"POST"})),
         # Issue #6. What walls the photo has, and the matte for one of them. GET, never taking an
         # image, so encode-once is still structural. Ticket #10 adds a POST on the same path,
         # its own route object rather than a merged method set (FastAPI registers one per

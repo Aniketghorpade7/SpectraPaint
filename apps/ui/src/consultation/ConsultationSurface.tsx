@@ -57,6 +57,9 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     correctWallsAt,
     correctionMessage,
     correctionCode,
+    exportState,
+    exportRender,
+    dismissExport,
   } = consultation;
   const catalogue = useCatalogue();
   // The displayed image's own aspect ratio, read off it once it decodes. Sets the exact box the
@@ -131,6 +134,11 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
             <Button onClick={toggleRenderMode} aria-pressed={renderMode === 'true_colour'}>
               {renderMode === 'realistic' ? 'True Colour mode' : 'Realistic mode'}
             </Button>
+            {render.phase === 'ready' ? (
+              <Button onClick={exportRender} disabled={exportState.phase === 'exporting'}>
+                {exportState.phase === 'exporting' ? 'Exporting…' : 'Export and share'}
+              </Button>
+            ) : null}
             <Button onClick={discard}>Discard photo</Button>
           </div>
         </div>
@@ -244,6 +252,21 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                     render.code === 'session_not_found' ? 'Go to Bundles' : 'Choose another Shade'
                   }
                   onAction={render.code === 'session_not_found' ? discard : dismissRender}
+                />
+              ) : null}
+              {exportState.phase === 'exporting' ? (
+                <ProgressMessage>Preparing your export…</ProgressMessage>
+              ) : null}
+              {exportState.phase === 'ready' && exportState.filename ? (
+                <p className="consultation__wall-note">
+                  Exported {exportState.filename} — choose another Shade to keep browsing.
+                </p>
+              ) : null}
+              {exportState.phase === 'failed' && exportState.message ? (
+                <ErrorState
+                  message={exportState.message}
+                  actionLabel="Try export again"
+                  onAction={dismissExport}
                 />
               ) : null}
             </div>

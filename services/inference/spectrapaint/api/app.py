@@ -6,6 +6,7 @@
     GET    /sessions/{id}/planes                                        <- issue #6
     GET    /sessions/{id}/planes/{plane_id}/matte                       <- issue #6
     POST   /sessions/{id}/renders { assignments, mode }
+    POST   /sessions/{id}/exports { assignments, mode }  -> JPEG      <- issue #12
     DELETE /sessions/{id}                                              <- issue #2
     GET    /catalogue                             (what is loaded)     <- issue #5
     GET    /catalogue/shades                      (browse or search)   <- issue #5
@@ -24,6 +25,7 @@ from spectrapaint.api.auth import secret_required
 from spectrapaint.api.bundles import router as bundles_router
 from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.exports import router as exports_router
 from spectrapaint.api.planes import router as planes_router
 from spectrapaint.api.preparation import Stage, build_preparation_stages
 from spectrapaint.api.renders import router as renders_router
@@ -78,6 +80,7 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(planes_router)
     app.include_router(renders_router)
+    app.include_router(exports_router)
     app.include_router(catalogue_router)
     app.include_router(bundles_router)
 

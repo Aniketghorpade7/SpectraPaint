@@ -15,6 +15,7 @@ export const PROGRESS_EVENT_CHANNEL = 'spectrapaint:progress';
 export const PROGRESS_STREAM_START_CHANNEL = 'spectrapaint:progress:start';
 export const PROGRESS_STREAM_STOP_CHANNEL = 'spectrapaint:progress:stop';
 export const RENDER_CHANNEL = 'spectrapaint:render';
+export const EXPORT_CHANNEL = 'spectrapaint:export';
 export const WALLS_CHANNEL = 'spectrapaint:walls';
 export const CORRECTIONS_CHANNEL = 'spectrapaint:corrections';
 export const STORED_IMAGE_CHANNEL = 'spectrapaint:stored-image';

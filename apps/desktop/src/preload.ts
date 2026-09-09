@@ -4,6 +4,7 @@ import type {
   BootStatus,
   CorrectionTool,
   CreateConsultationResult,
+  ExportResult,
   ProgressStreamEvent,
   RenderResult,
   ServiceRequest,
@@ -19,6 +20,7 @@ import {
   BOOT_STATUS_RETRY_CHANNEL,
   CORRECTIONS_CHANNEL,
   CREATE_CONSULTATION_CHANNEL,
+  EXPORT_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
   PROGRESS_STREAM_STOP_CHANNEL,
@@ -109,6 +111,19 @@ const bridge: SpectraPaintBridge = {
       consultationId,
       target,
     ) as Promise<StoredImageResult>;
+  },
+
+  export(
+    sessionId: string,
+    shadeCodeOrAssignments: string | Record<string, string>,
+    mode: 'realistic' | 'true_colour' = 'realistic',
+  ): Promise<ExportResult> {
+    return ipcRenderer.invoke(
+      EXPORT_CHANNEL,
+      sessionId,
+      shadeCodeOrAssignments,
+      mode,
+    ) as Promise<ExportResult>;
   },
 };
 

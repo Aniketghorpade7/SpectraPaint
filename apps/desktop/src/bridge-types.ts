@@ -195,4 +195,21 @@ export interface SpectraPaintBridge {
    * the secret in its header — the same rule as every image in this app — and returns a data URL.
    */
   storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult>;
+
+  /**
+   * Export the current repaint at full resolution as a JPEG and hand it to
+   * the OS share sheet (issue #12). The stored PNG archive is never handed
+   * out directly; a fresh JPEG is rendered and saved via the native dialog.
+   * The filename carries the Shade Code and name.
+   */
+  export(
+    sessionId: string,
+    shadeCodeOrAssignments: string | Record<string, string>,
+    mode?: 'realistic' | 'true_colour',
+  ): Promise<ExportResult>;
 }
+
+export type ExportResult =
+  | { status: 'ready'; filePath: string; filename: string }
+  | { status: 'cancelled' }
+  | { status: 'failed'; code: string; message: string };
