@@ -39,6 +39,20 @@ describe('applyRenderEvent', () => {
     expect(next.showingRender).toBe(false);
   });
 
+  it('keeps the failure code so the surface can tell a dead session apart from any other failure', () => {
+    // Issue #15: a sidecar restart mid-consultation leaves the Dealer's session id pointing at a
+    // process that has forgotten it. `session_not_found` is the one code the surface must react to
+    // differently — retrying the same Shade can never succeed against it.
+    const next = applyRenderEvent(RENDERING, {
+      type: 'failed',
+      shadeCode: 'AP-2140',
+      code: 'session_not_found',
+      message: 'This consultation is no longer available. Please start a new one.',
+    });
+
+    expect(next.code).toBe('session_not_found');
+  });
+
   it('drops a success for a Shade the Dealer has since replaced', () => {
     const superseded = applyRenderEvent(RENDERING, { type: 'requested', shadeCode: 'BL-1200' });
 

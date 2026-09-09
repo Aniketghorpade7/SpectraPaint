@@ -47,6 +47,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from PIL import Image
 
+from spectrapaint.quality import assess_quality
 from spectrapaint.render.luts import linearise_u8
 from spectrapaint.runtime.graphs import load as load_graphs
 from spectrapaint.runtime.location import ModelsMissing
@@ -121,6 +122,10 @@ class PreparedPhoto:
     srgb: np.ndarray  # HxWx3 uint8, the same photo as the Dealer sees it
     planes: tuple[WallPlane, ...]  # every Wall Plane found, in a stable order — possibly none
     note: str | None = None  # plain language, set exactly when planes is empty because none found
+    # Plain language, set when the photo itself is dark, blurred or heavily clipped
+    # (spectrapaint.quality) — never a reason to refuse it (issue #15, "never dead-end"), and
+    # independent of `note`: a poor photo can still have a perfectly findable wall.
+    quality_note: str | None = None
     features: RefinerFeatures | None = None  # SAM 2's encoder output; None if never encoded
 
     def plane(self, plane_id: str) -> WallPlane | None:
@@ -301,6 +306,9 @@ class _Workspace:
     # that lets find_the_edges tell "nothing found, legitimately" apart from "look_at_the_room did
     # not run at all", which is the ordering bug photo() already guards for the decode stage.
     note: str | None = None
+    # The photo's own quality note (spectrapaint.quality), set once the decode stage has pixels to
+    # judge. Independent of `note` above: a dark or blurry photo can still have a findable wall.
+    quality_note: str | None = None
 
     def photo(self) -> DecodedPhoto:
         """The decoded photo, or a plain failure if the stage that decodes it did not run.
@@ -337,6 +345,9 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
 
     def decode() -> None:
         workspace.decoded = decode_photo(contents)
+        # Judged here, once, on the pixels every later stage also works from — never a reason to
+        # fail preparation (spectrapaint.quality, issue #15).
+        workspace.quality_note = assess_quality(workspace.decoded.srgb)
 
     def look_at_the_room() -> None:
         try:
@@ -373,6 +384,7 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
             srgb=photo.srgb,
             planes=workspace.planes,
             note=workspace.note,
+            quality_note=workspace.quality_note,
             features=workspace.features,
         )
 

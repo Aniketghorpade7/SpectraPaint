@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 
 import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
+import { ProgressMessage } from '../components/ProgressMessage';
+import { Toast } from '../components/Toast';
 import type { ConsultationSummary, RenderRecord } from './types';
 import { shadesOf } from './types';
 import type { Library } from './useLibrary';
@@ -105,14 +108,11 @@ function BundleList({
       ) : null}
 
       {library.lastDeleted ? (
-        <div className="library__undo" role="status">
-          <span>
-            Bundle “{library.lastDeleted.name}” deleted — consultations moved to Consultations.
-          </span>
-          <Button className="library__small-action" onClick={() => void library.undoDeleteBundle()}>
-            Undo
-          </Button>
-        </div>
+        <Toast
+          message={`Bundle “${library.lastDeleted.name}” deleted — consultations moved to Consultations.`}
+          actionLabel="Undo"
+          onAction={() => void library.undoDeleteBundle()}
+        />
       ) : null}
 
       <form
@@ -136,6 +136,8 @@ function BundleList({
           Create bundle
         </Button>
       </form>
+
+      {!library.bundlesLoaded ? <ProgressMessage>Loading your bundles…</ProgressMessage> : null}
 
       <ul className="library__list">
         {library.bundles.map((bundle) => (
@@ -231,23 +233,22 @@ function BundleDetail({
         <ErrorState
           message={library.message}
           actionLabel="Try again"
-          onAction={() => void library.refreshBundles()}
+          onAction={() => void library.openBundle(openId)}
         />
       ) : null}
 
       {library.lastDeleted ? (
-        <div className="library__undo" role="status">
-          <span>Bundle “{library.lastDeleted.name}” deleted.</span>
-          <Button className="library__small-action" onClick={() => void library.undoDeleteBundle()}>
-            Undo
-          </Button>
-        </div>
+        <Toast
+          message={`Bundle “${library.lastDeleted.name}” deleted.`}
+          actionLabel="Undo"
+          onAction={() => void library.undoDeleteBundle()}
+        />
       ) : null}
 
       {library.consultations === null ? (
-        <p className="library__meta">Loading…</p>
+        <ProgressMessage>Loading…</ProgressMessage>
       ) : library.consultations.length === 0 ? (
-        <p className="library__hint">No consultations in this bundle yet.</p>
+        <EmptyState message="No consultations in this bundle yet." />
       ) : (
         <ul className="library__list">
           {library.consultations.map((consultation) => (
@@ -383,8 +384,11 @@ function ConsultationHistory({
       ) : null}
 
       <h2 className="library__subtitle">Shades already tried</h2>
+      {library.renders === null && !library.message ? (
+        <ProgressMessage>Loading…</ProgressMessage>
+      ) : null}
       {library.renders !== null && library.renders.length === 0 ? (
-        <p className="library__hint">No shade has been tried in this consultation yet.</p>
+        <EmptyState message="No shade has been tried in this consultation yet." />
       ) : null}
       <div className="library__renders">
         {(library.renders ?? []).map((render) => (

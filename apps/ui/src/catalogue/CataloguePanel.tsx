@@ -1,4 +1,5 @@
 import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
 import { ShadeList } from './ShadeList';
@@ -149,12 +150,11 @@ export function CataloguePanel({
 
       {searched && !searching && rowCount === 0 ? (
         // Not a dead end: an empty result still leaves the Dealer somewhere to go.
-        <div className="catalogue__empty">
-          <p className="catalogue__empty-message">
-            No Shade matches “{query.trim()}”. Check the code on the chip, or try part of the name.
-          </p>
-          <Button onClick={() => setQuery('')}>Browse the whole Catalogue</Button>
-        </div>
+        <EmptyState
+          message={`No Shade matches “${query.trim()}”. Check the code on the chip, or try part of the name.`}
+          actionLabel="Browse the whole Catalogue"
+          onAction={() => setQuery('')}
+        />
       ) : null}
 
       {rowCount > 0 ? (

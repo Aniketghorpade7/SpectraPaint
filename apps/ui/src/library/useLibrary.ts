@@ -22,6 +22,12 @@ export interface ReopenedConsultation {
 
 export function useLibrary() {
   const [bundles, setBundles] = useState<BundleSummary[]>([]);
+  // True once the first fetch of `bundles` has settled, success or failure — what tells
+  // `BundleList` apart "still loading" from "genuinely has none yet" (issue #15: every surface
+  // needs a defined loading state, not just an error and a happy path). Stays true afterwards, so
+  // a rename or delete's own `loadBundles()` call never re-shows the loading state and flickers
+  // the list away while it briefly re-fetches.
+  const [bundlesLoaded, setBundlesLoaded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const [consultations, setConsultations] = useState<ConsultationSummary[] | null>(null);
@@ -52,9 +58,11 @@ export function useLibrary() {
     const response = await request('/bundles');
     if (!response.ok) {
       setMessage('Your saved consultations could not be loaded. Please try again.');
+      setBundlesLoaded(true);
       return;
     }
     setBundles((response.body as { bundles: BundleSummary[] }).bundles ?? []);
+    setBundlesLoaded(true);
   }, [request]);
 
   // Loading the library happens once, on mount. The work sits inside the effect rather than in a
@@ -68,9 +76,11 @@ export function useLibrary() {
       if (abandoned) return;
       if (!response.ok) {
         setMessage('Your saved consultations could not be loaded. Please try again.');
+        setBundlesLoaded(true);
         return;
       }
       setBundles((response.body as { bundles: BundleSummary[] }).bundles ?? []);
+      setBundlesLoaded(true);
     })();
 
     return () => {
@@ -312,6 +322,7 @@ export function useLibrary() {
 
   return {
     bundles,
+    bundlesLoaded,
     consultations,
     renders,
     photoDataUrl,

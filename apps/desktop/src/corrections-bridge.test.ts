@@ -64,6 +64,7 @@ function mockPlanesResponse(planeIds: string[]) {
           photo_height: 480,
         })),
         note: null,
+        quality_note: null,
         photo_width: 640,
         photo_height: 480,
       }),
@@ -198,6 +199,7 @@ describe('registerCorrectionsBridge', () => {
     expect(result).toEqual({
       status: 'ready',
       note: null,
+      qualityNote: null,
       photoWidth: 640,
       photoHeight: 480,
       planes: [
