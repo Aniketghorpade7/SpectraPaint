@@ -269,8 +269,9 @@ def render_many(
     linear_photo: np.ndarray,
     plane_targets: list[tuple[np.ndarray, np.ndarray]],
     light_tint: np.ndarray,
+    surfaces: list[str] | None = None,
 ) -> np.ndarray:
-    """Recolour several Wall Planes, each with its own Shade, in one image.
+    """Recolour several Paintable Planes (walls and ceilings), each with its own Shade.
 
     ``plane_targets`` is a list of ``(alpha, target_shade)`` where
     ``target_shade`` is the Shade's linear RGB triple. Base Colour is
@@ -280,23 +281,29 @@ def render_many(
     1.0 and the room would flatten. A pre-existing Accent Wall keeps its
     own Base Colour because its tint differs. Grouping is by the wall's
     chromatic tint (base / luma), so shading differences do not split a
-    group. Each group's Light Map is derived from its shared base and the
-    planes are composited in the photo's left-to-right order. Alphas are
-    an exclusive partition, so the order does not matter and no pixel is
-    composited twice (no dark seam). All maths — including every per-plane
-    composite — runs in linear RGB; the single encode happens at the end
-    (issue #3 criterion 2). This keeps the maths in :mod:`spectrapaint.render`
-    (conventions.md §3) and the API thin.
+    group. **A ceiling is never grouped with a wall**, even when the two
+    happen to be a similar pale colour, or the room's light modelling breaks
+    silently (CONTEXT.md Ceiling Plane). Each group's Light Map is derived
+    from its shared base and the planes are composited in the photo's
+    left-to-right order. Alphas are an exclusive partition, so the order
+    does not matter and no pixel is composited twice (no dark seam). All
+    maths — including every per-plane composite — runs in linear RGB; the
+    single encode happens at the end (issue #3 criterion 2). This keeps the
+    maths in :mod:`spectrapaint.render` (conventions.md §3) and the API thin.
 
     The Light Map is computed **once per photo per Base Colour group** (not per
-    tap), so a Shade change is just multiply–composite–encode.
+    tap), so a Shade change is just multiply–composite–encode. ``surfaces``
+    carries ``wall``/``ceiling`` per plane; when omitted every plane is treated
+    as ``wall`` for backward compat with existing tests.
     """
     if not plane_targets:
         encoded = encode_srgb(np.ascontiguousarray(linear_photo))
         return (encoded * 255.0 + 0.5).astype(np.uint8)
 
     alphas = [alpha for alpha, _ in plane_targets]
-    grouped_bases = _grouped_base_colours(linear_photo, alphas)
+    if surfaces is None:
+        surfaces = ["wall"] * len(alphas)
+    grouped_bases = _grouped_base_colours(linear_photo, alphas, surfaces)
 
     # Compute Light Map once per unique Base Colour group, then reuse for all
     # planes in that group. This is the "once per photo" preparation the spec
@@ -535,25 +542,33 @@ def _tint_of(base_colour: np.ndarray) -> np.ndarray:
     return base_colour / luma
 
 
-def _grouped_base_colours(linear_photo: np.ndarray, alphas: list[np.ndarray]) -> list[np.ndarray]:
-    """One Base Colour per plane, grouped by existing paint.
+def _grouped_base_colours(
+    linear_photo: np.ndarray, alphas: list[np.ndarray], surfaces: list[str] | None = None
+) -> list[np.ndarray]:
+    """One Base Colour per plane, grouped by existing paint — never across surfaces.
 
     Steps per the spec's grouping rule:
 
     1. Estimate a per-plane Base Colour with :func:`estimate_base_colour`
        (fully-opaque, eroded, 90th-percentile mean RGB).
     2. Cluster by tint distance (``_GROUP_TINT_THRESHOLD``). Same paint →
-       same tint → same group, so relative brightness survives.
+       same tint → same group, so relative brightness survives. **A ceiling
+       is never grouped with a wall**, even when tint distance would otherwise
+       put them together — the two surfaces carry different lighting and grouping
+       them breaks the room's light modelling silently.
     3. For each group, re-estimate one Base Colour from the **union** of
        its planes' interior pixels. A group of one reuses its single
        estimate to avoid a second percentile pass; a group of several
        merges alphas (partition → sum ≤ 1) and estimates once.
 
     Returns a list aligned with ``alphas``: each entry is the shared
-    Base Colour its plane belongs to.
+     Base Colour its plane belongs to.
     """
     if len(alphas) <= 1:
         return [estimate_base_colour(linear_photo, alphas[0])] if alphas else []
+
+    if surfaces is None:
+        surfaces = ["wall"] * len(alphas)
 
     individual = [estimate_base_colour(linear_photo, a) for a in alphas]
     tints = [_tint_of(b) for b in individual]
@@ -564,6 +579,8 @@ def _grouped_base_colours(linear_photo: np.ndarray, alphas: list[np.ndarray]) ->
         found = -1
         for g_idx, members in enumerate(groups):
             rep = members[0]
+            if surfaces[idx] != surfaces[rep]:
+                continue
             if float(np.linalg.norm(tint - tints[rep])) < _GROUP_TINT_THRESHOLD:
                 found = g_idx
                 break

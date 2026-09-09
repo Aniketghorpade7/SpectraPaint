@@ -130,11 +130,13 @@ async def create_export(
         resolved_lab[shade.shade_code] = [shade.lab.l, shade.lab.a, shade.lab.b]
         plane_targets_preview.append((plane.alpha, target_shade))
 
+    # Carry surfaces through to full-res path so ceiling grouping stays isolated there too.
+    surfaces = [plane.surface for plane, _ in targets]
     full_linear, full_plane_targets, full_tint = _full_targets(
         request, session_id, prepared, plane_targets_preview, light_tint_preview, body.mode
     )
 
-    rendered = render_many(full_linear, full_plane_targets, full_tint)
+    rendered = render_many(full_linear, full_plane_targets, full_tint, surfaces)
     jpeg_bytes = _encode_jpeg(rendered)
     filename = _export_filename(dict(body.assignments), resolved_names)
 

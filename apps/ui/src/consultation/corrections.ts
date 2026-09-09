@@ -47,6 +47,8 @@ export function describeArmedTool(tool: CorrectionTool): string {
   switch (tool) {
     case 'add':
       return 'Tap where a wall is to add it.';
+    case 'add-ceiling':
+      return 'Tap where the ceiling is to add it.';
     case 'split':
       return 'Tap a wall to split it into two there.';
     case 'merge':

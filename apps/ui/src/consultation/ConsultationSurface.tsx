@@ -5,7 +5,7 @@ import { useCatalogue } from '../catalogue/useCatalogue';
 import { Button } from '../components/Button';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
-import { describeTarget, describeWall, isTargeted } from './accent';
+import { describePlane, describeTarget, isTargeted } from './accent';
 import { describeArmedTool, tapPointFromFraction } from './corrections';
 import type { Consultation } from './useConsultation';
 import { overlayVisible } from './walls';
@@ -114,6 +114,14 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 <Button onClick={() => armTool('add')} aria-pressed={armedTool === 'add'}>
                   Add a wall
                 </Button>
+                {!walls.planes.some((p) => p.surface === 'ceiling') ? (
+                  <Button
+                    onClick={() => armTool('add-ceiling')}
+                    aria-pressed={armedTool === 'add-ceiling'}
+                  >
+                    Add ceiling
+                  </Button>
+                ) : null}
                 {walls.planes.length >= 1 ? (
                   <Button onClick={() => armTool('split')} aria-pressed={armedTool === 'split'}>
                     Split a wall
@@ -192,7 +200,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                         aria-pressed={isTargeted(paint.target, plane.planeId)}
                         onClick={() => selectWall(plane.planeId)}
                       >
-                        {describeWall(index, walls.planes.length)}
+                        {describePlane(plane, index, walls.planes.length)}
                         {paint.assignments[plane.planeId]
                           ? ` · ${paint.assignments[plane.planeId]}`
                           : ''}

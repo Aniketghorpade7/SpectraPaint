@@ -64,6 +64,8 @@ export type CreateConsultationResult =
  */
 export interface WallPlaneOverlay {
   planeId: string;
+  /** Paintable Plane surface — wall or ceiling (CONTEXT.md). */
+  surface: 'wall' | 'ceiling';
   coverage: number;
   photoWidth: number;
   photoHeight: number;
@@ -97,8 +99,8 @@ export type WallsResult =
     }
   | { status: 'failed'; code: string; message: string };
 
-/** Which correction tool made the tap — Add, Split or Merge (ticket #10). */
-export type CorrectionTool = 'add' | 'split' | 'merge';
+/** Which correction tool made the tap — Add, Split, Merge, or Add Ceiling (ticket #39). */
+export type CorrectionTool = 'add' | 'add-ceiling' | 'split' | 'merge';
 
 /** Where the Dealer tapped, in the prepared photo's own pixel space — the same space
  * `WallsResult`'s `photoWidth`/`photoHeight` describe. */

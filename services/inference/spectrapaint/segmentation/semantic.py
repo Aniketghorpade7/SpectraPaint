@@ -35,22 +35,32 @@ EXCLUDED_CLASSES = ("floor", "ceiling", "windowpane", "door")
 
 @dataclass(frozen=True)
 class SemanticRegions:
-    """Where the semantic pass thinks the wall is, at the photo's own resolution.
+    """Where the semantic pass thinks the wall and ceiling are, at the photo's own resolution.
 
     ``wall`` and ``excluded`` are boolean maps of the same height and width as the photo that was
     passed in. ``wall_confidence`` is the model's softmax probability for the wall class, kept
     because the refinement stage needs a soft answer to the question "how sure are we?" and a
-    boolean map has thrown that away.
+    boolean map has thrown that away. ``ceiling`` and ``ceiling_confidence`` are the same for the
+    ceiling class — kept separately so the ceiling plane can be built from its own region without
+    re-deriving it from ``excluded`` (which for wall purposes still contains ceiling as an
+    exclusion, and must keep doing so).
     """
 
     wall: np.ndarray  # HxW bool
     excluded: np.ndarray  # HxW bool
     wall_confidence: np.ndarray  # HxW float32 in [0, 1]
+    ceiling: np.ndarray  # HxW bool
+    ceiling_confidence: np.ndarray  # HxW float32 in [0, 1]
 
     @property
     def wall_fraction(self) -> float:
         """How much of the photo is wall. Used to decide there is no wall worth painting."""
         return float(self.wall.mean())
+
+    @property
+    def ceiling_fraction(self) -> float:
+        """How much of the photo is ceiling. Used to decide whether a ceiling is worth offering."""
+        return float(self.ceiling.mean())
 
 
 def pixel_values(photo_u8: np.ndarray, config: dict) -> np.ndarray:
@@ -96,7 +106,7 @@ def _resize_to(array: np.ndarray, shape: tuple[int, int], *, nearest: bool) -> n
 
 
 def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
-    """Label the scene, and return the wall and the definitely-not-wall, at photo resolution.
+    """Label the scene, and return the wall, the ceiling and the definitely-not-wall, at photo resolution.
 
     The logits come back at a quarter of the network's input side, which is coarse — a blocky
     staircase where the wall meets the ceiling. That is expected and is not corrected here: the
@@ -118,14 +128,30 @@ def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
     for name in EXCLUDED_CLASSES:
         excluded_small |= labels == classes[name]
 
+    # Ceiling kept separately — for wall, ceiling is an exclusion (a repainted ceiling window is
+    # instantly wrong); for ceiling, wall is the exclusion. The label map itself is exclusive
+    # (argmax), so wall and ceiling never overlap here.
+    ceiling_index = classes.get("ceiling")
+    if ceiling_index is not None:
+        ceiling_small = labels == ceiling_index
+    else:
+        ceiling_small = np.zeros_like(wall_small)
+
     # Resized as floats and thresholded back, because Pillow has no boolean mode. Nearest
     # neighbour, so a resized label map contains only labels that were actually predicted.
     wall = _resize_to(wall_small.astype(np.float32), shape, nearest=True) > 0.5
     excluded = _resize_to(excluded_small.astype(np.float32), shape, nearest=True) > 0.5
     confidence = _resize_to(probabilities[wall_index], shape, nearest=False)
+    ceiling = _resize_to(ceiling_small.astype(np.float32), shape, nearest=True) > 0.5
+    if ceiling_index is not None and ceiling_index < probabilities.shape[0]:
+        ceiling_conf = _resize_to(probabilities[ceiling_index], shape, nearest=False)
+    else:
+        ceiling_conf = np.zeros(shape, dtype=np.float32)
 
     return SemanticRegions(
         wall=wall,
         excluded=excluded,
         wall_confidence=np.clip(confidence, 0.0, 1.0).astype(np.float32),
+        ceiling=ceiling,
+        ceiling_confidence=np.clip(ceiling_conf, 0.0, 1.0).astype(np.float32),
     )

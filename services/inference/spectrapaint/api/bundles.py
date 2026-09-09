@@ -256,7 +256,9 @@ async def reopen_consultation(request: Request, consultation_id: str) -> dict[st
 # -- helpers -------------------------------------------------------------------------------------
 
 
-def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes]]]:
+def _require_preparation(
+    store, consultation_id: str
+) -> tuple[bytes, list[tuple[str, bytes, str]]]:
     stored = store.preparation_of(consultation_id)
     if stored is None:
         if not store.consultation_exists(consultation_id):
@@ -273,22 +275,30 @@ def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple
     return stored
 
 
-def _prepared_photo_from(photo_png: bytes, mattes: list[tuple[str, bytes]]) -> PreparedPhoto:
+def _prepared_photo_from(
+    photo_png: bytes, mattes: list[tuple[str, bytes]] | list[tuple[str, bytes, str]]
+) -> PreparedPhoto:
     """Rebuild the prepared photo from its stored images.
 
     This is the inverse of what sessions.py encodes: the photo decodes to the same sRGB array
     preparation produced, the linear form follows from it through the same LUT the decode stage
     uses, and each matte decodes back to its float Alpha. No model runs — which is the point.
+    Each matte now carries its surface (wall | ceiling); older rows without it default to wall.
     """
 
     with Image.open(io.BytesIO(photo_png)) as image:
         srgb = np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
 
     planes = []
-    for plane_id, matte_png in mattes:
+    for entry in mattes:
+        if len(entry) == 3:
+            plane_id, matte_png, surface = entry  # type: ignore[misc]
+        else:
+            plane_id, matte_png = entry  # type: ignore[misc]
+            surface = "wall"
         with Image.open(io.BytesIO(matte_png)) as image:
             channel = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
-        planes.append(WallPlane(plane_id=plane_id, alpha=channel.reshape((*channel.shape, 1))))
+        planes.append(WallPlane(plane_id=plane_id, alpha=channel.reshape((*channel.shape, 1)), surface=surface))
 
     return PreparedPhoto(
         linear=np.ascontiguousarray(linearise_u8(srgb), dtype=np.float32),

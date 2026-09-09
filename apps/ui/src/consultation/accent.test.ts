@@ -11,9 +11,10 @@ import {
   toggleTarget,
 } from './accent';
 
-function planeAt(planeId: string): WallPlaneOverlay {
+function planeAt(planeId: string, surface: 'wall' | 'ceiling' = 'wall'): WallPlaneOverlay {
   return {
     planeId,
+    surface,
     coverage: 0.4,
     photoWidth: 1280,
     photoHeight: 720,

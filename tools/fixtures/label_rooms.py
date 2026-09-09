@@ -68,6 +68,12 @@ class Room:
     # `<name>.planes.png` is not written at all and the plane tests skip the room, rather than a
     # guess being recorded as an answer. See `windows-with-curtains` below.
     label_planes: bool = True
+    # Ceiling polygons — same conventions as wall planes, but for the ceiling. A fixture with no
+    # usable ceiling leaves this empty and no `<name>.ceiling.png` is written; a fixture with a
+    # usable ceiling carries polygons here and `<name>.ceiling.png` is generated alongside
+    # `<name>.wall.png` so an accuracy claim for the ceiling can be measured rather than asserted
+    # (issue #39).
+    ceiling: list[list[tuple[int, int]]] = field(default_factory=list)
 
 
 def _fill(size: tuple[int, int], polygons: list[list[tuple[int, int]]]) -> np.ndarray:
@@ -92,8 +98,8 @@ def _boundary_band(mask: np.ndarray, radius: int) -> np.ndarray:
     return grown & ~shrunk
 
 
-def render(room: Room) -> tuple[Image.Image, Image.Image]:
-    """The two label images for one room."""
+def render(room: Room) -> tuple[Image.Image, Image.Image, Image.Image | None]:
+    """The label images for one room — wall, planes, and optionally ceiling."""
 
     width, height = room.size
     wall = np.full((height, width), NOT_WALL, dtype=np.uint8)
@@ -118,7 +124,21 @@ def render(room: Room) -> tuple[Image.Image, Image.Image]:
     wall[explicit] = UNCERTAIN
     planes_rgb[explicit] = (0, 0, 0)
 
-    return Image.fromarray(wall, mode="L"), Image.fromarray(planes_rgb, mode="RGB")
+    # Ceiling — same treatment but separate file. White where ceiling is certain, black elsewhere,
+    # mid-grey on a boundary band so the same "don't count this pixel" rule applies.
+    ceiling_image: Image.Image | None = None
+    if room.ceiling:
+        ceiling_mask = _fill(room.size, room.ceiling)
+        ceiling_arr = np.full((height, width), NOT_WALL, dtype=np.uint8)
+        ceiling_arr[ceiling_mask] = WALL
+        ceiling_band = _boundary_band(ceiling_mask, UNCERTAIN_BAND)
+        ceiling_arr[ceiling_band] = UNCERTAIN
+        # Ceiling uncertain overlaps same explicit uncertain regions — if wall uncertain already
+        # covers ceiling edge, keep it.
+        ceiling_arr[explicit] = np.where(explicit, UNCERTAIN, ceiling_arr[explicit])
+        ceiling_image = Image.fromarray(ceiling_arr, mode="L")
+
+    return Image.fromarray(wall, mode="L"), Image.fromarray(planes_rgb, mode="RGB"), ceiling_image
 
 
 def main(rooms: list[Room]) -> int:
@@ -134,20 +154,30 @@ def main(rooms: list[Room]) -> int:
                     file=sys.stderr,
                 )
                 return 1
-        wall, planes = render(room)
+        wall, planes, ceiling = render(room)
         wall.save(FIXTURE_DIR / f"{room.stem}.wall.png")
         planes_path = FIXTURE_DIR / f"{room.stem}.planes.png"
         if room.label_planes:
             planes.save(planes_path)
         elif planes_path.exists():
             planes_path.unlink()
+        ceiling_path = FIXTURE_DIR / f"{room.stem}.ceiling.png"
+        if ceiling is not None:
+            ceiling.save(ceiling_path)
+        elif ceiling_path.exists():
+            # No ceiling label for this fixture — remove stale file if present
+            ceiling_path.unlink()
         counts = {
             "wall": int((np.asarray(wall) == WALL).mean() * 100),
             "unsure": int((np.asarray(wall) == UNCERTAIN).mean() * 100),
         }
+        ceiling_pct = ""
+        if ceiling is not None:
+            ceiling_arr = np.asarray(ceiling)
+            ceiling_pct = f", {int((ceiling_arr == WALL).mean()*100)}% ceiling"
         print(
             f"{room.stem}: {len(room.planes)} plane(s), "
-            f"{counts['wall']}% wall, {counts['unsure']}% unsure"
+            f"{counts['wall']}% wall, {counts['unsure']}% unsure{ceiling_pct}"
         )
     return 0
 

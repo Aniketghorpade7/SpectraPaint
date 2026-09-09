@@ -89,7 +89,7 @@ export function renderPayload(
  *
  * Position, because that is how somebody standing in the room would point at it, and the planes
  * arrive ordered left to right. "Wall Plane" is the word for the code and the glossary, not for a
- * caption over a photograph.
+ * caption over a photograph. A ceiling is always called "the ceiling" regardless of position.
  */
 export function describeWall(index: number, total: number): string {
   if (total <= 1) return 'the wall';
@@ -98,6 +98,11 @@ export function describeWall(index: number, total: number): string {
     return ['the left wall', 'the middle wall', 'the right wall'][index] ?? `wall ${index + 1}`;
   }
   return `wall ${index + 1}`;
+}
+
+export function describePlane(plane: WallPlaneOverlay, index: number, total: number): string {
+  if (plane.surface === 'ceiling') return 'the ceiling';
+  return describeWall(index, total);
 }
 
 /** The caption above the photo: what the next Shade tap will do. */

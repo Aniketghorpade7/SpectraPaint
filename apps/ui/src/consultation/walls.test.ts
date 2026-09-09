@@ -5,6 +5,7 @@ import { applyWallsEvent, INITIAL_WALLS_STATE, overlayVisible } from './walls';
 
 const plane: WallPlaneOverlay = {
   planeId: 'wall_plane_1',
+  surface: 'wall',
   coverage: 0.42,
   photoWidth: 1280,
   photoHeight: 720,

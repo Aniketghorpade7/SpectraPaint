@@ -44,6 +44,7 @@ const SERVICE_UNAVAILABLE_MESSAGE =
 
 export interface PlaneDescription {
   plane_id: string;
+  surface: 'wall' | 'ceiling';
   coverage: number;
   photo_width: number;
   photo_height: number;
@@ -128,6 +129,7 @@ export async function overlaysFrom(
     }
     overlays.push({
       planeId: plane.plane_id,
+      surface: plane.surface ?? 'wall',
       coverage: plane.coverage,
       photoWidth: plane.photo_width,
       photoHeight: plane.photo_height,
