@@ -106,7 +106,8 @@ def _resize_to(array: np.ndarray, shape: tuple[int, int], *, nearest: bool) -> n
 
 
 def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
-    """Label the scene, and return the wall, the ceiling and the definitely-not-wall, at photo resolution.
+    """Label the scene, and return the wall, the ceiling and
+    the definitely-not-wall, at photo resolution.
 
     The logits come back at a quarter of the network's input side, which is coarse — a blocky
     staircase where the wall meets the ceiling. That is expected and is not corrected here: the

@@ -51,7 +51,7 @@ from spectrapaint.segmentation.corrections import (
     split_plane,
 )
 from spectrapaint.segmentation.matte import encode_photo
-from spectrapaint.segmentation.walls import CEILING_PLANE_ID, WallPlane
+from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["planes"])
 
@@ -233,9 +233,12 @@ async def add_ceiling(request: Request, session_id: str, body: TapPoint) -> dict
     except CorrectionRefused as failure:
         raise _refused(failure) from None
 
-    # Keep wall ordering left-to-right, but ceiling is a distinct surface — append it last
-    # rather than sorting by left edge (which is meaningless for a ceiling).
-    wall_sorted = order_left_to_right(tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "wall"))
+    # Keep wall ordering left-to-right, but ceiling is a distinct
+    # surface — append it last rather than sorting by left edge
+    # (which is meaningless for a ceiling).
+    wall_sorted = order_left_to_right(
+        tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "wall")
+    )
     ceiling_planes = tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "ceiling")
     updated = (*wall_sorted, *ceiling_planes)
     job.replace_planes(updated)

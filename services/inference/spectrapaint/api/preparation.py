@@ -45,8 +45,6 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-
-import numpy as np
 from PIL import Image
 
 from spectrapaint.quality import assess_quality
@@ -56,13 +54,11 @@ from spectrapaint.runtime.location import ModelsMissing
 from spectrapaint.segmentation.matte import RefinerFeatures, encode_photo
 from spectrapaint.segmentation.semantic import SemanticRegions
 from spectrapaint.segmentation.walls import (
-    CEILING_PLANE_ID,
     NoWallFound,
     WallPlane,
     ceiling_from,
     get_regions,
     planes_from,
-    wall_regions,
 )
 
 logger = logging.getLogger(__name__)
@@ -355,9 +351,10 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
         workspace.quality_note = assess_quality(workspace.decoded.srgb)
 
     def look_at_the_room() -> None:
-        # Keep the full semantic regions even when no wall is worth offering — a ceiling may still be
-        # present (a photo cropped to the ceiling). The wall threshold is checked but the regions are
-        # retained for the ceiling pass.
+        # Keep full semantic regions even when no wall is worth
+        # offering — a ceiling may still be present (a photo
+        # cropped to the ceiling). The threshold is checked but
+        # the regions are retained for the ceiling pass.
         try:
             regions = get_regions(load_graphs(), workspace.photo().srgb)
             workspace.regions = regions
@@ -407,7 +404,11 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
                 if wall_max is not None:
                     wins = ceiling.alpha[..., 0] >= wall_max
                     confident_wall = wall_max >= 0.5
-                    resolved = np.where(confident_wall & ~wins, 0.0, ceiling.alpha[..., 0]).astype(np.float32)
+                    resolved = np.where(
+                        confident_wall & ~wins,
+                        0.0,
+                        ceiling.alpha[..., 0],
+                    ).astype(np.float32)
                     ceiling = WallPlane(
                         plane_id=ceiling.plane_id, alpha=resolved[..., None], surface="ceiling"
                     )

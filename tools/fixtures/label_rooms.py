@@ -174,7 +174,7 @@ def main(rooms: list[Room]) -> int:
         ceiling_pct = ""
         if ceiling is not None:
             ceiling_arr = np.asarray(ceiling)
-            ceiling_pct = f", {int((ceiling_arr == WALL).mean()*100)}% ceiling"
+            ceiling_pct = f", {int((ceiling_arr == WALL).mean() * 100)}% ceiling"
         print(
             f"{room.stem}: {len(room.planes)} plane(s), "
             f"{counts['wall']}% wall, {counts['unsure']}% unsure{ceiling_pct}"

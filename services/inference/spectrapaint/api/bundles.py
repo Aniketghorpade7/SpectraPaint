@@ -256,9 +256,7 @@ async def reopen_consultation(request: Request, consultation_id: str) -> dict[st
 # -- helpers -------------------------------------------------------------------------------------
 
 
-def _require_preparation(
-    store, consultation_id: str
-) -> tuple[bytes, list[tuple[str, bytes, str]]]:
+def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes, str]]]:
     stored = store.preparation_of(consultation_id)
     if stored is None:
         if not store.consultation_exists(consultation_id):
@@ -298,7 +296,13 @@ def _prepared_photo_from(
             surface = "wall"
         with Image.open(io.BytesIO(matte_png)) as image:
             channel = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
-        planes.append(WallPlane(plane_id=plane_id, alpha=channel.reshape((*channel.shape, 1)), surface=surface))
+        planes.append(
+            WallPlane(
+                plane_id=plane_id,
+                alpha=channel.reshape((*channel.shape, 1)),
+                surface=surface,
+            )
+        )
 
     return PreparedPhoto(
         linear=np.ascontiguousarray(linearise_u8(srgb), dtype=np.float32),

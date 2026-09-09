@@ -391,11 +391,13 @@ def merge_planes(
     # Ceiling and wall must not be merged — different surfaces.
     if first.surface != second.surface:
         raise PointNotNearASeam(
-            f"({x}, {y}) is between a {first.surface} and a {second.surface}, which cannot be merged"
+            f"({x}, {y}) is between a {first.surface} and a "
+            f"{second.surface}, which cannot be merged"
         )
     merged_alpha = np.clip(first.alpha + second.alpha, 0.0, 1.0).astype(np.float32)
     # The larger plane's id survives, so a Shade already assigned to it keeps working
     # (implementation-decisions.md #40) — an arbitrary but deterministic tie-break otherwise.
     survivor_id = first.plane_id if first.coverage >= second.coverage else second.plane_id
     survivor_surface = first.surface
-    return WallPlane(plane_id=survivor_id, alpha=merged_alpha, surface=survivor_surface), first, second
+    merged = WallPlane(plane_id=survivor_id, alpha=merged_alpha, surface=survivor_surface)
+    return merged, first, second

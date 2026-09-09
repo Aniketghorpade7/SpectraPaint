@@ -69,12 +69,15 @@ class NoWallFound(Exception):
 
 @dataclass(frozen=True)
 class WallPlane:
-    """One Paintable Plane: its id, surface kind, and the soft Alpha Matte saying which pixels it covers.
+    """One Paintable Plane: its id, surface kind, and the soft
+    Alpha Matte saying which pixels it covers.
 
-    ``surface`` is ``wall`` or ``ceiling`` — the ``surface`` field the REST contract exposes
-    (CONTEXT.md: Paintable Plane). Until this ticket every plane was a wall; a ceiling is the same
-    treatment without the plane-splitting step, and its base colour is never grouped with a wall's
-    even when the two are a similar pale colour.
+    ``surface`` is ``wall`` or ``ceiling`` — the ``surface`` field
+    the REST contract exposes (CONTEXT.md: Paintable Plane).
+    Until this ticket every plane was a wall; a ceiling is the
+    same treatment without the plane-splitting step, and its base
+    colour is never grouped with a wall's even when the two are
+    a similar pale colour.
     """
 
     plane_id: str
@@ -255,10 +258,19 @@ def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
         if np.any(overlap):
             # Zero ceiling where wall is confidently covering — wall wins where both claim.
             resolved = np.where(ceiling_claim > wall_claim, ceiling_claim, 0.0).astype(np.float32)
-            # Only zero where wall confidently claims; keep ceiling elsewhere.
+            # Only zero where wall confidently claims;
+            # keep ceiling elsewhere.
             mask = wall_claim >= 0.5
-            resolved = np.where(mask & (wall_claim >= ceiling_claim), 0.0, ceiling.alpha[..., 0]).astype(np.float32)
-            ceiling = WallPlane(plane_id=ceiling.plane_id, alpha=resolved[..., None], surface="ceiling")
+            resolved = np.where(
+                mask & (wall_claim >= ceiling_claim),
+                0.0,
+                ceiling.alpha[..., 0],
+            ).astype(np.float32)
+            ceiling = WallPlane(
+                plane_id=ceiling.plane_id,
+                alpha=resolved[..., None],
+                surface="ceiling",
+            )
             if ceiling.coverage < MINIMUM_CEILING_FRACTION:
                 return wall_planes
         return [*wall_planes, ceiling]

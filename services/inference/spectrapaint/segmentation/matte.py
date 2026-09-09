@@ -232,15 +232,20 @@ def ceiling_alpha(
 ) -> np.ndarray:
     """The finished ceiling matte: HxWx1 float32 in [0, 1].
 
-    Same treatment as :func:`wall_alpha` — SAM 2's mask refined by the semantic pass and then
-    softened — but without plane splitting (a ceiling in one photo is essentially always one region).
-    The ceiling's own coverage carries its own base colour and light map, and is never grouped with a
-    wall's, even when the two happen to be a similar pale colour.
+    Same treatment as :func:`wall_alpha` — SAM 2's mask
+    refined by the semantic pass and then softened — but
+    without plane splitting (a ceiling in one photo is
+    essentially always one region). The ceiling's own coverage
+    carries its own base colour and light map, and is never
+    grouped with a wall's, even when the two happen to be a
+    similar pale colour.
     """
 
     alpha = refined.astype(np.float32).copy()
 
-    confident_ceiling = regions.ceiling & (regions.ceiling_confidence >= SEMANTIC_OVERRULE_CONFIDENCE)
+    confident_ceiling = regions.ceiling & (
+        regions.ceiling_confidence >= SEMANTIC_OVERRULE_CONFIDENCE
+    )
     # Ceiling excluded set is wall plus the other non-ceiling exclusions; build without re-using the
     # wall's `excluded` which already contains ceiling.
     other_excluded = regions.excluded & ~regions.ceiling
