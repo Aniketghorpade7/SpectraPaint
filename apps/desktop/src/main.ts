@@ -9,6 +9,8 @@ import { registerExportBridge } from './export-bridge';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
+import { registerDiskBridge } from './disk-bridge';
+import { registerStorageBridge } from './storage-bridge';
 import { registerStoredImageBridge } from './stored-image-bridge';
 import { registerWallsBridge } from './walls-bridge';
 import { SidecarStartError, startSidecar, type Sidecar } from './sidecar';
@@ -99,6 +101,8 @@ void app.whenReady().then(async () => {
   registerWallsBridge(() => sidecar, isTrustedSender);
   registerCorrectionsBridge(() => sidecar, isTrustedSender);
   registerStoredImageBridge(() => sidecar, isTrustedSender);
+  registerStorageBridge(() => sidecar, isTrustedSender);
+  registerDiskBridge(isTrustedSender);
   registerCreateConsultationBridge(
     () => sidecar,
     () => mainWindow,

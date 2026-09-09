@@ -21,6 +21,7 @@ export function LibraryScreen({
   onReopened,
   onNewConsultation,
   onNewConsultationInBundle,
+  onOpenStorage,
 }: {
   library: Library;
   onReopened: (reopened: {
@@ -30,6 +31,7 @@ export function LibraryScreen({
   }) => void;
   onNewConsultation: () => void;
   onNewConsultationInBundle: (bundleId: string) => void;
+  onOpenStorage?: () => void;
 }) {
   if (library.openConsultationId) {
     return (
@@ -49,15 +51,23 @@ export function LibraryScreen({
       />
     );
   }
-  return <BundleList library={library} onNewConsultation={onNewConsultation} />;
+  return (
+    <BundleList
+      library={library}
+      onNewConsultation={onNewConsultation}
+      onOpenStorage={onOpenStorage}
+    />
+  );
 }
 
 function BundleList({
   library,
   onNewConsultation,
+  onOpenStorage,
 }: {
   library: Library;
   onNewConsultation: () => void;
+  onOpenStorage?: () => void;
 }) {
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -83,6 +93,7 @@ function BundleList({
       <header className="library__bar">
         <h1 className="library__title">Bundles</h1>
         <Button onClick={onNewConsultation}>New consultation</Button>
+        {onOpenStorage ? <Button onClick={onOpenStorage}>Storage</Button> : null}
       </header>
 
       {library.message ? (

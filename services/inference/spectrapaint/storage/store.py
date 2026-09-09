@@ -381,6 +381,110 @@ class Store:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def bundle_bytes(self, bundle_id: str) -> int:
+        """Total bytes on disk used by this Bundle's Consultations and their Renders."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id FROM consultations WHERE bundle_id = ?", (bundle_id,)
+            ).fetchall()
+            consultation_ids = [str(row["id"]) for row in rows]
+        total = 0
+        for cid in consultation_ids:
+            total += self.consultation_bytes(cid)
+        return total
+
+    def storage_overview(self) -> list[dict]:
+        """Bundles with their disk usage, sorted largest first so deletion is informed."""
+        bundles = self.list_bundles()
+        for bundle in bundles:
+            bundle["bytes"] = self.bundle_bytes(str(bundle["bundle_id"]))
+        bundles.sort(key=lambda b: b["bytes"], reverse=True)
+        return bundles
+
+    def consultation_bytes(self, consultation_id: str) -> int:
+        """Bytes for one Consultation: its photos, mattes and renders."""
+        total = 0
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path, photo_path, planes_json FROM consultations WHERE id = ?",
+                (consultation_id,),
+            ).fetchone()
+            if row is not None:
+                for key in ("original_path", "photo_path"):
+                    rel = row[key]
+                    if rel:
+                        total += self._file_size(str(rel))
+                if row["planes_json"]:
+                    try:
+                        planes = json.loads(row["planes_json"])
+                        for plane in planes:
+                            rel = plane.get("matte_path")
+                            if rel:
+                                total += self._file_size(str(rel))
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+            renders = self._connection.execute(
+                "SELECT png_path FROM renders WHERE consultation_id = ?", (consultation_id,)
+            ).fetchall()
+            for r in renders:
+                total += self._file_size(str(r["png_path"]))
+        return total
+
+    def delete_consultation(self, consultation_id: str) -> bool:
+        """Delete a Consultation and every file it owns: photo, mattes and renders."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path, photo_path, planes_json FROM consultations WHERE id = ?",
+                (consultation_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            renders = self._connection.execute(
+                "SELECT png_path FROM renders WHERE consultation_id = ?", (consultation_id,)
+            ).fetchall()
+            render_paths = [str(r["png_path"]) for r in renders]
+
+            # Collect matte paths before deleting rows.
+            matte_paths: list[str] = []
+            if row["planes_json"]:
+                try:
+                    for plane in json.loads(row["planes_json"]):
+                        rel = plane.get("matte_path")
+                        if rel:
+                            matte_paths.append(str(rel))
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
+            photo_paths = [str(row[p]) for p in ("original_path", "photo_path") if row[p]]
+
+            with self._connection:
+                self._connection.execute(
+                    "DELETE FROM renders WHERE consultation_id = ?", (consultation_id,)
+                )
+                self._connection.execute(
+                    "DELETE FROM consultations WHERE id = ?", (consultation_id,)
+                )
+
+        # Remove files outside the lock — DB is already consistent.
+        for rel in [*photo_paths, *matte_paths, *render_paths]:
+            try:
+                path = self.directory / rel
+                if path.is_file():
+                    path.unlink()
+            except OSError:
+                # Log but do not fail the delete — the record is already gone.
+                pass
+        return True
+
+    def _file_size(self, relative_path: str) -> int:
+        try:
+            path = self.directory / relative_path
+            if path.is_file():
+                return path.stat().st_size
+        except OSError:
+            pass
+        return 0
+
     # -- renders ---------------------------------------------------------------------------------
 
     def save_render(

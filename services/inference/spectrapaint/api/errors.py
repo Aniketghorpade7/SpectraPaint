@@ -24,6 +24,7 @@ DEFAULT_BUNDLE_PROTECTED = "default_bundle_protected"
 CONSULTATION_NOT_FOUND = "consultation_not_found"
 RENDER_NOT_FOUND = "render_not_found"
 PREPARATION_UNAVAILABLE = "preparation_unavailable"
+STORAGE_FULL = "storage_full"
 
 
 class ServiceError(Exception):

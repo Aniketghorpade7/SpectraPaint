@@ -20,12 +20,14 @@ import {
   BOOT_STATUS_RETRY_CHANNEL,
   CORRECTIONS_CHANNEL,
   CREATE_CONSULTATION_CHANNEL,
+  DISK_CHANNEL,
   EXPORT_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
   PROGRESS_STREAM_STOP_CHANNEL,
   RENDER_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
+  STORAGE_CHANNEL,
   STORED_IMAGE_CHANNEL,
   WALLS_CHANNEL,
 } from './channels';
@@ -124,6 +126,26 @@ const bridge: SpectraPaintBridge = {
       shadeCodeOrAssignments,
       mode,
     ) as Promise<ExportResult>;
+  },
+
+  storage() {
+    return ipcRenderer.invoke(STORAGE_CHANNEL, { path: '/storage', method: 'GET' }) as Promise<
+      ServiceResponse<{
+        bundles: import('./bridge-types').BundleStorage[];
+        disk: import('./bridge-types').DiskInfo;
+      }>
+    >;
+  },
+
+  deleteConsultation(consultationId: string) {
+    return ipcRenderer.invoke(STORAGE_CHANNEL, {
+      path: `/consultations/${consultationId}`,
+      method: 'DELETE',
+    }) as Promise<ServiceResponse>;
+  },
+
+  disk() {
+    return ipcRenderer.invoke(DISK_CHANNEL) as Promise<import('./bridge-types').DiskProbe>;
   },
 };
 

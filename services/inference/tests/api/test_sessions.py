@@ -202,6 +202,11 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
             frozenset({"GET"}),
         ),
         ("/consultations/{consultation_id}/reopen", frozenset({"POST"})),
+        # Issue #13. Storage view and low-disk warning: bundles by bytes, disk
+        # probe, and deleting a Consultation from the view.
+        ("/storage", frozenset({"GET"})),
+        ("/storage/disk", frozenset({"GET"})),
+        ("/consultations/{consultation_id}", frozenset({"DELETE"})),
     }
 
     actual = set()

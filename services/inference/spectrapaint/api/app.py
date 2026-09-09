@@ -31,6 +31,7 @@ from spectrapaint.api.preparation import Stage, build_preparation_stages
 from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
+from spectrapaint.api.storage import router as storage_router
 from spectrapaint.catalogue import Catalogue, open_catalogue
 from spectrapaint.storage import Store
 
@@ -83,6 +84,7 @@ def create_app(
     app.include_router(exports_router)
     app.include_router(catalogue_router)
     app.include_router(bundles_router)
+    app.include_router(storage_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

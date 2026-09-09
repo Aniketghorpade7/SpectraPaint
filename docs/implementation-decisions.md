@@ -1379,3 +1379,15 @@ succeeding straight after an export. The contract test in `test_sessions.py` pin
 Reopened Consultations export full-res through the store fallback, and `SPECTRAPAINT_STORAGE_DIR`
 tests that predate originals get preview-scale exports rather than a failure — degrade, never
 dead-end (conventions §5).
+
+---
+
+## 46. Storage view lists Bundles by bytes, and the warning is well before critical (issue #13)
+
+**Ticket:** #13 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-09-09
+
+**Decided:** `Store` gained `bundle_bytes`/`consultation_bytes`/`storage_overview` (summing file sizes on disk, largest first) and `delete_consultation` (deletes photos, mattes, renders and rows). `GET /storage` returns bundles with `bytes` plus a `disk {free_bytes,total_bytes,low,warning}` probe via `shutil.disk_usage`; `GET /storage/disk` is the same probe alone for the global banner. `DELETE /consultations/{id}` deletes one Consultation. Low is `free < 2 GB` or `free/total < 10 %` — the same threshold checked in the Electron shell via `fs.statfsSync(app.getPath('userData'))` so the warning survives a down service. The UI's `StorageView` shows bundles by consumption and lets the Dealer delete Bundles and Consultations there; `App` shows a plain-language banner ("Your disk is getting full. Open Storage to delete old Bundles — otherwise new photos may fail to save.") well before critical, with an action to Storage, so the app never fails mid-Consultation without having warned first.
+
+**Why:** the spec's "no automatic deletion" only works paired with an informed manual path — bytes per Bundle is that information. The same file-size sum the Store already writes is the source of truth, not a cached counter that can drift. The threshold is deliberately generous (design-decisions §9, ~15 GB/month, floor-tier PC fills in ~2 years) so the Dealer has weeks, not minutes, to act.
+
+**Consequence:** the contract test pins the three new routes. A cached bytes column was rejected — it would need invalidation on every write and save nothing on a library of thousands, not millions, of files.

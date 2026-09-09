@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { BootScreen } from './boot/BootScreen';
 import { useBoot } from './boot/useBoot';
@@ -6,6 +6,9 @@ import { ConsultationSurface } from './consultation/ConsultationSurface';
 import { useConsultation } from './consultation/useConsultation';
 import { LibraryScreen } from './library/LibraryScreen';
 import { useLibrary } from './library/useLibrary';
+import { StorageView } from './storage/StorageView';
+import { useStorage } from './storage/useStorage';
+import './storage/storage.css';
 
 /**
  * The app opens on Boot and stays there until the service is ready — which is also what stops
@@ -20,6 +23,45 @@ export function App() {
   const boot = useBoot();
   const consultation = useConsultation();
   const library = useLibrary();
+  const [showStorage, setShowStorage] = useState(false);
+  const storage = useStorage();
+  const [diskLow, setDiskLow] = useState<{ low: boolean; warning: string | null } | null>(null);
+
+  // Global low-disk warning, checked on mount and periodically, from both
+  // the service (authoritative) and the shell fallback (works when service is down).
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const probe = await window.spectrapaint.disk();
+        if (!cancelled && probe.low) {
+          setDiskLow({
+            low: true,
+            warning:
+              'Your disk is getting full. Open Storage to delete old Bundles — otherwise new photos may fail to save.',
+          });
+          return;
+        }
+      } catch {
+        // fall through to service check
+      }
+      try {
+        const resp = await window.spectrapaint.request({ path: '/storage/disk' });
+        if (!cancelled && resp.ok) {
+          const body = resp.body as { low: boolean; warning: string | null };
+          setDiskLow({ low: !!body.low, warning: body.warning ?? null });
+        }
+      } catch {
+        // no warning rather than a false one
+      }
+    };
+    void check();
+    const id = setInterval(() => void check(), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [boot.finished]);
 
   const startInBundle = useCallback(
     async (bundleId: string) => {
@@ -39,16 +81,57 @@ export function App() {
     return <BootScreen boot={boot} />;
   }
 
+  const banner =
+    diskLow?.low && diskLow.warning ? (
+      <div className="disk-banner" role="alert">
+        <span>{diskLow.warning}</span>
+        <button
+          type="button"
+          className="button disk-banner__action"
+          onClick={() => setShowStorage(true)}
+        >
+          Open Storage
+        </button>
+        <button type="button" className="button" onClick={() => setDiskLow(null)}>
+          Dismiss
+        </button>
+      </div>
+    ) : null;
+
   if (consultation.state.phase === 'idle') {
+    if (showStorage) {
+      return (
+        <>
+          {banner}
+          <StorageView
+            storage={storage}
+            onBack={() => {
+              setShowStorage(false);
+              void library.refreshBundles();
+            }}
+            onDeletedBundle={() => void library.refreshBundles()}
+          />
+        </>
+      );
+    }
     return (
-      <LibraryScreen
-        library={library}
-        onReopened={({ sessionId, imageDataUrl }) => consultation.adopt(sessionId, imageDataUrl)}
-        onNewConsultation={() => void consultation.start()}
-        onNewConsultationInBundle={(bundleId) => void startInBundle(bundleId)}
-      />
+      <>
+        {banner}
+        <LibraryScreen
+          library={library}
+          onReopened={({ sessionId, imageDataUrl }) => consultation.adopt(sessionId, imageDataUrl)}
+          onNewConsultation={() => void consultation.start()}
+          onNewConsultationInBundle={(bundleId) => void startInBundle(bundleId)}
+          onOpenStorage={() => setShowStorage(true)}
+        />
+      </>
     );
   }
 
-  return <ConsultationSurface consultation={consultation} />;
+  return (
+    <>
+      {banner}
+      <ConsultationSurface consultation={consultation} />
+    </>
+  );
 }

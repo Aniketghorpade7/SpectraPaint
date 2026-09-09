@@ -1,0 +1,48 @@
+/* Storage view (issue #13) — inherits library list/panel styles, adds only the warning banner. */
+
+.storage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.storage__warning {
+  border: 1px solid var(--grey-3);
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: var(--grey-1);
+  line-height: 1.4;
+}
+
+.storage__meta {
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+
+.storage__row {
+  gap: 8px;
+}
+
+.storage__consultations {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Global low-disk banner shown above every surface. */
+.disk-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--grey-3);
+  background: var(--grey-1);
+  font-size: 0.95rem;
+}
+
+.disk-banner__action {
+  margin-left: auto;
+}

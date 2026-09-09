@@ -202,9 +202,40 @@ export interface SpectraPaintBridge {
     shadeCodeOrAssignments: string | Record<string, string>,
     mode?: 'realistic' | 'true_colour',
   ): Promise<ExportResult>;
+
+  /** Bundles by bytes + disk free (issue #13). */
+  storage(): Promise<ServiceResponse<{ bundles: BundleStorage[]; disk: DiskInfo }>>;
+
+  /** Delete a Consultation and its files (issue #13). */
+  deleteConsultation(consultationId: string): Promise<ServiceResponse>;
+
+  /** The shell's own low-disk probe (issue #13) — works even when the service is down. */
+  disk(): Promise<DiskProbe>;
 }
 
 export type ExportResult =
   | { status: 'ready'; filePath: string; filename: string }
   | { status: 'cancelled' }
   | { status: 'failed'; code: string; message: string };
+
+export interface BundleStorage {
+  bundle_id: string;
+  name: string;
+  created_at: string;
+  consultation_count: number;
+  is_default: number;
+  bytes: number;
+}
+
+export interface DiskInfo {
+  free_bytes: number;
+  total_bytes: number;
+  low: boolean;
+  warning: string | null;
+}
+
+export interface DiskProbe {
+  freeBytes: number;
+  totalBytes: number;
+  low: boolean;
+}
