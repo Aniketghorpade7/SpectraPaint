@@ -63,6 +63,31 @@ cd ../..
 
 ---
 
+## Fetching and exporting the models
+
+The inference service needs two ML models — a SegFormer semantic segmentation model and SAM 2 for
+boundary refinement (`models/manifest.toml`). Weights are never committed (see `models/README.md`
+and `.gitignore`), so a fresh clone must fetch and export them once:
+
+```bash
+python tools/fetch_models.py            # downloads the pinned checkpoints, verifies sha256
+```
+
+```bash
+cd services/inference
+uv sync --group export                  # pulls in torch/transformers, export-only — never shipped
+uv run python ../../tools/export_onnx.py   # converts the checkpoints to the .onnx graphs the service runs
+cd ../..
+```
+
+This needs a working internet connection and downloads several hundred MB. It produces
+`semantic.onnx`, `sam2-encoder.onnx`, `sam2-decoder.onnx` and a `runtime.json` sidecar per model in
+`models/` — see `services/inference/spectrapaint/runtime/README.md` and `tools/export_onnx.py` for
+what each graph is and why SAM 2 is split in two. Skip this step and the app still launches, but
+any segmentation request will fail with no models to load.
+
+---
+
 ## Running the app
 
 **Production-style — builds the UI and loads it from disk:**
@@ -165,6 +190,11 @@ Each directory has a `README.md` stating what belongs in it. Read it before addi
 the two-terminal dev flow.
 
 **`uv sync` cannot find Python 3.12.** Let uv install it: `uv python install 3.12`.
+
+**Segmentation requests fail, or the service logs a missing-model error.** The models were never
+fetched/exported — run the "Fetching and exporting the models" step above. `location.py` looks for
+the `.onnx` files under `models/` (or `SPECTRAPAINT_MODELS_DIR` if set), and they are not there
+until that step has run.
 
 **Windows: the app launches but Windows Defender warns, or a component vanishes.** Expected, and
 documented — SpectraPaint ships unsigned, and antivirus engines treat PyInstaller-bundled Python as
