@@ -473,3 +473,39 @@ def test_accent_wall_planes_keep_separate_base_colours() -> None:
     tint_a = grouped[0] / float(np.dot(luma, grouped[0]))
     tint_b = grouped[1] / float(np.dot(luma, grouped[1]))
     assert float(np.linalg.norm(tint_a - tint_b)) >= _GROUP_TINT_THRESHOLD
+
+
+def test_a_ceiling_is_never_grouped_with_a_wall_of_the_same_tint() -> None:
+    """Issue #39, criterion 4: the ceiling keeps its own Base Colour.
+
+    Both planes carry the same paint at different brightness — the calibrated
+    empty-corner scenario, where tint distance is ~0 and far below
+    ``_GROUP_TINT_THRESHOLD`` — so without the surface guard the grouping rule
+    would share one Base Colour, and one Light Map, between a wall and a
+    ceiling. The surfaces list is the only thing keeping them apart, which the
+    same-surface control proves: identical tints group when both are walls.
+    """
+    from spectrapaint.render.engine import _grouped_base_colours
+
+    # One paint, two brightnesses — same chroma, so identical tints by
+    # construction (tint is scale-invariant), ~0.8x luma apart.
+    paint = np.array([0.60, 0.57, 0.54], dtype=np.float32)
+    linear = np.zeros((40, 60, 3), dtype=np.float32)
+    linear[:, :30] = paint
+    linear[:, 30:] = paint * 0.8
+
+    alpha_wall = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_wall[:, :30] = 1.0
+    alpha_ceiling = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_ceiling[:, 30:] = 1.0
+
+    grouped = _grouped_base_colours(linear, [alpha_wall, alpha_ceiling], ["wall", "ceiling"])
+    # Separate groups: each keeps its own measured paint, wall brighter than ceiling.
+    assert not np.allclose(grouped[0], grouped[1])
+    assert np.all(grouped[0] > grouped[1])
+
+    # Control: the same two planes with no surfaces given (all wall) DO group —
+    # one shared Base Colour for both, proving the split above is the surface
+    # guard and not the tint estimator.
+    same_surface = _grouped_base_colours(linear, [alpha_wall, alpha_ceiling])
+    assert np.allclose(same_surface[0], same_surface[1])
