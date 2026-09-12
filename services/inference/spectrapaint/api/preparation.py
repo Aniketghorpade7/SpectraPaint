@@ -391,6 +391,10 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
         try:
             ceiling = ceiling_from(graphs, photo.srgb, workspace.regions, workspace.features)
         except Exception:
+            # A ceiling that cannot be built degrades to no ceiling, never a failed preparation —
+            # but it must not fail silently: a real bug here would be indistinguishable from
+            # "this photo has no ceiling" for as long as nobody could see it.
+            logger.warning("the ceiling pass failed; proceeding without a ceiling", exc_info=True)
             ceiling = None
         if ceiling is not None:
             # Ensure wall and ceiling do not double-claim pixels where both mattes are confident.
