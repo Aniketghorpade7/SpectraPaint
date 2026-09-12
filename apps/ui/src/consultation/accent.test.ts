@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { WallPlaneOverlay } from '../../../desktop/src/bridge-types';
 import {
   ALL_WALLS,
+  describePlane,
   describeTarget,
   describeWall,
   isTargeted,
@@ -11,9 +12,10 @@ import {
   toggleTarget,
 } from './accent';
 
-function planeAt(planeId: string): WallPlaneOverlay {
+function planeAt(planeId: string, surface: 'wall' | 'ceiling' = 'wall'): WallPlaneOverlay {
   return {
     planeId,
+    surface,
     coverage: 0.4,
     photoWidth: 1280,
     photoHeight: 720,
@@ -141,6 +143,45 @@ describe('describeTarget', () => {
 
   it('says nothing about a wall the photo no longer has', () => {
     expect(describeTarget({ kind: 'plane', planeId: 'wall_plane_9' }, twoWalls)).toBe('');
+  });
+
+  it('names a wall "the wall" when the photo has one wall and a ceiling (issue #39)', () => {
+    // A ceiling in the list must not make the only wall sound like "the left wall".
+    const wallAndCeiling = [planeAt('wall_plane_1'), planeAt('ceiling_plane_1', 'ceiling')];
+    expect(describeTarget({ kind: 'plane', planeId: 'wall_plane_1' }, wallAndCeiling)).toContain(
+      'the wall',
+    );
+  });
+
+  it('names a chosen ceiling "the ceiling" (issue #39)', () => {
+    const wallAndCeiling = [planeAt('wall_plane_1'), planeAt('ceiling_plane_1', 'ceiling')];
+    const caption = describeTarget({ kind: 'plane', planeId: 'ceiling_plane_1' }, wallAndCeiling);
+    expect(caption).toContain('the ceiling');
+    expect(caption).not.toContain('wall');
+  });
+
+  it('keeps positional wall names wall-only when a ceiling is also present (issue #39)', () => {
+    // Two walls and a ceiling: the ceiling must not shift "the right wall" onto "the middle wall".
+    const planes = [
+      planeAt('wall_plane_1'),
+      planeAt('wall_plane_2'),
+      planeAt('ceiling_plane_1', 'ceiling'),
+    ];
+    expect(describeTarget({ kind: 'plane', planeId: 'wall_plane_2' }, planes)).toContain(
+      'the right wall',
+    );
+  });
+});
+
+describe('describePlane', () => {
+  it('always calls the ceiling "the ceiling", whatever its position', () => {
+    expect(describePlane(planeAt('ceiling_plane_1', 'ceiling'), 0, 2)).toBe('the ceiling');
+    expect(describePlane(planeAt('ceiling_plane_1', 'ceiling'), 1, 3)).toBe('the ceiling');
+  });
+
+  it('gives walls their positional name among the walls, not among every plane', () => {
+    expect(describePlane(planeAt('wall_plane_1'), 0, 1)).toBe('the wall');
+    expect(describePlane(planeAt('wall_plane_1'), 0, 2)).toBe('the left wall');
   });
 });
 

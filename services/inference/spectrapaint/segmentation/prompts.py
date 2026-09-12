@@ -163,6 +163,48 @@ def prompts_for(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
     )
 
 
+def prompts_for_ceiling(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
+    """Point prompts describing the ceiling region — same treatment as :func:`prompts_for` but for
+    the ceiling class. No plane splitting is needed for a ceiling (it is essentially always one
+    region), so one decode suffices. The ceiling decode costs the cheap ~120 ms (encoder already
+    cached per photo) rather than a second ~2 s encode.
+    """
+
+    max_points = int(refiner_config["max_prompt_points"])
+    padding_label = int(refiner_config["padding_point_label"])
+    shape = regions.ceiling.shape
+    radius = erosion_radius(shape)
+
+    positive_budget = int(round(max_points * _POSITIVE_SHARE))
+    positive = sample_grid(erode(regions.ceiling, radius), positive_budget)
+    # Negatives for ceiling: wall is the main thing not to leak into, plus the other exclusions
+    # except ceiling itself. Build it without ceiling so a ceiling prompt's negatives do not contain
+    # the very region it is trying to describe.
+    other_excluded = regions.excluded & ~regions.ceiling
+    ceiling_excluded = regions.wall | other_excluded
+    negative = sample_grid(erode(ceiling_excluded, radius), max_points - len(positive))
+
+    scale = _photo_to_graph_scale(refiner_config, shape)
+
+    coords = np.zeros((1, 1, max_points, 2), dtype=np.float32)
+    labels = np.full((1, 1, max_points), padding_label, dtype=np.int32)
+
+    for index, point in enumerate(positive):
+        coords[0, 0, index] = point * scale
+        labels[0, 0, index] = LABEL_POSITIVE
+    for offset, point in enumerate(negative):
+        index = len(positive) + offset
+        coords[0, 0, index] = point * scale
+        labels[0, 0, index] = LABEL_NEGATIVE
+
+    return PromptSet(
+        coords=coords,
+        labels=labels,
+        positive_count=len(positive),
+        negative_count=len(negative),
+    )
+
+
 def single_point_prompt(
     refiner_config: dict,
     photo_shape: tuple[int, int],

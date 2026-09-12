@@ -27,7 +27,12 @@ import numpy as np
 from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.matte import RefinerFeatures, decode_alpha, soften_boundary
 from spectrapaint.segmentation.prompts import single_point_prompt
-from spectrapaint.segmentation.walls import MINIMUM_WALL_FRACTION, WallPlane
+from spectrapaint.segmentation.walls import (
+    CEILING_PLANE_ID,
+    MINIMUM_CEILING_FRACTION,
+    MINIMUM_WALL_FRACTION,
+    WallPlane,
+)
 
 # Where a matte is taken to be "confidently this pixel", for the point-in-plane and
 # point-near-a-seam tests below. Matches matte.py's own _EDGE_LEVEL, kept as its own constant
@@ -166,10 +171,23 @@ def _next_plane_id(existing: Iterable[str]) -> str:
 
     highest = 0
     for plane_id in existing:
-        suffix = plane_id.removeprefix("wall_plane_")
-        if suffix.isdigit():
-            highest = max(highest, int(suffix))
+        if plane_id.startswith("wall_plane_"):
+            suffix = plane_id.removeprefix("wall_plane_")
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
     return f"wall_plane_{highest + 1}"
+
+
+def _next_ceiling_id(existing: Iterable[str]) -> str:
+    """Ceiling ids are ``ceiling_plane_1`` — one per photo at most. Mint a fresh one only if none
+    exists; otherwise reuse the same id so the dealer's shade assignment survives a re-add after
+    deletion. Simpler than wall's counter because ceilings never split.
+    """
+
+    for plane_id in existing:
+        if plane_id == CEILING_PLANE_ID:
+            return CEILING_PLANE_ID
+    return CEILING_PLANE_ID
 
 
 def _left_edge(plane: WallPlane) -> float:
@@ -243,12 +261,59 @@ def add_plane(
         raise NothingFoundToAdd(f"the grown matte covers {coverage:.4f} of the photo")
 
     plane_id = _next_plane_id(plane.plane_id for plane in existing)
-    new_plane = WallPlane(plane_id=plane_id, alpha=resolved_new[..., None])
+    new_plane = WallPlane(plane_id=plane_id, alpha=resolved_new[..., None], surface="wall")
 
     adjusted_existing = tuple(
         WallPlane(
             plane_id=plane.plane_id,
             alpha=np.where(new_wins, 0.0, plane.alpha[..., 0]).astype(np.float32)[..., None],
+            surface=plane.surface,
+        )
+        for plane in existing
+    )
+    return new_plane, adjusted_existing
+
+
+def add_ceiling_plane(
+    graphs: Graphs,
+    photo_u8: np.ndarray,
+    features: RefinerFeatures,
+    point: tuple[int, int],
+    existing: tuple[WallPlane, ...],
+) -> tuple[WallPlane, tuple[WallPlane, ...]]:
+    """A new Ceiling Plane grown from one tapped point — the Add Ceiling tool.
+
+    Same decoding as :func:`add_plane` but the resulting plane is tagged
+    ``surface="ceiling"`` and will never be grouped with a wall's base colour.
+    The ceiling is always one region, so no splitting.
+    """
+
+    x, y = point
+    check_addable(existing, point)
+
+    prompts = single_point_prompt(graphs.refiner_decoder.config, photo_u8.shape[:2], x, y)
+    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    alpha = soften_boundary(photo_u8, refined)
+
+    existing_claim = np.zeros(photo_u8.shape[:2], dtype=np.float32)
+    for plane in existing:
+        existing_claim = np.maximum(existing_claim, plane.alpha[..., 0])
+
+    new_wins = alpha >= existing_claim
+    resolved_new = np.where(new_wins, alpha, 0.0).astype(np.float32)
+
+    coverage = float(resolved_new.mean())
+    if coverage < MINIMUM_CEILING_FRACTION:
+        raise NothingFoundToAdd(f"the grown ceiling covers {coverage:.4f} of the photo")
+
+    plane_id = _next_ceiling_id(plane.plane_id for plane in existing)
+    new_plane = WallPlane(plane_id=plane_id, alpha=resolved_new[..., None], surface="ceiling")
+
+    adjusted_existing = tuple(
+        WallPlane(
+            plane_id=plane.plane_id,
+            alpha=np.where(new_wins, 0.0, plane.alpha[..., 0]).astype(np.float32)[..., None],
+            surface=plane.surface,
         )
         for plane in existing
     )
@@ -268,13 +333,16 @@ def split_plane(
     :func:`merge_planes` returns, so a caller removes ``original`` from the plane list and puts
     the two halves in its place. Both halves mint fresh ids; the original's is retired. Nothing
     says which half — if either — should keep a Shade already assigned to the wall being split,
-    so neither does (implementation-decisions.md #40).
+    so neither does (implementation-decisions.md #40). A ceiling cannot be split — it is one
+    region per photo.
     """
 
     x, y = point
     target = _plane_containing(planes, x, y)
     if target is None:
         raise PointNotOnAPlane(f"({x}, {y}) is not covered by any existing Wall Plane")
+    if target.surface == "ceiling":
+        raise PointNotOnAPlane(f"({x}, {y}) is on the ceiling, which cannot be split")
 
     coverage = target.alpha[..., 0]
     height, width = coverage.shape
@@ -297,8 +365,8 @@ def split_plane(
     first_id = _next_plane_id(existing_ids)
     second_id = _next_plane_id([*existing_ids, first_id])
     return (
-        WallPlane(plane_id=first_id, alpha=left[..., None]),
-        WallPlane(plane_id=second_id, alpha=right[..., None]),
+        WallPlane(plane_id=first_id, alpha=left[..., None], surface=target.surface),
+        WallPlane(plane_id=second_id, alpha=right[..., None], surface=target.surface),
         target,
     )
 
@@ -320,8 +388,16 @@ def merge_planes(
         raise PointNotNearASeam(f"({x}, {y}) is not near where two Wall Planes meet")
 
     first, second = pair
+    # Ceiling and wall must not be merged — different surfaces.
+    if first.surface != second.surface:
+        raise PointNotNearASeam(
+            f"({x}, {y}) is between a {first.surface} and a "
+            f"{second.surface}, which cannot be merged"
+        )
     merged_alpha = np.clip(first.alpha + second.alpha, 0.0, 1.0).astype(np.float32)
     # The larger plane's id survives, so a Shade already assigned to it keeps working
     # (implementation-decisions.md #40) — an arbitrary but deterministic tie-break otherwise.
     survivor_id = first.plane_id if first.coverage >= second.coverage else second.plane_id
-    return WallPlane(plane_id=survivor_id, alpha=merged_alpha), first, second
+    survivor_surface = first.surface
+    merged = WallPlane(plane_id=survivor_id, alpha=merged_alpha, surface=survivor_surface)
+    return merged, first, second

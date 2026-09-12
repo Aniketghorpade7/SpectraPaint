@@ -23,6 +23,7 @@ import {
 
 const ROUTE_FOR: Record<CorrectionTool, string> = {
   add: 'planes',
+  'add-ceiling': 'planes/ceiling',
   split: 'planes/split',
   merge: 'planes/merge',
 };

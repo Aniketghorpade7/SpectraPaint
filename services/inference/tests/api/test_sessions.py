@@ -180,6 +180,9 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         # updated plane list out, no photo and no re-preparation.
         ("/sessions/{session_id}/planes/split", frozenset({"POST"})),
         ("/sessions/{session_id}/planes/merge", frozenset({"POST"})),
+        # Issue #39. Add the ceiling — same point-prompt decode as Add wall, but tagged
+        # surface="ceiling" and never grouped with a wall's base colour.
+        ("/sessions/{session_id}/planes/ceiling", frozenset({"POST"})),
         # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
         # there is nothing here that writes, and nothing that takes an image.
         ("/catalogue", frozenset({"GET"})),

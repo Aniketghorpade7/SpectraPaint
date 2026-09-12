@@ -43,6 +43,7 @@ from spectrapaint.api.sessions import require_job, require_photo
 from spectrapaint.runtime.graphs import load as load_graphs
 from spectrapaint.segmentation.corrections import (
     CorrectionRefused,
+    add_ceiling_plane,
     add_plane,
     check_addable,
     merge_planes,
@@ -188,6 +189,62 @@ async def add_wall(request: Request, session_id: str, body: TapPoint) -> dict[st
     return _planes_response(prepared, updated, None)
 
 
+@router.post("/{session_id}/planes/ceiling", status_code=status.HTTP_201_CREATED)
+async def add_ceiling(request: Request, session_id: str, body: TapPoint) -> dict[str, object]:
+    """Add a missed Ceiling Plane from one tapped point — the Add Ceiling tool.
+
+    Same SAM 2 decode as :func:`add_wall` but the resulting plane is tagged
+    ``surface="ceiling"`` and its base colour will never be grouped with a
+    wall's. The ceiling is always at most one region, so no splitting.
+    """
+
+    prepared = await require_photo(request, session_id)
+    point = _point_in_bounds(body, prepared)
+    job = require_job(request, session_id)
+
+    # Ceiling add has its own already-covered check: share the same rule — a tap already
+    # confidently covered by any plane (wall or ceiling) is refused so the Dealer is guided to
+    # the right tool rather than silently producing a duplicate.
+    try:
+        check_addable(prepared.planes, point)
+    except CorrectionRefused as failure:
+        raise _refused(failure) from None
+
+    # Refuse if a ceiling already exists — one ceiling per photo is the contract.
+    for plane in prepared.planes:
+        if plane.surface == "ceiling":
+            raise _refused(
+                CorrectionRefused(
+                    "That photo already has a ceiling. Each photo has at most one ceiling.",
+                    "ceiling already present",
+                )
+            )
+
+    graphs = load_graphs()
+    features = prepared.features
+    if features is None:
+        features = encode_photo(graphs, prepared.srgb)
+        job.cache_features(features)
+
+    try:
+        new_plane, adjusted_existing = add_ceiling_plane(
+            graphs, prepared.srgb, features, point, prepared.planes
+        )
+    except CorrectionRefused as failure:
+        raise _refused(failure) from None
+
+    # Keep wall ordering left-to-right, but ceiling is a distinct
+    # surface — append it last rather than sorting by left edge
+    # (which is meaningless for a ceiling).
+    wall_sorted = order_left_to_right(
+        tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "wall")
+    )
+    ceiling_planes = tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "ceiling")
+    updated = (*wall_sorted, *ceiling_planes)
+    job.replace_planes(updated)
+    return _planes_response(prepared, updated, None)
+
+
 @router.post("/{session_id}/planes/split", status_code=status.HTTP_201_CREATED)
 async def split_wall(request: Request, session_id: str, body: TapPoint) -> dict[str, object]:
     """Split the Wall Plane under the tapped point into two — the Split tool, for a corner the
@@ -266,11 +323,12 @@ async def plane_matte(request: Request, session_id: str, plane_id: str) -> Respo
 
 
 def _describe(plane: WallPlane) -> dict[str, object]:
-    """One plane as JSON: what it is called, how much it covers, and where it is.
+    """One plane as JSON: what it is called, how much it covers, where it is, and its surface.
 
     ``bounds`` is the box the plane occupies, in photo pixels. The render path crops to it before
     the per-tap maths (spec, "Performance"), and the UI uses it to place a label without having to
-    fetch and scan the matte first.
+    fetch and scan the matte first. ``surface`` is ``wall`` or ``ceiling`` — the Paintable Plane
+    kind (CONTEXT.md).
     """
 
     coverage = plane.alpha[..., 0]
@@ -294,6 +352,7 @@ def _describe(plane: WallPlane) -> dict[str, object]:
     height, width = coverage.shape
     return {
         "plane_id": plane.plane_id,
+        "surface": plane.surface,
         "coverage": round(plane.coverage, 4),
         "bounds": bounds,
         "photo_width": int(width),

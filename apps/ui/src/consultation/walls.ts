@@ -22,8 +22,11 @@ import type { WallPlaneOverlay } from '../../../desktop/src/bridge-types';
  */
 
 export interface WallsState {
-  /** Every Wall Plane found, in the service's order. Can be empty since ticket #10: automatic
-   * detection finding nothing at all is answered, not refused. */
+  /** Every Paintable Plane found (walls and at most one ceiling), in the service's order. Can be
+   * empty since ticket #10: automatic detection finding nothing at all is answered, not refused.
+   * Each plane carries its ``surface`` (wall | ceiling) — the ceiling, when present, is an
+   * independently-colourable surface with its own base colour and light map, never grouped with a
+   * wall's (CONTEXT.md Ceiling Plane). */
   planes: WallPlaneOverlay[];
   /** Whether the Dealer wants the overlay shown at all. */
   wanted: boolean;
@@ -31,7 +34,8 @@ export interface WallsState {
    * Why there is nothing more to see, in plain language, when that is worth saying — either the
    * overlay itself could not be fetched, or (ticket #10) automatic detection genuinely found no
    * wall. Never shown as an error state: a photo with nothing to outline is still a photo that
-   * can be repainted, once the Dealer taps a wall in through the correction surface.
+   * can be repainted, once the Dealer taps a wall in through the correction surface. From ticket
+   * #39 the same note covers a photo with no ceiling — Add Ceiling is then the way forward.
    */
   message?: string;
   /**

@@ -106,6 +106,7 @@ async def create_render(
     # The Lab values travel alongside, because a stored Render must say which real,
     # saleable colours produced it — not just their codes (issue #11).
     plane_targets: list[tuple[np.ndarray, np.ndarray]] = []
+    surfaces: list[str] = []
     resolved_lab: dict[str, list[float]] = {}
     for plane, shade_code in targets:
         shade = _catalogue(request).find_by_code(shade_code)
@@ -120,8 +121,9 @@ async def create_render(
         )
         resolved_lab[shade.shade_code] = [shade.lab.l, shade.lab.a, shade.lab.b]
         plane_targets.append((plane.alpha, target_shade))
+        surfaces.append(plane.surface)
 
-    rendered = render_many(prepared.linear, plane_targets, light_tint)
+    rendered = render_many(prepared.linear, plane_targets, light_tint, surfaces)
 
     png_bytes = _encode_png(rendered)
 

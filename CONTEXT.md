@@ -41,6 +41,18 @@ difference is what makes the room read as three-dimensional rather than flat.
 Note: a wall plane is a *face as seen in the photo*, not a physical wall. One physical wall
 interrupted by a corner is two planes; one physical wall split visually by a wardrobe is still one.
 
+**Ceiling Plane**
+One visible flat ceiling face in a room photo. Typically one per photo, rarely more. Like a wall
+plane, it is coloured independently, carries its own base colour and light map, and has its own
+alpha matte — a ceiling must never be grouped with a wall's base colour even when the two happen to
+be a similar pale colour, or the room's light modelling breaks silently.
+
+**Paintable Plane**
+The generic term for any paintable surface in a room photo — a wall plane or a ceiling plane. Where
+a plane's kind matters, it carries a **surface** of `wall` or `ceiling`. Used in code and in the
+REST contract (`surface` field on each plane); "wall plane" and "ceiling plane" are the specific
+kinds.
+
 **Accent Wall**
 A single wall plane deliberately painted a different shade from the rest of the room. A common and
 commercially significant upsell — dealers will ask for it.

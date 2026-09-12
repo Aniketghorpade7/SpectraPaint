@@ -140,7 +140,9 @@ class SessionRegistry:
         if consultation_id in self._persisted:
             return
 
-        mattes = [(plane.plane_id, _encode_matte(plane.alpha)) for plane in photo.planes]
+        mattes = [
+            (plane.plane_id, _encode_matte(plane.alpha), plane.surface) for plane in photo.planes
+        ]
         self._store.save_preparation(consultation_id, _encode_photo(photo.srgb), mattes)
         self._persisted.add(consultation_id)
 

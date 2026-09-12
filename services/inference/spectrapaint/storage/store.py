@@ -298,23 +298,33 @@ class Store:
             )
 
     def save_preparation(
-        self, consultation_id: str, photo_png: bytes, mattes: list[tuple[str, bytes]]
+        self,
+        consultation_id: str,
+        photo_png: bytes,
+        mattes: list[tuple[str, bytes, str]] | list[tuple[str, bytes]],
     ) -> None:
         """Record what preparation produced, as the images reopening will load.
 
         The photo is stored at preview scale — the scale every render so far has been made at —
-        and one Alpha Matte per Wall Plane. Together they are everything "try another Shade"
-        needs, which is why a reopened Consultation skips preparation entirely.
+        and one Alpha Matte per Paintable Plane (walls and ceiling). Together they are everything
+        "try another Shade" needs, which is why a reopened Consultation skips preparation entirely.
+        Each matte entry carries its surface (wall | ceiling) so a reopened ceiling restores with
+        the right base-colour grouping — a ceiling grouped with a wall breaks silently.
         """
 
         photo_relative = f"{_PHOTO_DIR}/{consultation_id}.png"
         self._write_bytes(photo_relative, photo_png)
 
         planes = []
-        for plane_id, matte_png in mattes:
+        for entry in mattes:
+            if len(entry) == 3:
+                plane_id, matte_png, surface = entry  # type: ignore[misc]
+            else:
+                plane_id, matte_png = entry  # type: ignore[misc]
+                surface = "wall"
             relative = f"{_MATTE_DIR}/{consultation_id}_{plane_id}.png"
             self._write_bytes(relative, matte_png)
-            planes.append({"plane_id": plane_id, "matte_path": relative})
+            planes.append({"plane_id": plane_id, "matte_path": relative, "surface": surface})
 
         with self._lock, self._connection:
             self._connection.execute(
@@ -322,9 +332,12 @@ class Store:
                 (photo_relative, json.dumps(planes), consultation_id),
             )
 
-    def preparation_of(self, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes]]] | None:
+    def preparation_of(
+        self, consultation_id: str
+    ) -> tuple[bytes, list[tuple[str, bytes, str]]] | None:
         """The stored photo and Alpha Mattes, or None when this Consultation was never prepared
-        (its session ended before preparation finished)."""
+        (its session ended before preparation finished). Each matte entry carries its surface
+        (wall | ceiling); older rows without a surface are read as wall for backward compat."""
         with self._lock:
             row = self._connection.execute(
                 "SELECT photo_path, planes_json FROM consultations WHERE id = ?", (consultation_id,)
@@ -336,12 +349,13 @@ class Store:
             if photo is None:
                 return None
 
-            planes: list[tuple[str, bytes]] = []
+            planes: list[tuple[str, bytes, str]] = []
             for plane in json.loads(row["planes_json"]):
                 matte = self._read_bytes(str(plane["matte_path"]))
                 if matte is None:
                     return None
-                planes.append((str(plane["plane_id"]), matte))
+                surface = str(plane.get("surface", "wall"))
+                planes.append((str(plane["plane_id"]), matte, surface))
             return photo, planes
 
     def original_bytes(self, consultation_id: str) -> bytes | None:

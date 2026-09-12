@@ -5,7 +5,7 @@ import { useCatalogue } from '../catalogue/useCatalogue';
 import { Button } from '../components/Button';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
-import { describeTarget, describeWall, isTargeted } from './accent';
+import { describePlane, describeTarget, isTargeted } from './accent';
 import { describeArmedTool, tapPointFromFraction } from './corrections';
 import type { Consultation } from './useConsultation';
 import { overlayVisible } from './walls';
@@ -85,6 +85,10 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     // A tool armed keeps the overlay up regardless of the Dealer's earlier hide/show choice —
     // correcting walls that are not visible is not a thing a Dealer can do (ticket #10).
     const showWalls = overlayVisible(walls, render.showingRender) || armedTool !== null;
+    // Wall-only counts (issue #39): the ceiling is its own surface and never takes a wall's
+    // positional name, so neither the chips' totals nor "found N walls" may count it.
+    const wallPlanes = walls.planes.filter((plane) => plane.surface !== 'ceiling');
+    const wallCount = wallPlanes.length;
 
     function handlePhotoTap(event: MouseEvent<HTMLButtonElement>) {
       if (walls.photoWidth <= 0 || walls.photoHeight <= 0) return;
@@ -114,6 +118,14 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 <Button onClick={() => armTool('add')} aria-pressed={armedTool === 'add'}>
                   Add a wall
                 </Button>
+                {!walls.planes.some((p) => p.surface === 'ceiling') ? (
+                  <Button
+                    onClick={() => armTool('add-ceiling')}
+                    aria-pressed={armedTool === 'add-ceiling'}
+                  >
+                    Add ceiling
+                  </Button>
+                ) : null}
                 {walls.planes.length >= 1 ? (
                   <Button onClick={() => armTool('split')} aria-pressed={armedTool === 'split'}>
                     Split a wall
@@ -188,11 +200,11 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                             ? 'consultation__wall-chip consultation__wall-chip--chosen'
                             : 'consultation__wall-chip'
                         }
-                        style={chipPosition(plane, index, walls.planes.length)}
+                        style={chipPosition(plane, index, wallCount)}
                         aria-pressed={isTargeted(paint.target, plane.planeId)}
                         onClick={() => selectWall(plane.planeId)}
                       >
-                        {describeWall(index, walls.planes.length)}
+                        {describePlane(plane, index, wallCount)}
                         {paint.assignments[plane.planeId]
                           ? ` · ${paint.assignments[plane.planeId]}`
                           : ''}
@@ -216,9 +228,9 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 <p className="consultation__wall-note">
                   {armedTool !== null
                     ? describeArmedTool(armedTool)
-                    : walls.planes.length === 1
+                    : wallCount === 1
                       ? 'This is the wall SpectraPaint found.'
-                      : `SpectraPaint found ${walls.planes.length} walls. ${describeTarget(
+                      : `SpectraPaint found ${wallCount} walls. ${describeTarget(
                           paint.target,
                           walls.planes,
                         )}`}

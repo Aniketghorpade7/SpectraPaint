@@ -56,8 +56,9 @@ from spectrapaint.segmentation.semantic import SemanticRegions
 from spectrapaint.segmentation.walls import (
     NoWallFound,
     WallPlane,
+    ceiling_from,
+    get_regions,
     planes_from,
-    wall_regions,
 )
 
 logger = logging.getLogger(__name__)
@@ -350,10 +351,21 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
         workspace.quality_note = assess_quality(workspace.decoded.srgb)
 
     def look_at_the_room() -> None:
+        # Keep full semantic regions even when no wall is worth
+        # offering — a ceiling may still be present (a photo
+        # cropped to the ceiling). The threshold is checked but
+        # the regions are retained for the ceiling pass.
         try:
-            workspace.regions = wall_regions(load_graphs(), workspace.photo().srgb)
+            regions = get_regions(load_graphs(), workspace.photo().srgb)
+            workspace.regions = regions
+            if regions.wall_fraction < 0.02:
+                raise NoWallFound(
+                    f"the semantic pass labelled {regions.wall_fraction:.1%} of the photo as wall, "
+                    f"below the 2% needed"
+                )
         except NoWallFound as failure:
             workspace.note = failure.message
+            # regions already stored if get_regions succeeded; only a load failure leaves it None
 
     def find_the_edges() -> None:
         photo = workspace.photo()
@@ -361,21 +373,57 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
         if workspace.regions is None:
             if workspace.note is None:
                 raise RuntimeError("the semantic stage did not run before the refinement stage")
-            # The semantic pass found nothing plausibly wall-shaped at all — a photo of a floor, a
-            # garden, a stray shoe. Encoding it through SAM 2 regardless would spend the ~2s cost
-            # (implementation-decisions.md #23) on a photo with nothing to prompt it with, and SAM
-            # 2 was never built or tested against "nothing here resembles a wall" as an input.
-            # `PreparedPhoto.features` stays None; the correction endpoint that eventually needs it
-            # (ticket #10's Add tap) encodes once, on demand, the same way this line would have.
+            # The semantic pass could not be run at all (missing models) or found nothing at all.
+            # Encoding would be wasteful and SAM 2 was never tested against "nothing here".
             return
 
         graphs = load_graphs()
         workspace.features = encode_photo(graphs, photo.srgb)
+        # Wall planes — may be empty if nothing wall-like survived refinement, but that is not a
+        # failure that blocks the ceiling attempt.
         try:
             found = planes_from(graphs, photo.srgb, workspace.regions, workspace.features)
             workspace.planes = tuple(found)
         except NoWallFound as failure:
             workspace.note = failure.message
+            workspace.planes = ()
+        # Ceiling — at most one, no splitting. Cheap ~120 ms decode against already-cached features.
+        try:
+            ceiling = ceiling_from(graphs, photo.srgb, workspace.regions, workspace.features)
+        except Exception:
+            # A ceiling that cannot be built degrades to no ceiling, never a failed preparation —
+            # but it must not fail silently: a real bug here would be indistinguishable from
+            # "this photo has no ceiling" for as long as nobody could see it.
+            logger.warning("the ceiling pass failed; proceeding without a ceiling", exc_info=True)
+            ceiling = None
+        if ceiling is not None:
+            # Ensure wall and ceiling do not double-claim pixels where both mattes are confident.
+            if workspace.planes:
+                wall_max = None
+                for plane in workspace.planes:
+                    if wall_max is None:
+                        wall_max = plane.alpha[..., 0].copy()
+                    else:
+                        wall_max = np.maximum(wall_max, plane.alpha[..., 0])
+                if wall_max is not None:
+                    wins = ceiling.alpha[..., 0] >= wall_max
+                    confident_wall = wall_max >= 0.5
+                    resolved = np.where(
+                        confident_wall & ~wins,
+                        0.0,
+                        ceiling.alpha[..., 0],
+                    ).astype(np.float32)
+                    ceiling = WallPlane(
+                        plane_id=ceiling.plane_id, alpha=resolved[..., None], surface="ceiling"
+                    )
+                    if float(resolved.mean()) < 0.02:
+                        ceiling = None
+            if ceiling is not None:
+                workspace.planes = (*workspace.planes, ceiling)
+                # If we now have at least one plane, clear a stale "no wall found" note — the photo
+                # does have something paintable (a ceiling).
+                if workspace.planes:
+                    workspace.note = None
 
     def prepared() -> PreparedPhoto:
         photo = workspace.photo()

@@ -237,11 +237,15 @@ def wall_matte_of(client: TestClient, session_id: str) -> np.ndarray:
 
     Maximum rather than sum because the planes are a partition: disjoint alphas, so the two agree
     inside the wall, and maximum cannot exceed 1.0 if that ever stops being true.
+
+    Ceiling Planes (ticket #39) are excluded: `<name>.wall.png` labels the ceiling as *not wall*,
+    so a ceiling left in the union would read as wall-leakage rather than as its own surface.
     """
 
     described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
-    assert described, "the photo yielded no Wall Planes at all"
-    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+    walls = [plane for plane in described if plane.get("surface", "wall") == "wall"]
+    assert walls, "the photo yielded no Wall Planes at all"
+    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in walls]
     return np.maximum.reduce(mattes)
 
 
@@ -474,10 +478,15 @@ def plane_labels_for(photo: Path, shape: tuple[int, int]) -> list[np.ndarray]:
 
 
 def plane_mattes_of(client: TestClient, session_id: str) -> list[np.ndarray]:
-    """Every Wall Plane's matte, in the order the service lists them."""
+    """Every Wall Plane's matte, in the order the service lists them.
+
+    Ceiling Planes (ticket #39) are excluded — `<name>.planes.png` labels wall planes only, so
+    the plane-count, purity, seam and partition comparisons below are claims about walls.
+    """
 
     described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
-    return [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+    walls = [plane for plane in described if plane.get("surface", "wall") == "wall"]
+    return [matte_of(client, session_id, plane["plane_id"]) for plane in walls]
 
 
 @pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)
