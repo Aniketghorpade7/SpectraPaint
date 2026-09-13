@@ -35,7 +35,7 @@ vi.mock('electron', async () => {
           on: vi.fn(),
           send: vi.fn(),
         },
-      }
+      };
     }),
     WebContents: {},
   };

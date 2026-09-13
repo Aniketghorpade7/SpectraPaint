@@ -160,19 +160,19 @@ class SidecarSupervisor implements Sidecar {
 
   private spawnAndHandshake(command: string, args: string[], cwd: string): Promise<number> {
     return new Promise((resolve, reject) => {
-const child = spawn(command, args, {
-         cwd,
-         // The secret travels in the environment, never in argv: a command line is readable by any
-         // other process on the machine.
-         env: { 
-           ...process.env, 
-           [SECRET_ENV_VAR]: this.secret, 
-           PYTHONUNBUFFERED: '1',
-           SPECTRAPAINT_EXECUTION_PROFILE: this.options.executionProfile ?? 'cpu'
-         },
-         stdio: ['ignore', 'pipe', 'pipe'],
-         windowsHide: true,
-       });
+      const child = spawn(command, args, {
+        cwd,
+        // The secret travels in the environment, never in argv: a command line is readable by any
+        // other process on the machine.
+        env: {
+          ...process.env,
+          [SECRET_ENV_VAR]: this.secret,
+          PYTHONUNBUFFERED: '1',
+          SPECTRAPAINT_EXECUTION_PROFILE: this.options.executionProfile ?? 'cpu',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
       this.child = child;
 
       let settled = false;

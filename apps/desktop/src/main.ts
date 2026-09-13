@@ -143,20 +143,14 @@ void app.whenReady().then(async () => {
   const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';
   const EXECUTION_PROFILE_SET_CHANNEL = 'spectrapaint:execution-profile:set';
 
-  ipcMain.handle(
-    EXECUTION_PROFILE_GET_CHANNEL,
-    (event): string => {
-      return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu';
-    },
-  );
+  ipcMain.handle(EXECUTION_PROFILE_GET_CHANNEL, (event): string => {
+    return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu';
+  });
 
-  ipcMain.handle(
-    EXECUTION_PROFILE_SET_CHANNEL,
-    async (event, profile: string): Promise<void> => {
-      if (!isTrustedSender(event.sender)) return;
-      setExecutionProfile(profile);
-    },
-  );
+  ipcMain.handle(EXECUTION_PROFILE_SET_CHANNEL, async (event, profile: string): Promise<void> => {
+    if (!isTrustedSender(event.sender)) return;
+    setExecutionProfile(profile);
+  });
   mainWindow = createWindow();
   bootStatus.attach(mainWindow);
 

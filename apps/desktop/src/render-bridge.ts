@@ -139,13 +139,13 @@ export function registerRenderBridge(
         return refusal('service_unavailable');
       }
 
-if (response.ok) {
-         return {
-           status: 'ready',
-           imageDataUrl: photoDataUrl(new Uint8Array(await response.arrayBuffer()), 'image/png'),
-           executionProfile: getExecutionProfile(),
-         };
-       }
+      if (response.ok) {
+        return {
+          status: 'ready',
+          imageDataUrl: photoDataUrl(new Uint8Array(await response.arrayBuffer()), 'image/png'),
+          executionProfile: getExecutionProfile(),
+        };
+      }
 
       // The service's error body is the message the Dealer should see as-is — an unknown Shade Code
       // has a specific, plain-language answer that an invented one would replace.

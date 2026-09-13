@@ -198,7 +198,12 @@ export function registerExportBridge(
         } catch (revealError) {
           console.error('[export] could not reveal the exported file:', revealError);
         }
-        return { status: 'ready', filePath: tempPath, filename, executionProfile: getExecutionProfile() };
+        return {
+          status: 'ready',
+          filePath: tempPath,
+          filename,
+          executionProfile: getExecutionProfile(),
+        };
       } finally {
         // The chosen path now holds the JPEG, so the temp copy can go — unless it *is* the file the
         // Dealer was just shown. Not awaited: the IPC reply must not wait on temp cleanup.
