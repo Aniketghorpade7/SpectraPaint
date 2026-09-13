@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { ExportResult } from './bridge-types';
 import { EXPORT_CHANNEL } from './channels';
 import type { Sidecar } from './sidecar';
+import { getExecutionProfile } from './main';
 
 /**
  * Export at full resolution and hand the JPEG to the OS (issue #12).
@@ -185,6 +186,7 @@ export function registerExportBridge(
           status: 'ready',
           filePath: result.filePath,
           filename: path.basename(result.filePath),
+          executionProfile: getExecutionProfile(),
         };
       } catch (error) {
         console.error('[export] save dialog failed:', error);
@@ -196,7 +198,7 @@ export function registerExportBridge(
         } catch (revealError) {
           console.error('[export] could not reveal the exported file:', revealError);
         }
-        return { status: 'ready', filePath: tempPath, filename };
+        return { status: 'ready', filePath: tempPath, filename, executionProfile: getExecutionProfile() };
       } finally {
         // The chosen path now holds the JPEG, so the temp copy can go — unless it *is* the file the
         // Dealer was just shown. Not awaited: the IPC reply must not wait on temp cleanup.

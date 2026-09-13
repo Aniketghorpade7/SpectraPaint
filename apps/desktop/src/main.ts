@@ -1,5 +1,6 @@
-import { app, BrowserWindow, type WebContents } from 'electron';
+import { app, BrowserWindow, type WebContents, ipcMain } from 'electron';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
@@ -26,6 +27,35 @@ const isDev = process.env.SPECTRAPAINT_DEV === '1';
 const UI_DEV_SERVER_URL = 'http://localhost:5273';
 const UI_BUILD_ENTRY = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
 const PRELOAD_SCRIPT = path.join(__dirname, 'preload.js');
+
+function detectDefaultExecutionProfile(): string {
+  try {
+    // Try to run nvidia-smi and see if it succeeds
+    execFileSync('nvidia-smi', [], { stdio: 'ignore' });
+    return 'gpu';
+  } catch {
+    return 'cpu';
+  }
+}
+
+let executionProfile: string = detectDefaultExecutionProfile();
+
+export function getExecutionProfile(): string {
+  return executionProfile;
+}
+
+function setExecutionProfile(profile: string): void {
+  if (executionProfile === profile) return;
+  executionProfile = profile;
+  // Restart the sidecar to pick up the new profile
+  if (sidecar) {
+    const stopping = sidecar;
+    sidecar = null;
+    stopping.stop().then(() => {
+      startService();
+    });
+  }
+}
 
 let sidecar: Sidecar | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -80,6 +110,7 @@ async function startService(): Promise<void> {
         console.log(`[sidecar] ${phase}`);
         bootStatus.set(bootStatusFor(phase));
       },
+      executionProfile: getExecutionProfile(),
     });
     console.log(`[sidecar] listening on ${sidecar.baseUrl}`);
   } catch (error) {
@@ -109,6 +140,23 @@ void app.whenReady().then(async () => {
     isTrustedSender,
   );
   registerBootStatusBridge(bootStatus, startService, isTrustedSender);
+  const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';
+  const EXECUTION_PROFILE_SET_CHANNEL = 'spectrapaint:execution-profile:set';
+
+  ipcMain.handle(
+    EXECUTION_PROFILE_GET_CHANNEL,
+    (event): string => {
+      return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu';
+    },
+  );
+
+  ipcMain.handle(
+    EXECUTION_PROFILE_SET_CHANNEL,
+    async (event, profile: string): Promise<void> => {
+      if (!isTrustedSender(event.sender)) return;
+      setExecutionProfile(profile);
+    },
+  );
   mainWindow = createWindow();
   bootStatus.attach(mainWindow);
 

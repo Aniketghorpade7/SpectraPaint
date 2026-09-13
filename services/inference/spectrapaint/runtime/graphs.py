@@ -49,8 +49,21 @@ from spectrapaint.runtime.location import (
 
 logger = logging.getLogger(__name__)
 
-# The only provider. See the module docstring.
-PROVIDERS = ("CPUExecutionProvider",)
+# The provider(s) depend on the execution profile.
+def get_execution_providers():
+    import os
+    profile = os.environ.get("SPECTRAPAINT_EXECUTION_PROFILE", "cpu")
+    if profile == "gpu":
+        # Try to use CUDAExecutionProvider, fall back to CPU if not available
+        try:
+            if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+                return ["CUDAExecutionProvider"]
+        except Exception:
+            pass
+        # If we get here, fall back to CPU
+        return ["CPUExecutionProvider"]
+    else:
+        return ["CPUExecutionProvider"]
 
 
 @dataclass(frozen=True)
@@ -97,7 +110,7 @@ _loaded: Graphs | None = None
 
 def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[str, Any]) -> Graph:
     path = models_dir / model_id / graph_name
-    session = onnxruntime.InferenceSession(str(path), providers=list(PROVIDERS))
+    session = onnxruntime.InferenceSession(str(path), providers=get_execution_providers())
     return Graph(session=session, config=config)
 
 

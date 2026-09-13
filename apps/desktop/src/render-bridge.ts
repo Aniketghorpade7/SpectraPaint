@@ -4,6 +4,7 @@ import type { RenderResult } from './bridge-types';
 import { RENDER_CHANNEL } from './channels';
 import { photoDataUrl } from './photo-upload';
 import type { Sidecar } from './sidecar';
+import { getExecutionProfile } from './main';
 
 /**
  * The main-process half of "repaint the Wall Plane".
@@ -138,12 +139,13 @@ export function registerRenderBridge(
         return refusal('service_unavailable');
       }
 
-      if (response.ok) {
-        return {
-          status: 'ready',
-          imageDataUrl: photoDataUrl(new Uint8Array(await response.arrayBuffer()), 'image/png'),
-        };
-      }
+if (response.ok) {
+         return {
+           status: 'ready',
+           imageDataUrl: photoDataUrl(new Uint8Array(await response.arrayBuffer()), 'image/png'),
+           executionProfile: getExecutionProfile(),
+         };
+       }
 
       // The service's error body is the message the Dealer should see as-is — an unknown Shade Code
       // has a specific, plain-language answer that an invented one would replace.

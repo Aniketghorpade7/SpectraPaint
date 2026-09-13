@@ -110,7 +110,7 @@ export interface TapPoint {
 }
 
 export type RenderResult =
-  { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
+  { status: 'ready'; imageDataUrl: string; executionProfile: string } | { status: 'failed'; code: string; message: string };
 
 /**
  * One stored image from the library (issue #11): a Consultation's photo as prepared, or one of its
@@ -221,7 +221,7 @@ export interface SpectraPaintBridge {
 }
 
 export type ExportResult =
-  | { status: 'ready'; filePath: string; filename: string }
+  | { status: 'ready'; filePath: string; filename: string; executionProfile: string }
   | { status: 'cancelled' }
   | { status: 'failed'; code: string; message: string };
 

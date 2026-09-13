@@ -9,13 +9,37 @@ import { registerRenderBridge } from './render-bridge';
 // the render contract itself is exercised through Seam 1.
 const handlers = vi.hoisted(() => ({ render: undefined as unknown }));
 
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, handler: unknown) => {
-      if (channel === RENDER_CHANNEL) handlers.render = handler;
+vi.mock('electron', async () => {
+  const actual = await vi.importActual('electron');
+  return {
+    ...actual,
+    ipcMain: {
+      handle: (channel: string, handler: unknown) => {
+        if (channel === RENDER_CHANNEL) handlers.render = handler;
+      },
     },
-  },
-}));
+    app: {
+      whenReady: () => Promise.resolve(),
+      on: vi.fn(),
+      quit: vi.fn(),
+    },
+    BrowserWindow: vi.fn().mockImplementation(function () {
+      return {
+        once: vi.fn(),
+        loadURL: vi.fn(),
+        loadFile: vi.fn(),
+        show: vi.fn(),
+        destroy: vi.fn(),
+        isDestroyed: vi.fn().mockReturnValue(false),
+        webContents: {
+          on: vi.fn(),
+          send: vi.fn(),
+        },
+      }
+    }),
+    WebContents: {},
+  };
+});
 
 const VALID_SESSION_ID = '0123456789abcdef0123456789abcdef';
 
@@ -138,6 +162,7 @@ describe('registerRenderBridge', () => {
     expect(result).toEqual({
       status: 'ready',
       imageDataUrl: 'data:image/png;base64,iVBORw==',
+      executionProfile: expect.any(String),
     });
 
     // First call is planes, second is renders
