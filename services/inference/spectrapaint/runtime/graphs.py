@@ -49,9 +49,11 @@ from spectrapaint.runtime.location import (
 
 logger = logging.getLogger(__name__)
 
+
 # The provider(s) depend on the execution profile.
 def get_execution_providers():
     import os
+
     profile = os.environ.get("SPECTRAPAINT_EXECUTION_PROFILE", "cpu")
     if profile == "gpu":
         # Try to use CUDAExecutionProvider, fall back to CPU if not available
