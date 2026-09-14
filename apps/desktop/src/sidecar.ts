@@ -185,17 +185,17 @@ class SidecarSupervisor implements Sidecar {
         finish();
       };
 
-const timer = setTimeout(() => {
-         settle(() => {
-           void killProcessTree(child);
-reject(
-              new SidecarStartError(
-                'service_timeout',
-                `The service did not announce a port within ${START_TIMEOUT_MS} ms.`,
-              )
-            );
-         });
-       }, START_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        settle(() => {
+          void killProcessTree(child);
+          reject(
+            new SidecarStartError(
+              'service_timeout',
+              `The service did not announce a port within ${START_TIMEOUT_MS} ms.`,
+            ),
+          );
+        });
+      }, START_TIMEOUT_MS);
 
       if (child.stdout) {
         onEachLine(child.stdout, (line) => {
@@ -212,24 +212,22 @@ reject(
       if (child.stderr)
         onEachLine(child.stderr, (line) => line && console.warn(`[service] ${line}`));
 
-child.once('error', (error) => {
-         settle(() => reject(new SidecarStartError('service_exited', error.message)));
-       });
+      child.once('error', (error) => {
+        settle(() => reject(new SidecarStartError('service_exited', error.message)));
+      });
 
-       child.once('exit', (code, signal) => {
-settle(() =>
-            reject(
-              new SidecarStartError(
-                'service_exited',
-                `The service exited during startup (code ${code}, signal ${signal}).`,
-              ),
-            )
-          );
-         this.handleUnexpectedExit(code, signal);
-       });
-
-
-     });
+      child.once('exit', (code, signal) => {
+        settle(() =>
+          reject(
+            new SidecarStartError(
+              'service_exited',
+              `The service exited during startup (code ${code}, signal ${signal}).`,
+            ),
+          ),
+        );
+        this.handleUnexpectedExit(code, signal);
+      });
+    });
   }
 
   /**

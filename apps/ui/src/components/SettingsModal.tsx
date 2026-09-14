@@ -33,14 +33,10 @@ export function SettingsModal({
 
   return (
     <div className="settings-modal-backdrop" onClick={onClose}>
-      <div className="settings-modal-content" onClick={e => e.stopPropagation()}>
+      <div className="settings-modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="settings-modal-header">
           <h2 className="settings-modal-title">Settings</h2>
-          <button
-            className="settings-modal-close"
-            onClick={onClose}
-            aria-label="Close settings"
-          >
+          <button className="settings-modal-close" onClick={onClose} aria-label="Close settings">
             ×
           </button>
         </div>
@@ -61,24 +57,16 @@ export function SettingsModal({
               </select>
             </div>
             <p className="settings-modal-description">
-              Choose how SpectraPaint balances speed and quality. Faster settings
-              use less accurate models for quicker results. Better quality uses
-              more accurate models but takes longer.
+              Choose how SpectraPaint balances speed and quality. Faster settings use less accurate
+              models for quicker results. Better quality uses more accurate models but takes longer.
             </p>
           </div>
         </div>
         <div className="settings-modal-footer">
-          <button
-            className="button"
-            onClick={onClose}
-          >
+          <button className="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            className="button button--primary"
-            onClick={handleSave}
-            disabled={isSaving}
-          >
+          <button className="button button--primary" onClick={handleSave} disabled={isSaving}>
             {isSaving ? 'Saving...' : 'Save'}
           </button>
         </div>

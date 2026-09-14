@@ -182,13 +182,13 @@ void app.whenReady().then(async () => {
     // However, the existing code might rely on it. We'll keep it and update both hardware and quality if possible.
     // We'll split the profile by '-' and if we have two parts, set hardware and quality.
     // If not, we ignore.
-const parts = profile.split('-');
-     if (parts.length === 2) {
-       const hw = parts[0];
-       const qt = parts[1];
-       setHardwareProfile(hw as string);
-       setQualityTier(qt as string);
-     }
+    const parts = profile.split('-');
+    if (parts.length === 2) {
+      const hw = parts[0];
+      const qt = parts[1];
+      setHardwareProfile(hw as string);
+      setQualityTier(qt as string);
+    }
     // If not, we do nothing.
   });
 

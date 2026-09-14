@@ -100,7 +100,7 @@ function BundleList({
       console.error(`Invalid quality tier: ${tier}`);
       return;
     }
-    
+
     try {
       // Use the exposed spectrapaint API to set the quality tier
       await window.spectrapaint.setQualityTier(tier);
@@ -250,16 +250,16 @@ function BundleList({
             )}
           </li>
         ))}
-</ul>
+      </ul>
 
-       <SettingsModal
-         isOpen={isSettingsOpen}
-         onClose={() => setIsSettingsOpen(false)}
-         onQualityTierChange={handleQualityTierChange}
-         currentQualityTier={qualityTier}
-       />
-     </main>
-   );
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onQualityTierChange={handleQualityTierChange}
+        currentQualityTier={qualityTier}
+      />
+    </main>
+  );
 }
 
 function BundleDetail({
