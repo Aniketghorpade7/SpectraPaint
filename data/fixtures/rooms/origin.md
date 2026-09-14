@@ -32,3 +32,21 @@ withdrawn rather than defended. Its **wall** label stands; the plane tests skip 
 A fourth photograph was considered and left out: a studio-style interior of unknown provenance. The
 licence gate and this file both need to know where a photograph came from, and "found on the
 internet" is not an answer either accepts.
+
+## Exception: three stock photographs, added despite the rule above
+
+| File | Whose room | Consent | Notes |
+|---|---|---|---|
+| `wood-doors-with-mirror.jpg` | Nobody's — stock photo, Unsplash | None obtainable; not a consenting owner's room | Two wood-veneer doors and a framed mirror on a plain wall |
+| `dim-room-with-mirror.jpg` | Nobody's — stock photo, Wikimedia Commons ("Restaurant bathroom with two-way mirror, Edmond, Oklahoma", CC BY-SA 4.0) | None obtainable | Dim/warm lighting, mirror on tiled wall, resized from the original 6000x4000 to fit this directory's usual scale |
+| `patterned-wallpaper-with-curtain.jpg` | Nobody's — stock photo, Unsplash | None obtainable | Patterned wallpaper filling most of the frame, plus a curtain |
+
+These were added on 2026-09-14 at the repository owner's explicit instruction, overriding the "not
+a shortcut past this" rule stated above for the first time. They were sourced and used to check
+whether #31's over-claim bug (semantic pass calling a door/curtain/mirror `wall`) generalises beyond
+the three consented fixtures — it did not reproduce on any of the three; see the commit/PR that
+added them for the measurement. They carry no hand-drawn `.wall.png` or `.planes.png` labels, so the
+accuracy tests in `tests/api/test_walls.py` skip them exactly as they would an unlabelled fixture;
+they exist here as a reference set, not as graded fixtures. Given the rule above, treat this row as
+the exception rather than the precedent: a future photograph of nobody's room still needs the same
+explicit, on-the-record instruction to land here, not just "it looked useful."
