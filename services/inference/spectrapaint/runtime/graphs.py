@@ -117,10 +117,10 @@ def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[s
     # If quality tier is faster, try to load a variant with '-fast' suffix
     if quality_tier == "faster":
         # Create the faster variant name by inserting '-fast' before the extension
-        if base_name.endswith('.onnx'):
-            fast_name = base_name[:-5] + '-fast.onnx'
+        if base_name.endswith(".onnx"):
+            fast_name = base_name[:-5] + "-fast.onnx"
         else:
-            fast_name = base_name + '-fast'
+            fast_name = base_name + "-fast"
         fast_path = models_dir / model_id / fast_name
         path = fast_path if fast_path.is_file() else models_dir / model_id / base_name
     else:
