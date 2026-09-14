@@ -10,3 +10,4 @@ async def get_execution_profile() -> dict[str, str]:
     hardware = os.environ.get("SPECTRAPAINT_HARDWARE_PROFILE", "cpu")
     quality = os.environ.get("SPECTRAPAINT_QUALITY_TIER", "better")
     return {"execution_profile": f"{hardware}-{quality}"}
+
