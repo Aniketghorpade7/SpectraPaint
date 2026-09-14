@@ -211,7 +211,9 @@ export interface SpectraPaintBridge {
     mode?: 'realistic' | 'true_colour',
   ): Promise<ExportResult>;
 
-  /** Bundles by bytes + disk free (issue #13). */
+  /**
+   * Bundles by bytes + disk free (issue #13).
+   */
   storage(): Promise<ServiceResponse<{ bundles: BundleStorage[]; disk: DiskInfo }>>;
 
   /** Delete a Consultation and its files (issue #13). */
@@ -219,6 +221,19 @@ export interface SpectraPaintBridge {
 
   /** The shell's own low-disk probe (issue #13) — works even when the service is down. */
   disk(): Promise<DiskProbe>;
+
+  // Execution profile and quality tier methods
+  /** Get the current execution profile (e.g., "gpu-better", "cpu-faster"). */
+  getExecutionProfile(): Promise<string>;
+
+  /** Set the execution profile (format: "hardware-quality", e.g., "gpu-better"). */
+  setExecutionProfile(profile: string): Promise<void>;
+
+  /** Get the current quality tier ("faster" or "better"). */
+  getQualityTier(): Promise<string>;
+
+  /** Set the quality tier ("faster" or "better"). */
+  setQualityTier(tier: string): Promise<void>;
 }
 
 export type ExportResult =

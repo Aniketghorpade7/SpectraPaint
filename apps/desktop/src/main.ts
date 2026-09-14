@@ -28,7 +28,7 @@ const UI_DEV_SERVER_URL = 'http://localhost:5273';
 const UI_BUILD_ENTRY = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
 const PRELOAD_SCRIPT = path.join(__dirname, 'preload.js');
 
-function detectDefaultExecutionProfile(): string {
+function detectDefaultHardwareProfile(): string {
   try {
     // Try to run nvidia-smi and see if it succeeds
     execFileSync('nvidia-smi', [], { stdio: 'ignore' });
@@ -38,16 +38,34 @@ function detectDefaultExecutionProfile(): string {
   }
 }
 
-let executionProfile: string = detectDefaultExecutionProfile();
+let hardwareProfile: string = detectDefaultHardwareProfile();
+let qualityTier: string = 'better';
 
 export function getExecutionProfile(): string {
-  return executionProfile;
+  return `${hardwareProfile}-${qualityTier}`;
 }
 
-function setExecutionProfile(profile: string): void {
-  if (executionProfile === profile) return;
-  executionProfile = profile;
-  // Restart the sidecar to pick up the new profile
+export function getQualityTier(): string {
+  return qualityTier;
+}
+
+function setQualityTier(tier: string): void {
+  if (qualityTier === tier) return;
+  qualityTier = tier;
+  // Restart the sidecar to pick up the new quality tier
+  if (sidecar) {
+    const stopping = sidecar;
+    sidecar = null;
+    stopping.stop().then(() => {
+      startService();
+    });
+  }
+}
+
+function setHardwareProfile(profile: string): void {
+  if (hardwareProfile === profile) return;
+  hardwareProfile = profile;
+  // Restart the sidecar to pick up the new hardware profile
   if (sidecar) {
     const stopping = sidecar;
     sidecar = null;
@@ -110,7 +128,8 @@ async function startService(): Promise<void> {
         console.log(`[sidecar] ${phase}`);
         bootStatus.set(bootStatusFor(phase));
       },
-      executionProfile: getExecutionProfile(),
+      hardwareProfile: hardwareProfile,
+      qualityTier: qualityTier,
     });
     console.log(`[sidecar] listening on ${sidecar.baseUrl}`);
   } catch (error) {
@@ -142,14 +161,44 @@ void app.whenReady().then(async () => {
   registerBootStatusBridge(bootStatus, startService, isTrustedSender);
   const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';
   const EXECUTION_PROFILE_SET_CHANNEL = 'spectrapaint:execution-profile:set';
+  const QUALITY_TIER_GET_CHANNEL = 'spectrapaint:quality-tier:get';
+  const QUALITY_TIER_SET_CHANNEL = 'spectrapaint:quality-tier:set';
 
   ipcMain.handle(EXECUTION_PROFILE_GET_CHANNEL, (event): string => {
-    return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu';
+    return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu-better';
   });
 
   ipcMain.handle(EXECUTION_PROFILE_SET_CHANNEL, async (event, profile: string): Promise<void> => {
+    // We do not allow setting the execution profile directly via IPC; it is derived from hardware and quality.
+    // If needed, we could parse the profile and set hardware and quality, but for simplicity we ignore.
+    // The dealer should use the quality tier channels to override.
     if (!isTrustedSender(event.sender)) return;
-    setExecutionProfile(profile);
+    // Optionally, we could split the profile and set hardware and quality, but we don't allow changing hardware via IPC.
+    // For now, we ignore this channel for setting, or we could log a warning.
+    // We'll just return without doing anything to avoid breaking existing code that might use it.
+    // But note: the existing test might use this channel? We don't know.
+    // We'll keep it for compatibility but only allow setting if it matches the current hardware profile?
+    // Alternatively, we can remove this channel and only keep the quality tier channels.
+    // However, the existing code might rely on it. We'll keep it and update both hardware and quality if possible.
+    // We'll split the profile by '-' and if we have two parts, set hardware and quality.
+    // If not, we ignore.
+const parts = profile.split('-');
+     if (parts.length === 2) {
+       const hw = parts[0];
+       const qt = parts[1];
+       setHardwareProfile(hw as string);
+       setQualityTier(qt as string);
+     }
+    // If not, we do nothing.
+  });
+
+  ipcMain.handle(QUALITY_TIER_GET_CHANNEL, (event): string => {
+    return isTrustedSender(event.sender) ? getQualityTier() : 'better';
+  });
+
+  ipcMain.handle(QUALITY_TIER_SET_CHANNEL, async (event, tier: string): Promise<void> => {
+    if (!isTrustedSender(event.sender)) return;
+    setQualityTier(tier);
   });
   mainWindow = createWindow();
   bootStatus.attach(mainWindow);

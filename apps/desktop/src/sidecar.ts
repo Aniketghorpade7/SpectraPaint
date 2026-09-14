@@ -41,7 +41,8 @@ export type SidecarPhase = 'starting' | 'ready' | 'restarting' | 'failed';
 
 export interface SidecarOptions {
   onPhase?: (phase: SidecarPhase) => void;
-  executionProfile?: string;
+  hardwareProfile?: string;
+  qualityTier?: string;
 }
 
 export interface Sidecar {
@@ -168,7 +169,8 @@ class SidecarSupervisor implements Sidecar {
           ...process.env,
           [SECRET_ENV_VAR]: this.secret,
           PYTHONUNBUFFERED: '1',
-          SPECTRAPAINT_EXECUTION_PROFILE: this.options.executionProfile ?? 'cpu',
+          SPECTRAPAINT_HARDWARE_PROFILE: this.options.hardwareProfile ?? 'cpu',
+          SPECTRAPAINT_QUALITY_TIER: this.options.qualityTier ?? 'better',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -183,17 +185,17 @@ class SidecarSupervisor implements Sidecar {
         finish();
       };
 
-      const timer = setTimeout(() => {
-        settle(() => {
-          void killProcessTree(child);
-          reject(
-            new SidecarStartError(
-              'service_timeout',
-              `The service did not announce a port within ${START_TIMEOUT_MS} ms.`,
-            ),
-          );
-        });
-      }, START_TIMEOUT_MS);
+const timer = setTimeout(() => {
+         settle(() => {
+           void killProcessTree(child);
+reject(
+              new SidecarStartError(
+                'service_timeout',
+                `The service did not announce a port within ${START_TIMEOUT_MS} ms.`,
+              )
+            );
+         });
+       }, START_TIMEOUT_MS);
 
       if (child.stdout) {
         onEachLine(child.stdout, (line) => {
@@ -210,22 +212,24 @@ class SidecarSupervisor implements Sidecar {
       if (child.stderr)
         onEachLine(child.stderr, (line) => line && console.warn(`[service] ${line}`));
 
-      child.once('error', (error) => {
-        settle(() => reject(new SidecarStartError('service_exited', error.message)));
-      });
+child.once('error', (error) => {
+         settle(() => reject(new SidecarStartError('service_exited', error.message)));
+       });
 
-      child.once('exit', (code, signal) => {
-        settle(() =>
-          reject(
-            new SidecarStartError(
-              'service_exited',
-              `The service exited during startup (code ${code}, signal ${signal}).`,
-            ),
-          ),
-        );
-        this.handleUnexpectedExit(code, signal);
-      });
-    });
+       child.once('exit', (code, signal) => {
+settle(() =>
+            reject(
+              new SidecarStartError(
+                'service_exited',
+                `The service exited during startup (code ${code}, signal ${signal}).`,
+              ),
+            )
+          );
+         this.handleUnexpectedExit(code, signal);
+       });
+
+
+     });
   }
 
   /**

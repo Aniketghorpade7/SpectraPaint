@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,12 +51,10 @@ from spectrapaint.runtime.location import (
 logger = logging.getLogger(__name__)
 
 
-# The provider(s) depend on the execution profile.
+# The provider(s) depend on the hardware profile.
 def get_execution_providers():
-    import os
-
-    profile = os.environ.get("SPECTRAPAINT_EXECUTION_PROFILE", "cpu")
-    if profile == "gpu":
+    hardware_profile = os.environ.get("SPECTRAPAINT_HARDWARE_PROFILE", "cpu")
+    if hardware_profile == "gpu":
         # Try to use CUDAExecutionProvider, fall back to CPU if not available
         try:
             if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
@@ -111,7 +110,26 @@ _loaded: Graphs | None = None
 
 
 def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[str, Any]) -> Graph:
-    path = models_dir / model_id / graph_name
+    # Determine the quality tier from environment
+    quality_tier = os.environ.get("SPECTRAPAINT_QUALITY_TIER", "better")
+    # Base graph name from the graph_name argument
+    base_name = graph_name
+    # If quality tier is faster, try to load a variant with '-fast' suffix
+    if quality_tier == "faster":
+        # Create the faster variant name by inserting '-fast' before the extension
+        if base_name.endswith('.onnx'):
+            fast_name = base_name[:-5] + '-fast.onnx'
+        else:
+            fast_name = base_name + '-fast'
+        fast_path = models_dir / model_id / fast_name
+        if fast_path.is_file():
+            path = fast_path
+        else:
+            # Fall back to the base file
+            path = models_dir / model_id / base_name
+    else:
+        path = models_dir / model_id / base_name
+
     session = onnxruntime.InferenceSession(str(path), providers=get_execution_providers())
     return Graph(session=session, config=config)
 
@@ -138,21 +156,21 @@ def load(models_dir: Path | None = None) -> Graphs:
         if _loaded is not None:
             return _loaded
 
-        directory = resolve_models_dir() if models_dir is None else models_dir
-        semantic_config = _read_config(directory, SEMANTIC_ID)
-        refiner_config = _read_config(directory, REFINER_ID)
+    directory = resolve_models_dir() if models_dir is None else models_dir
+    semantic_config = _read_config(directory, SEMANTIC_ID)
+    refiner_config = _read_config(directory, REFINER_ID)
 
-        _loaded = Graphs(
-            semantic=_load_graph(directory, SEMANTIC_ID, semantic_config["graph"], semantic_config),
-            refiner_encoder=_load_graph(
-                directory, REFINER_ID, refiner_config["encoder_graph"], refiner_config
-            ),
-            refiner_decoder=_load_graph(
-                directory, REFINER_ID, refiner_config["decoder_graph"], refiner_config
-            ),
-        )
-        logger.info("Model graphs loaded from %s", directory)
-        return _loaded
+    _loaded = Graphs(
+        semantic=_load_graph(directory, SEMANTIC_ID, semantic_config["graph"], semantic_config),
+        refiner_encoder=_load_graph(
+            directory, REFINER_ID, refiner_config["encoder_graph"], refiner_config
+        ),
+        refiner_decoder=_load_graph(
+            directory, REFINER_ID, refiner_config["decoder_graph"], refiner_config
+        ),
+    )
+    logger.info("Model graphs loaded from %s", directory)
+    return _loaded
 
 
 def warm(models_dir: Path | None = None) -> None:
