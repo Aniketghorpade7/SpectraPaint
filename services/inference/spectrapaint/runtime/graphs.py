@@ -122,11 +122,7 @@ def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[s
         else:
             fast_name = base_name + '-fast'
         fast_path = models_dir / model_id / fast_name
-        if fast_path.is_file():
-            path = fast_path
-        else:
-            # Fall back to the base file
-            path = models_dir / model_id / base_name
+path = fast_path if fast_path.is_file() else models_dir / model_id / base_name
     else:
         path = models_dir / model_id / base_name
 
