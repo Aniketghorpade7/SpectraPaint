@@ -61,10 +61,16 @@ def get_execution_providers():
                 return ["CUDAExecutionProvider"]
         except Exception:
             pass
-        # If we get here, fall back to CPU
-        return ["CPUExecutionProvider"]
-    else:
-        return ["CPUExecutionProvider"]
+        # The shipped runtime is the CPU-only wheel (pyproject.toml): the gpu profile cannot reach
+        # CUDA until the packaging decision lands (design-decisions.md §3). Saying nothing here
+        # would leave inference quietly on CPU under a gpu-* profile — exactly the disagreement
+        # between what a machine reports and what it runs that the profile stamp exists to catch.
+        logger.warning(
+            "SPECTRAPAINT_HARDWARE_PROFILE is gpu but this ONNX Runtime has no "
+            "CUDAExecutionProvider; running on CPU. CUDA support needs the onnxruntime-gpu "
+            "package, which is deliberately not shipped."
+        )
+    return ["CPUExecutionProvider"]
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,20 @@
 import { app, BrowserWindow, type WebContents, ipcMain } from 'electron';
 import path from 'node:path';
-import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
 import { registerCorrectionsBridge } from './corrections-bridge';
 import { registerCreateConsultationBridge } from './create-consultation';
 import { registerExportBridge } from './export-bridge';
+import {
+  getExecutionProfile,
+  getHardwareProfile,
+  getQualityTier,
+  restoreQualityTier,
+  setHardwareProfile,
+  setOnProfileChange,
+  setQualityTier,
+} from './execution-profile';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
@@ -29,95 +36,22 @@ const UI_DEV_SERVER_URL = 'http://localhost:5273';
 const UI_BUILD_ENTRY = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
 const PRELOAD_SCRIPT = path.join(__dirname, 'preload.js');
 
-function detectDefaultHardwareProfile(): string {
-  try {
-    // Try to run nvidia-smi and see if it succeeds
-    execFileSync('nvidia-smi', [], { stdio: 'ignore' });
-    return 'gpu';
-  } catch {
-    return 'cpu';
-  }
-}
-
-let hardwareProfile: string = detectDefaultHardwareProfile();
-let qualityTier: string = 'better';
-
-export function getExecutionProfile(): string {
-  return `${hardwareProfile}-${qualityTier}`;
-}
-
-export function getQualityTier(): string {
-  return qualityTier;
-}
-
-function setQualityTier(tier: string): void {
-  // Only the two tiers the Catalogue sells are accepted: a malformed IPC call must not write a
-  // value the restore path would then have to distrust.
-  if (!(QUALITY_TIERS as readonly string[]).includes(tier)) return;
-  if (qualityTier === tier) return;
-  qualityTier = tier;
-  persistQualityTier();
-  // Restart the sidecar to pick up the new quality tier
-  if (sidecar) {
-    const stopping = sidecar;
-    sidecar = null;
-    stopping.stop().then(() => {
-      startService();
-    });
-  }
-}
-
-function setHardwareProfile(profile: string): void {
-  if (hardwareProfile === profile) return;
-  hardwareProfile = profile;
-  // Restart the sidecar to pick up the new hardware profile
-  if (sidecar) {
-    const stopping = sidecar;
-    sidecar = null;
-    stopping.stop().then(() => {
-      startService();
-    });
-  }
-}
-
-// The Dealer's quality-tier choice survives restarts (issue #14 AC3): a tiny JSON file in the
-// per-user application data directory — the one place the shell already owns on every platform
-// (see disk-bridge.ts). Only the tier persists; the hardware profile is re-detected at every
-// boot (AC1), so a Dealer who moves machines does not drag a GPU choice into a CPU-only one.
-const QUALITY_TIERS = ['faster', 'better'] as const;
-const SETTINGS_FILE = 'settings.json';
-
-function settingsPath(): string {
-  return path.join(app.getPath('userData'), SETTINGS_FILE);
-}
-
-function restoreQualityTier(): void {
-  try {
-    const saved = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as { qualityTier?: string };
-    if (saved.qualityTier && (QUALITY_TIERS as readonly string[]).includes(saved.qualityTier)) {
-      qualityTier = saved.qualityTier;
-    }
-  } catch {
-    // First run, or a file the machine mangled: the default tier is the right answer, and a
-    // boot that refuses to start over its own settings file is worse than a silent reset.
-  }
-}
-
-function persistQualityTier(): void {
-  try {
-    fs.mkdirSync(app.getPath('userData'), { recursive: true });
-    fs.writeFileSync(settingsPath(), JSON.stringify({ qualityTier }));
-  } catch (error) {
-    // A write that fails (full disk, permissions) must not fail the tier change: the choice is
-    // in effect for this session either way, and quiet recovery without a log hides the fault
-    // (docs/conventions.md §5).
-    console.error('[settings] failed to persist the quality tier:', error);
-  }
-}
-
 let sidecar: Sidecar | null = null;
 let mainWindow: BrowserWindow | null = null;
 const bootStatus = new BootStatusHub();
+
+// A profile change needs a service restart to take effect: the sidecar reads its hardware and
+// quality settings from the environment it is launched with (sidecar.ts).
+function restartSidecar(): void {
+  if (!sidecar) return;
+  const stopping = sidecar;
+  sidecar = null;
+  stopping.stop().then(() => {
+    startService();
+  });
+}
+
+setOnProfileChange(restartSidecar);
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -168,8 +102,8 @@ async function startService(): Promise<void> {
         console.log(`[sidecar] ${phase}`);
         bootStatus.set(bootStatusFor(phase));
       },
-      hardwareProfile: hardwareProfile,
-      qualityTier: qualityTier,
+      hardwareProfile: getHardwareProfile(),
+      qualityTier: getQualityTier(),
     });
     console.log(`[sidecar] listening on ${sidecar.baseUrl}`);
   } catch (error) {

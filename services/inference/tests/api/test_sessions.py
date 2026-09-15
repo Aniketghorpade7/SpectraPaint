@@ -160,6 +160,10 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
 
     expected = {
         ("/health", frozenset({"GET"})),
+        # Issue #14. The execution profile the Dealer's settings surface and the benchmark read,
+        # so what a machine reports and what a result records stay comparable. GET, never taking
+        # an image and never writing.
+        ("/execution-profile", frozenset({"GET"})),
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
         ("/sessions/{session_id}/events", frozenset({"GET"})),

@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { ExportResult } from './bridge-types';
 import { EXPORT_CHANNEL } from './channels';
 import type { Sidecar } from './sidecar';
-import { getExecutionProfile } from './main';
+import { getExecutionProfile } from './execution-profile';
 
 /**
  * Export at full resolution and hand the JPEG to the OS (issue #12).
