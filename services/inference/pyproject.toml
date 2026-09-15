@@ -10,6 +10,10 @@ dependencies = [
     "pillow",            # validating that an uploaded file really is a decodable photo
     "numpy",             # the render engine and colour maths (spectrapaint.render)
     "onnxruntime",       # running the exported segmentation models (spectrapaint.runtime)
+    # CPU-only wheel: CUDA support needs the separate onnxruntime-gpu package, deliberately not
+    # shipped — the shipping assumption is a CPU-only build (design-decisions.md §3). Detection
+    # can report a gpu-* profile on a machine with nvidia-smi; the service then falls back to
+    # CPUExecutionProvider with a logged warning rather than running CUDA silently.
     "platformdirs",      # the per-user application data directory (spectrapaint.storage)
 ]
 

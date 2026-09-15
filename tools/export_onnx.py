@@ -4,6 +4,7 @@ Turn the checkpoints in models/ into the `.onnx` graphs the service actually run
     python tools/export_onnx.py            # export anything missing, verify everything
     python tools/export_onnx.py --force    # re-export even if the .onnx is already there
     python tools/export_onnx.py --verify   # check what is on disk against PyTorch, export nothing
+    python tools/export_onnx.py --fast     # the faster tier: same weights, smaller semantic input
 
 Run it with the export environment active, which is the only place torch and transformers exist:
 
@@ -33,8 +34,13 @@ class indices read out of its `config.json`. The service reads that file instead
 any of it, so the numbers cannot drift from the weights they belong to and the runtime needs no
 transformers to look them up.
 
-Every export is verified numerically against the PyTorch model it came from. An export that runs
-but quietly computes something else is the failure mode worth paying for a check to catch.
+**The faster tier** (issue #14) is the same weights exported at a smaller semantic input, written
+as `semantic-fast.onnx` beside a `runtime-fast.json` that names it and carries the smaller sizes.
+The service's tier selection reads that config, so "faster" is one file read and never a branch in
+the inference call site. SAM 2 has no smaller variant: its positional embeddings and neck are
+pinned to 1024x1024 and refuse every other input (verified by export), so the refiner's
+runtime-fast.json is deliberately the same graphs as its base one — written anyway, so what
+"faster" means for every model stays inspectable in one place.
 """
 
 import argparse
@@ -70,6 +76,13 @@ REFINER_ID = "refiner-sam2-hiera-tiny"
 # The ONNX opset, pinned rather than left to torch's default so a torch upgrade cannot quietly
 # change the graphs under us.
 OPSET = 18
+
+# The faster tier's semantic input (issue #14). The checkpoint is finetuned at 512, but SegFormer
+# accepts any 32-multiple; 384 is a quarter fewer pixels through the encoder and a proportionally
+# smaller upsample, for a tier the Dealer chooses in Settings. SAM 2 has no equivalent: its
+# positional embeddings and neck are pinned to 1024 and refuse every other input, so the faster
+# tier's refiner is deliberately the same graphs (see the module docstring).
+FAST_SEMANTIC_SIZE = 384
 
 # How many point prompts the decoder graph accepts. Fixed rather than dynamic, deliberately: a
 # static graph is faster in ONNX Runtime, and SAM's own convention already handles a variable
@@ -163,9 +176,9 @@ def semantic_class_indices(model_dir):
     return {name: by_name[name] for name in SEMANTIC_CLASSES}
 
 
-def write_runtime_json(model_dir, payload):
+def write_runtime_json(model_dir, payload, name="runtime.json"):
     """The sidecar the service reads, so nothing at runtime needs transformers."""
-    path = model_dir / "runtime.json"
+    path = model_dir / name
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
         f.write("\n")
@@ -223,18 +236,27 @@ def export_graph(
     return True
 
 
-def export_semantic(force, verify_only):
+def export_semantic(force, verify_only, fast=False):
     """SegFormer: photo in, one score per ADE20K class per pixel out.
 
-    The graph is fixed at the checkpoint's own 512x512 input. Boundary quality does not come from
-    this resolution — the mask is upsampled and its boundary band refined at full resolution later
-    (design-decisions.md §5) — so a dynamic input size would buy nothing and cost speed.
+    The base graph is fixed at the checkpoint's own 512x512 input. Boundary quality does not come
+    from this resolution — the mask is upsampled and its boundary band refined at full resolution
+    later (design-decisions.md §5) — so a dynamic input size would buy nothing and cost speed.
+
+    The faster tier exports the same weights at 384x384 into a `-fast` sibling, with its own
+    runtime config naming it and carrying the smaller sizes (issue #14).
     """
     model_dir = MODELS_DIR / SEMANTIC_ID
-    destination = model_dir / "semantic.onnx"
-    print(f"{SEMANTIC_ID}")
+    destination = model_dir / ("semantic-fast.onnx" if fast else "semantic.onnx")
+    print(f"{SEMANTIC_ID}{' (faster tier)' if fast else ''}")
 
     constants = preprocessing_of(model_dir)
+    if fast:
+        constants = {
+            **constants,
+            "input_height": FAST_SEMANTIC_SIZE,
+            "input_width": FAST_SEMANTIC_SIZE,
+        }
     classes = semantic_class_indices(model_dir)
 
     model = SegformerForSemanticSegmentation.from_pretrained(model_dir).eval()
@@ -262,6 +284,7 @@ def export_semantic(force, verify_only):
                 "output_stride": constants["input_height"] // expected.shape[-2],
                 **constants,
             },
+            name="runtime-fast.json" if fast else "runtime.json",
         )
     return True
 
@@ -304,12 +327,31 @@ class Sam2Decoder(nn.Module):
         return outputs.pred_masks, outputs.iou_scores
 
 
-def export_refiner(force, verify_only):
-    """SAM 2, as two graphs: the once-per-photo encode, and the re-runnable decode."""
+def export_refiner(force, verify_only, fast=False):
+    """SAM 2, as two graphs: the once-per-photo encode, and the re-runnable decode.
+
+    The faster tier re-exports nothing: SAM 2's positional embeddings and neck are pinned to
+    1024x1024 and refuse every other input, so its runtime-fast.json is deliberately the base
+    graphs — written anyway, so the tier's meaning stays inspectable in one place (issue #14).
+    """
     model_dir = MODELS_DIR / REFINER_ID
+    print(f"{REFINER_ID}{' (faster tier)' if fast else ''}")
+
+    if fast:
+        base = model_dir / "runtime.json"
+        if not base.is_file():
+            raise SystemExit(
+                f"  FAIL {model_dir.name}: no runtime.json beside the base graphs.\n"
+                "       The faster tier's refiner is the same graphs, so the base export must "
+                "exist first — run the export without --fast."
+            )
+        with open(base, "rb") as f:
+            payload = json.load(f)
+        write_runtime_json(model_dir, payload, name="runtime-fast.json")
+        return True
+
     encoder_path = model_dir / "sam2-encoder.onnx"
     decoder_path = model_dir / "sam2-decoder.onnx"
-    print(f"{REFINER_ID}")
 
     constants = preprocessing_of(model_dir)
     model = Sam2Model.from_pretrained(model_dir).eval()
@@ -397,6 +439,11 @@ def main():
         action="store_true",
         help="Check the exported graphs against PyTorch without exporting",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Export the faster tier: the same weights at a smaller semantic input",
+    )
     args = parser.parse_args()
 
     for model_id in (SEMANTIC_ID, REFINER_ID):
@@ -407,8 +454,8 @@ def main():
             )
 
     results = [
-        export_semantic(args.force, args.verify),
-        export_refiner(args.force, args.verify),
+        export_semantic(args.force, args.verify, fast=args.fast),
+        export_refiner(args.force, args.verify, fast=args.fast),
     ]
     print()
     if all(results):

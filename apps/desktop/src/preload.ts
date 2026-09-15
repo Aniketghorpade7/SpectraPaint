@@ -21,10 +21,14 @@ import {
   CORRECTIONS_CHANNEL,
   CREATE_CONSULTATION_CHANNEL,
   DISK_CHANNEL,
+  EXECUTION_PROFILE_GET_CHANNEL,
+  EXECUTION_PROFILE_SET_CHANNEL,
   EXPORT_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
   PROGRESS_STREAM_STOP_CHANNEL,
+  QUALITY_TIER_GET_CHANNEL,
+  QUALITY_TIER_SET_CHANNEL,
   RENDER_CHANNEL,
   SERVICE_REQUEST_CHANNEL,
   STORAGE_CHANNEL,
@@ -146,6 +150,23 @@ const bridge: SpectraPaintBridge = {
 
   disk() {
     return ipcRenderer.invoke(DISK_CHANNEL) as Promise<import('./bridge-types').DiskProbe>;
+  },
+
+  // Execution profile and quality tier methods
+  getExecutionProfile(): Promise<string> {
+    return ipcRenderer.invoke(EXECUTION_PROFILE_GET_CHANNEL);
+  },
+
+  setExecutionProfile(profile: string): Promise<void> {
+    return ipcRenderer.invoke(EXECUTION_PROFILE_SET_CHANNEL, profile);
+  },
+
+  getQualityTier(): Promise<string> {
+    return ipcRenderer.invoke(QUALITY_TIER_GET_CHANNEL);
+  },
+
+  setQualityTier(tier: string): Promise<void> {
+    return ipcRenderer.invoke(QUALITY_TIER_SET_CHANNEL, tier);
   },
 };
 

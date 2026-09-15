@@ -41,6 +41,8 @@ export type SidecarPhase = 'starting' | 'ready' | 'restarting' | 'failed';
 
 export interface SidecarOptions {
   onPhase?: (phase: SidecarPhase) => void;
+  hardwareProfile?: string;
+  qualityTier?: string;
 }
 
 export interface Sidecar {
@@ -163,7 +165,13 @@ class SidecarSupervisor implements Sidecar {
         cwd,
         // The secret travels in the environment, never in argv: a command line is readable by any
         // other process on the machine.
-        env: { ...process.env, [SECRET_ENV_VAR]: this.secret, PYTHONUNBUFFERED: '1' },
+        env: {
+          ...process.env,
+          [SECRET_ENV_VAR]: this.secret,
+          PYTHONUNBUFFERED: '1',
+          SPECTRAPAINT_HARDWARE_PROFILE: this.options.hardwareProfile ?? 'cpu',
+          SPECTRAPAINT_QUALITY_TIER: this.options.qualityTier ?? 'better',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });

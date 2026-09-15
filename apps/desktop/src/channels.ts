@@ -21,3 +21,7 @@ export const CORRECTIONS_CHANNEL = 'spectrapaint:corrections';
 export const STORED_IMAGE_CHANNEL = 'spectrapaint:stored-image';
 export const STORAGE_CHANNEL = 'spectrapaint:storage';
 export const DISK_CHANNEL = 'spectrapaint:disk';
+export const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';
+export const EXECUTION_PROFILE_SET_CHANNEL = 'spectrapaint:execution-profile:set';
+export const QUALITY_TIER_GET_CHANNEL = 'spectrapaint:quality-tier:get';
+export const QUALITY_TIER_SET_CHANNEL = 'spectrapaint:quality-tier:set';

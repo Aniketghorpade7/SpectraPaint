@@ -58,6 +58,7 @@ from time import perf_counter  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from spectrapaint.execution_profile import execution_profile  # noqa: E402
 from spectrapaint.render.engine import light_map_of as _light_map_of  # noqa: E402
 
 # Resolutions worth distinguishing. A modern phone shoots 12MP; the preview
@@ -233,7 +234,11 @@ def measure_gates(gates):
 
 
 def environment():
-    return {"numpy": np.__version__, "python": sys.version.split()[0]}
+    return {
+        "numpy": np.__version__,
+        "python": sys.version.split()[0],
+        "execution_profile": execution_profile(),
+    }
 
 
 def run_check(baseline_path):
@@ -243,8 +248,10 @@ def run_check(baseline_path):
     env = environment()
 
     print("SpectraPaint performance regression gate -- per-shade render")
-    print(f"numpy {env['numpy']} | python {env['python']}")
+    print(f"numpy {env['numpy']} | python {env['python']} | profile {env['execution_profile']}")
+    baseline_profile = baseline.get("execution_profile", "unknown")
     print(f"baseline recorded {baseline['recorded']} on {baseline['hardware']}")
+    print(f"baseline profile {baseline_profile}")
     print(f"budget = baseline x {baseline['threshold_multiplier']}")
     print()
 
@@ -346,7 +353,8 @@ def main():
         return run_json(args.baseline)
 
     print("SpectraPaint latency spike -- part 1: per-shade render loop")
-    print(f"numpy {np.__version__} | python {sys.version.split()[0]}")
+    env = environment()
+    print(f"numpy {env['numpy']} | python {env['python']} | profile {env['execution_profile']}")
     if args.threads:
         print(f"thread limit: {args.threads}")
     print()

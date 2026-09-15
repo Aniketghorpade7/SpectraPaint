@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,8 +50,27 @@ from spectrapaint.runtime.location import (
 
 logger = logging.getLogger(__name__)
 
-# The only provider. See the module docstring.
-PROVIDERS = ("CPUExecutionProvider",)
+
+# The provider(s) depend on the hardware profile.
+def get_execution_providers():
+    hardware_profile = os.environ.get("SPECTRAPAINT_HARDWARE_PROFILE", "cpu")
+    if hardware_profile == "gpu":
+        # Try to use CUDAExecutionProvider, fall back to CPU if not available
+        try:
+            if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+                return ["CUDAExecutionProvider"]
+        except Exception:
+            pass
+        # The shipped runtime is the CPU-only wheel (pyproject.toml): the gpu profile cannot reach
+        # CUDA until the packaging decision lands (design-decisions.md §3). Saying nothing here
+        # would leave inference quietly on CPU under a gpu-* profile — exactly the disagreement
+        # between what a machine reports and what it runs that the profile stamp exists to catch.
+        logger.warning(
+            "SPECTRAPAINT_HARDWARE_PROFILE is gpu but this ONNX Runtime has no "
+            "CUDAExecutionProvider; running on CPU. CUDA support needs the onnxruntime-gpu "
+            "package, which is deliberately not shipped."
+        )
+    return ["CPUExecutionProvider"]
 
 
 @dataclass(frozen=True)
@@ -97,11 +117,28 @@ _loaded: Graphs | None = None
 
 def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[str, Any]) -> Graph:
     path = models_dir / model_id / graph_name
-    session = onnxruntime.InferenceSession(str(path), providers=list(PROVIDERS))
+    session = onnxruntime.InferenceSession(str(path), providers=get_execution_providers())
     return Graph(session=session, config=config)
 
 
 def _read_config(models_dir: Path, model_id: str) -> dict[str, Any]:
+    """The runtime config for the tier in effect.
+
+    The tier selects the *config file*, and the config names the graphs and the input sizes that
+    belong to them — so a variant is one file read, and the call site that runs the graph never
+    branches on the tier (issue #14 AC2). A model with no exported faster variant serves the base
+    model, and says so: a quiet fallback would hide exactly the difference the tier exists to make.
+    """
+    if os.environ.get("SPECTRAPAINT_QUALITY_TIER", "better") == "faster":
+        fast = models_dir / model_id / "runtime-fast.json"
+        if fast.is_file():
+            with open(fast, "rb") as f:
+                return json.load(f)
+        logger.warning(
+            "SPECTRAPAINT_QUALITY_TIER is faster but %s has no runtime-fast.json; "
+            "serving the base (better) model.",
+            model_id,
+        )
     with open(models_dir / model_id / "runtime.json", "rb") as f:
         return json.load(f)
 
@@ -136,8 +173,8 @@ def load(models_dir: Path | None = None) -> Graphs:
                 directory, REFINER_ID, refiner_config["decoder_graph"], refiner_config
             ),
         )
-        logger.info("Model graphs loaded from %s", directory)
-        return _loaded
+    logger.info("Model graphs loaded from %s", directory)
+    return _loaded
 
 
 def warm(models_dir: Path | None = None) -> None:

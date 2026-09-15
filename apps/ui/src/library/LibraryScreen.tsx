@@ -4,6 +4,7 @@ import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
+import { SettingsModal } from '../components/SettingsModal';
 import { Toast } from '../components/Toast';
 import type { ConsultationSummary, RenderRecord } from './types';
 import { shadesOf } from './types';
@@ -75,6 +76,8 @@ function BundleList({
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [qualityTier, setQualityTier] = useState<string>('better');
 
   const startEditing = (bundleId: string, currentName: string) => {
     setEditingId(bundleId);
@@ -91,12 +94,53 @@ function BundleList({
     });
   };
 
+  const handleQualityTierChange = async (tier: string) => {
+    // Validate the tier before attempting to set it
+    if (tier !== 'faster' && tier !== 'better') {
+      console.error(`Invalid quality tier: ${tier}`);
+      return;
+    }
+
+    try {
+      // Use the exposed spectrapaint API to set the quality tier
+      await window.spectrapaint.setQualityTier(tier);
+      setQualityTier(tier);
+    } catch (error) {
+      console.error('Failed to set quality tier:', error);
+      // In a production app, we would show an error to the user
+    }
+  };
+
+  // Load the current quality tier from the service when the component mounts
+  useEffect(() => {
+    const loadQualityTier = async () => {
+      try {
+        const tier = await window.spectrapaint.getQualityTier();
+        if (tier === 'faster' || tier === 'better') {
+          setQualityTier(tier);
+        } else {
+          // Default to better if we get an unexpected value
+          setQualityTier('better');
+        }
+      } catch (error) {
+        console.error('Failed to get quality tier:', error);
+        // Default to better if we can't get it
+        setQualityTier('better');
+      }
+    };
+
+    loadQualityTier();
+  }, []);
+
   return (
     <main className="library">
       <header className="library__bar">
         <h1 className="library__title">Bundles</h1>
-        <Button onClick={onNewConsultation}>New consultation</Button>
-        {onOpenStorage ? <Button onClick={onOpenStorage}>Storage</Button> : null}
+        <div className="library__bar-actions">
+          <Button onClick={onNewConsultation}>New consultation</Button>
+          {onOpenStorage ? <Button onClick={onOpenStorage}>Storage</Button> : null}
+          <Button onClick={() => setIsSettingsOpen(true)}>Settings</Button>
+        </div>
       </header>
 
       {library.message ? (
@@ -207,6 +251,13 @@ function BundleList({
           </li>
         ))}
       </ul>
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onQualityTierChange={handleQualityTierChange}
+        currentQualityTier={qualityTier}
+      />
     </main>
   );
 }
