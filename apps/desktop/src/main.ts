@@ -1,5 +1,6 @@
 import { app, BrowserWindow, type WebContents, ipcMain } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import { bootStatusFor } from './boot-messages';
@@ -50,8 +51,12 @@ export function getQualityTier(): string {
 }
 
 function setQualityTier(tier: string): void {
+  // Only the two tiers the Catalogue sells are accepted: a malformed IPC call must not write a
+  // value the restore path would then have to distrust.
+  if (!(QUALITY_TIERS as readonly string[]).includes(tier)) return;
   if (qualityTier === tier) return;
   qualityTier = tier;
+  persistQualityTier();
   // Restart the sidecar to pick up the new quality tier
   if (sidecar) {
     const stopping = sidecar;
@@ -72,6 +77,41 @@ function setHardwareProfile(profile: string): void {
     stopping.stop().then(() => {
       startService();
     });
+  }
+}
+
+// The Dealer's quality-tier choice survives restarts (issue #14 AC3): a tiny JSON file in the
+// per-user application data directory — the one place the shell already owns on every platform
+// (see disk-bridge.ts). Only the tier persists; the hardware profile is re-detected at every
+// boot (AC1), so a Dealer who moves machines does not drag a GPU choice into a CPU-only one.
+const QUALITY_TIERS = ['faster', 'better'] as const;
+const SETTINGS_FILE = 'settings.json';
+
+function settingsPath(): string {
+  return path.join(app.getPath('userData'), SETTINGS_FILE);
+}
+
+function restoreQualityTier(): void {
+  try {
+    const saved = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as { qualityTier?: string };
+    if (saved.qualityTier && (QUALITY_TIERS as readonly string[]).includes(saved.qualityTier)) {
+      qualityTier = saved.qualityTier;
+    }
+  } catch {
+    // First run, or a file the machine mangled: the default tier is the right answer, and a
+    // boot that refuses to start over its own settings file is worse than a silent reset.
+  }
+}
+
+function persistQualityTier(): void {
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({ qualityTier }));
+  } catch (error) {
+    // A write that fails (full disk, permissions) must not fail the tier change: the choice is
+    // in effect for this session either way, and quiet recovery without a log hides the fault
+    // (docs/conventions.md §5).
+    console.error('[settings] failed to persist the quality tier:', error);
   }
 }
 
@@ -140,6 +180,9 @@ async function startService(): Promise<void> {
 }
 
 void app.whenReady().then(async () => {
+  // The persisted tier is in place before the sidecar starts, so the service is launched with
+  // the tier the Dealer actually chose rather than the default (issue #14 AC3).
+  restoreQualityTier();
   registerServiceBridge(() => sidecar, isTrustedSender);
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
   registerRenderBridge(() => sidecar, isTrustedSender);
