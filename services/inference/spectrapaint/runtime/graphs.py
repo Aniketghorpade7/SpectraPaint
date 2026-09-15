@@ -116,27 +116,29 @@ _loaded: Graphs | None = None
 
 
 def _load_graph(models_dir: Path, model_id: str, graph_name: str, config: dict[str, Any]) -> Graph:
-    # Determine the quality tier from environment
-    quality_tier = os.environ.get("SPECTRAPAINT_QUALITY_TIER", "better")
-    # Base graph name from the graph_name argument
-    base_name = graph_name
-    # If quality tier is faster, try to load a variant with '-fast' suffix
-    if quality_tier == "faster":
-        # Create the faster variant name by inserting '-fast' before the extension
-        if base_name.endswith(".onnx"):
-            fast_name = base_name[:-5] + "-fast.onnx"
-        else:
-            fast_name = base_name + "-fast"
-        fast_path = models_dir / model_id / fast_name
-        path = fast_path if fast_path.is_file() else models_dir / model_id / base_name
-    else:
-        path = models_dir / model_id / base_name
-
+    path = models_dir / model_id / graph_name
     session = onnxruntime.InferenceSession(str(path), providers=get_execution_providers())
     return Graph(session=session, config=config)
 
 
 def _read_config(models_dir: Path, model_id: str) -> dict[str, Any]:
+    """The runtime config for the tier in effect.
+
+    The tier selects the *config file*, and the config names the graphs and the input sizes that
+    belong to them — so a variant is one file read, and the call site that runs the graph never
+    branches on the tier (issue #14 AC2). A model with no exported faster variant serves the base
+    model, and says so: a quiet fallback would hide exactly the difference the tier exists to make.
+    """
+    if os.environ.get("SPECTRAPAINT_QUALITY_TIER", "better") == "faster":
+        fast = models_dir / model_id / "runtime-fast.json"
+        if fast.is_file():
+            with open(fast, "rb") as f:
+                return json.load(f)
+        logger.warning(
+            "SPECTRAPAINT_QUALITY_TIER is faster but %s has no runtime-fast.json; "
+            "serving the base (better) model.",
+            model_id,
+        )
     with open(models_dir / model_id / "runtime.json", "rb") as f:
         return json.load(f)
 
