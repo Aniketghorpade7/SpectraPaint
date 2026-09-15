@@ -152,19 +152,19 @@ def load(models_dir: Path | None = None) -> Graphs:
         if _loaded is not None:
             return _loaded
 
-    directory = resolve_models_dir() if models_dir is None else models_dir
-    semantic_config = _read_config(directory, SEMANTIC_ID)
-    refiner_config = _read_config(directory, REFINER_ID)
+        directory = resolve_models_dir() if models_dir is None else models_dir
+        semantic_config = _read_config(directory, SEMANTIC_ID)
+        refiner_config = _read_config(directory, REFINER_ID)
 
-    _loaded = Graphs(
-        semantic=_load_graph(directory, SEMANTIC_ID, semantic_config["graph"], semantic_config),
-        refiner_encoder=_load_graph(
-            directory, REFINER_ID, refiner_config["encoder_graph"], refiner_config
-        ),
-        refiner_decoder=_load_graph(
-            directory, REFINER_ID, refiner_config["decoder_graph"], refiner_config
-        ),
-    )
+        _loaded = Graphs(
+            semantic=_load_graph(directory, SEMANTIC_ID, semantic_config["graph"], semantic_config),
+            refiner_encoder=_load_graph(
+                directory, REFINER_ID, refiner_config["encoder_graph"], refiner_config
+            ),
+            refiner_decoder=_load_graph(
+                directory, REFINER_ID, refiner_config["decoder_graph"], refiner_config
+            ),
+        )
     logger.info("Model graphs loaded from %s", directory)
     return _loaded
 

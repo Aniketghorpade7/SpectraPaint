@@ -33,17 +33,17 @@ from spectrapaint.api.errors import MALFORMED_REQUEST, SHADE_NOT_FOUND, ServiceE
 from spectrapaint.api.preparation import PreparedPhoto
 from spectrapaint.api.sessions import require_photo
 from spectrapaint.catalogue import Catalogue
+from spectrapaint.execution_profile import execution_profile
 from spectrapaint.render.colour import lab_to_linear_rgb
 from spectrapaint.render.engine import estimate_light_tint, render_many
 from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["renders"])
 
-# Which execution profile produced a render. V1 has exactly one — the preview-scale path — so the
-# value is a named constant here rather than a request field. The column exists because the spec's
-# faster-vs-better-quality profiles will arrive as real choices later, and a render saved before
-# they do must still say what made it (issue #11: every render records its execution profile).
-EXECUTION_PROFILE = "preview"
+# Which execution profile produced a render. Read from the one shared helper
+# (spectrapaint.execution_profile) — the same source every render records and every benchmark
+# prints, so what the Dealer saw, what the Store saved, and what a benchmark measured all
+# agree (issue #14: every render is stamped with the profile that produced it).
 
 _MESSAGE_SHADE_NOT_FOUND = (
     "That Shade Code is not in this Catalogue. Please check the code on the chip, "
@@ -170,7 +170,7 @@ def _save_render(
         png=png_bytes,
         width=int(width),
         height=int(height),
-        execution_profile=EXECUTION_PROFILE,
+        execution_profile=execution_profile(),
         mode=body.mode,
         assignments=dict(body.assignments),
         resolved_lab=resolved_lab,
