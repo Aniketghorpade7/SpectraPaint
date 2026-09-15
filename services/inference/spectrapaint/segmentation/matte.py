@@ -43,6 +43,15 @@ from spectrapaint.segmentation.semantic import SemanticRegions, pixel_values
 # confident and SAM 2 is wrong, not to paper over genuine disagreement.
 SEMANTIC_OVERRULE_CONFIDENCE = 0.75
 
+# Below this the semantic pass is not trusted to vouch for a pixel SAM 2 claims is wall, even where
+# nothing named it an exclusion. Named exclusions (matte.py's second step) are semantic and absolute
+# by design (design-decisions.md §5) — this is not a fifth exclusion class, it is a floor under
+# SAM 2's own appearance-driven guess, for the case that motivated #31. It is a partial improvement
+# and not a fix: a checkpoint that is confidently wrong about a door leaves no gap between "sure
+# this is wall" and "sure this isn't" for a floor to sit in, so this helps two fixtures and does
+# nothing for that one. See `_unvouched` for what it does and does not remove.
+WALL_CONFIDENCE_FLOOR = 0.9
+
 # The boundary band, as a fraction of the photo's shorter side. Wide enough to contain the error a
 # quarter-resolution network makes once upsampled, narrow enough that the interior is left alone.
 _BAND_FRACTION = 0.02
@@ -155,6 +164,31 @@ def luminance_of(photo_u8: np.ndarray) -> np.ndarray:
     return (photo_u8.astype(np.float32) @ weights) / 255.0
 
 
+def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarray:
+    """Where the semantic pass will not vouch for a pixel SAM 2 claims is wall (#31).
+
+    Two things exempt a pixel, and both were settled by measuring on the three room fixtures rather
+    than argued:
+
+    * the restore step already forced it to 1.0. The floor is a check on what SAM 2 *alone*
+      believes, not a second vote against a restoration that already happened.
+    * SegFormer's own argmax called it ``wall``, however unsure it was. A wall in shadow is
+      labelled wall and doubted, so a floor without this clause deletes it: measured at 77%
+      shadowed-wall recall on ``windows-with-curtains`` against a floor of 80%, where exempting it
+      scores 80.1%. Doubted-but-labelled wall is the case the semantic pass exists to win (module
+      docstring, step 2), so doubt alone must not remove it.
+
+    Two variants were measured and rejected. Reading the confidence through a box mean first, to
+    ride across the quarter-resolution blockiness, changes no metric on any fixture to three
+    decimal places — the band-and-core step below already resolves the matte spatially, so a
+    stipple of holes never reaches the output. Holding argmax-wall pixels to a lower floor instead
+    of exempting them outright costs the shadow immediately: at 0.35 the same recall is back to
+    77%, because that shadowed wall is labelled wall at only 0.2 to 0.35 confidence.
+    """
+
+    return (regions.wall_confidence < WALL_CONFIDENCE_FLOOR) & ~confident_wall & ~regions.wall
+
+
 def soften_boundary(photo_u8: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     """Sharpen a matte's own edge with a luminance-guided filter, confined to a band around
     where the matte crosses its own 0.5 level. Returns a 2-D array, same shape as ``alpha``.
@@ -214,6 +248,12 @@ def wall_alpha(
     # Named exclusions, removed. Semantic, not photometric: a window leaves because it was called a
     # window, and no amount of looking wall-like brings it back.
     alpha = np.where(regions.excluded, 0.0, alpha)
+
+    # A floor under SAM 2's own guess (#31): below WALL_CONFIDENCE_FLOOR the semantic pass will not
+    # vouch for a pixel, so SAM 2's appearance-driven coverage there is not trusted either. Before
+    # the boundary is softened, not after: the floor is a statement about which pixels are wall at
+    # all, and softening is what resolves the edge of whatever survives it.
+    alpha = np.where(_unvouched(regions, confident_wall), 0.0, alpha)
 
     alpha = soften_boundary(photo_u8, alpha)
 

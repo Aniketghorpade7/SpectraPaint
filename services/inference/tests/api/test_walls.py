@@ -351,9 +351,18 @@ def test_the_add_tool_grows_a_plane_from_a_missed_wall(client: TestClient, photo
     if len(missed_y) == 0:
         pytest.skip(f"{photo.stem}: the automatic matte already covers every labelled wall pixel")
 
-    # The median of the missed pixels, not an extreme one — a point representative of the missed
-    # region rather than sitting on its own noisy boundary against what already is covered.
-    y, x = int(np.median(missed_y)), int(np.median(missed_x))
+    # A point representative of the missed region rather than sitting on its own noisy boundary
+    # against what already is covered — so, the median. But the median of the ys and the median of
+    # the xs is a pair of independent statistics, and that pair need not be a missed pixel at all:
+    # on a C-shaped or two-lobed missed region it lands in the hollow between the lobes, which is
+    # covered wall, and Add then refuses it with "that's already part of a wall". So the *nearest
+    # actually-missed pixel* to that centre is tapped instead. The shape of the missed region is a
+    # property of the checkpoint and moves whenever the matte changes (it moved when #31's
+    # confidence floor landed), so choosing a point that is guaranteed to be in the set is what
+    # keeps this test about the Add tool rather than about today's matte.
+    centre_y, centre_x = np.median(missed_y), np.median(missed_x)
+    nearest = np.argmin((missed_y - centre_y) ** 2 + (missed_x - centre_x) ** 2)
+    y, x = int(missed_y[nearest]), int(missed_x[nearest])
 
     response = client.post(f"/sessions/{session_id}/planes", headers=auth(), json={"x": x, "y": y})
 

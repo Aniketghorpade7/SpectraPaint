@@ -16,25 +16,33 @@
 # way, and these entries are meant to disappear.
 #
 # Measured on: 2026-08-21, Linux, CPU, the checkpoints pinned in models/manifest.toml.
+# Re-measured: 2026-09-15, after the wall-confidence floor in matte.py (#31, candidate direction 1).
 # Regenerate after a pipeline change with the reasoning in the commit message:
 #     cd services/inference && uv run pytest -m models -q     # the failure message prints the new value
 
 # Only the metrics that fall short are recorded. A metric that already meets its target has no
 # entry, and the lane fails if one appears — see the ratchet in tests/api/test_walls.py. Wall IoU is
-# absent for two rooms because they clear it (0.946 and 0.768); the shadowed-wall recall of all three
-# clears its own target too (0.91 to 0.99), so it appears nowhere here.
+# absent for two rooms because they clear it (0.944 and 0.771); the shadowed-wall recall of all three
+# clears its own target too, so it appears nowhere here — but `windows-with-curtains` now clears it
+# by 0.001 (0.801 against 0.80, from 0.910 before the floor), which is the floor's real cost and the
+# number to watch.
 
 [corner-with-clothesline]
-# The matte paints the clothes hanging across the corner.
-non_wall_leakage = 0.348
+# The matte paints the clothes hanging across the corner. The confidence floor cuts 0.348 to 0.338:
+# SegFormer calls those clothes `wall` at 99%, so almost none of the over-claim falls below the
+# floor. Containing this one needs the clothes to reach SAM 2 as negative prompts (#31).
+non_wall_leakage = 0.338
 
 [empty-corner]
 # The matte paints the door at the right edge. Barely over the 0.20 target, and the least fixable of
-# the three: the semantic pass calls that door `wall` at 0.97 confidence.
+# the three: the semantic pass calls that door `wall` at 0.97 confidence. The confidence floor moves
+# this by nothing at all (0.209 before and after) — exactly as predicted, because a floor can only
+# remove what the checkpoint was unsure of and it is not unsure here.
 non_wall_leakage = 0.209
 
 [windows-with-curtains]
 # The matte paints the curtains and the window glass. The IoU shortfall is the same defect seen from
-# the other side: certain wall is 10% of this frame and the matte claims 40% of it.
-wall_iou = 0.369
-non_wall_leakage = 0.239
+# the other side: certain wall is 10% of this frame and the matte claims 40% of it. The confidence
+# floor helps most here — leakage 0.239 to 0.185, which clears the 0.20 target, so that metric has
+# no entry any more. IoU improves 0.369 to 0.389 and is still far short.
+wall_iou = 0.389
