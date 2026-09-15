@@ -109,6 +109,22 @@ def sample_grid(mask: np.ndarray, budget: int) -> np.ndarray:
     return np.asarray(points, dtype=np.float32).reshape(-1, 2)
 
 
+def _photo_to_graph_scale(refiner_config: dict, shape: tuple[int, int]) -> np.ndarray:
+    """Photo space to graph space, as an (x, y) scale.
+
+    Both axes scale independently: the photo was squashed into the graph's square input, so a
+    single scale factor would put every prompt in the wrong place on any photo that is not itself
+    square. Shared by every prompt builder in this module, so a coordinate bug cannot be fixed in
+    one and left in another.
+    """
+
+    height, width = shape
+    return np.asarray(
+        [refiner_config["input_width"] / width, refiner_config["input_height"] / height],
+        dtype=np.float32,
+    )
+
+
 def prompts_for(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
     """Point prompts describing the wall region, in the refiner graph's input space.
 
@@ -126,14 +142,7 @@ def prompts_for(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
     positive = sample_grid(erode(regions.wall, radius), positive_budget)
     negative = sample_grid(erode(regions.excluded, radius), max_points - len(positive))
 
-    # Photo space to graph space. Both axes scale independently: the photo was squashed into a
-    # square, so a single scale factor would put every prompt in the wrong place on any photo that
-    # is not itself square.
-    height, width = shape
-    scale = np.asarray(
-        [refiner_config["input_width"] / width, refiner_config["input_height"] / height],
-        dtype=np.float32,
-    )
+    scale = _photo_to_graph_scale(refiner_config, shape)
 
     coords = np.zeros((1, 1, max_points, 2), dtype=np.float32)
     labels = np.full((1, 1, max_points), padding_label, dtype=np.int32)
@@ -152,3 +161,72 @@ def prompts_for(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
         positive_count=len(positive),
         negative_count=len(negative),
     )
+
+
+def prompts_for_ceiling(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
+    """Point prompts describing the ceiling region — same treatment as :func:`prompts_for` but for
+    the ceiling class. No plane splitting is needed for a ceiling (it is essentially always one
+    region), so one decode suffices. The ceiling decode costs the cheap ~120 ms (encoder already
+    cached per photo) rather than a second ~2 s encode.
+    """
+
+    max_points = int(refiner_config["max_prompt_points"])
+    padding_label = int(refiner_config["padding_point_label"])
+    shape = regions.ceiling.shape
+    radius = erosion_radius(shape)
+
+    positive_budget = int(round(max_points * _POSITIVE_SHARE))
+    positive = sample_grid(erode(regions.ceiling, radius), positive_budget)
+    # Negatives for ceiling: wall is the main thing not to leak into, plus the other exclusions
+    # except ceiling itself. Build it without ceiling so a ceiling prompt's negatives do not contain
+    # the very region it is trying to describe.
+    other_excluded = regions.excluded & ~regions.ceiling
+    ceiling_excluded = regions.wall | other_excluded
+    negative = sample_grid(erode(ceiling_excluded, radius), max_points - len(positive))
+
+    scale = _photo_to_graph_scale(refiner_config, shape)
+
+    coords = np.zeros((1, 1, max_points, 2), dtype=np.float32)
+    labels = np.full((1, 1, max_points), padding_label, dtype=np.int32)
+
+    for index, point in enumerate(positive):
+        coords[0, 0, index] = point * scale
+        labels[0, 0, index] = LABEL_POSITIVE
+    for offset, point in enumerate(negative):
+        index = len(positive) + offset
+        coords[0, 0, index] = point * scale
+        labels[0, 0, index] = LABEL_NEGATIVE
+
+    return PromptSet(
+        coords=coords,
+        labels=labels,
+        positive_count=len(positive),
+        negative_count=len(negative),
+    )
+
+
+def single_point_prompt(
+    refiner_config: dict,
+    photo_shape: tuple[int, int],
+    x: float,
+    y: float,
+) -> PromptSet:
+    """One positive point, in the refiner graph's own input space — the Dealer's own tap
+    (ticket #10's Add tool), padded to the graph's fixed prompt width the same way
+    :func:`prompts_for` pads its whole grid.
+
+    No negatives: unlike the automatic pass, there is no ``SemanticRegions`` here to sample
+    exclusions from — the correction surface works from the tapped point alone, and the Dealer's
+    tap is the intent signal this prompt exists to carry.
+    """
+
+    max_points = int(refiner_config["max_prompt_points"])
+    padding_label = int(refiner_config["padding_point_label"])
+    scale = _photo_to_graph_scale(refiner_config, photo_shape)
+
+    coords = np.zeros((1, 1, max_points, 2), dtype=np.float32)
+    labels = np.full((1, 1, max_points), padding_label, dtype=np.int32)
+    coords[0, 0, 0] = np.asarray([x, y], dtype=np.float32) * scale
+    labels[0, 0, 0] = LABEL_POSITIVE
+
+    return PromptSet(coords=coords, labels=labels, positive_count=1, negative_count=0)

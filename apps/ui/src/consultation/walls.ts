@@ -22,22 +22,52 @@ import type { WallPlaneOverlay } from '../../../desktop/src/bridge-types';
  */
 
 export interface WallsState {
-  /** Every Wall Plane found, in the service's order. One, until ticket #7. */
+  /** Every Paintable Plane found (walls and at most one ceiling), in the service's order. Can be
+   * empty since ticket #10: automatic detection finding nothing at all is answered, not refused.
+   * Each plane carries its ``surface`` (wall | ceiling) — the ceiling, when present, is an
+   * independently-colourable surface with its own base colour and light map, never grouped with a
+   * wall's (CONTEXT.md Ceiling Plane). */
   planes: WallPlaneOverlay[];
   /** Whether the Dealer wants the overlay shown at all. */
   wanted: boolean;
   /**
-   * Why there is no overlay, in plain language, when that is worth saying. Never shown as an error
-   * state: a photo whose walls could not be outlined is still a photo that can be repainted, so
-   * this is a note, not a dead end.
+   * Why there is nothing more to see, in plain language, when that is worth saying — either the
+   * overlay itself could not be fetched, or (ticket #10) automatic detection genuinely found no
+   * wall. Never shown as an error state: a photo with nothing to outline is still a photo that
+   * can be repainted, once the Dealer taps a wall in through the correction surface. From ticket
+   * #39 the same note covers a photo with no ceiling — Add Ceiling is then the way forward.
    */
   message?: string;
+  /**
+   * A warning about the photo itself, in plain language — dark, blurred or heavily clipped
+   * (ticket #15) — unrelated to `message`: the wall can be found perfectly well in a poor photo.
+   * Never shown as an error state, and never cleared by a correction, since it describes the photo
+   * rather than the planes found in it.
+   */
+  qualityNote?: string;
+  /** The prepared photo's own pixel dimensions — known even with zero planes, which is what lets
+   * a tap be turned into a point in that space before any plane has ever been found (ticket #10's
+   * Add tool, on a photo with nothing detected at all). 0 means not yet known. */
+  photoWidth: number;
+  photoHeight: number;
 }
 
-export const INITIAL_WALLS_STATE: WallsState = { planes: [], wanted: true };
+export const INITIAL_WALLS_STATE: WallsState = {
+  planes: [],
+  wanted: true,
+  photoWidth: 0,
+  photoHeight: 0,
+};
 
 export type WallsEvent =
-  | { type: 'found'; planes: WallPlaneOverlay[] }
+  | {
+      type: 'found';
+      planes: WallPlaneOverlay[];
+      note: string | null;
+      qualityNote?: string | null;
+      photoWidth: number;
+      photoHeight: number;
+    }
   | { type: 'unavailable'; message: string }
   | { type: 'toggle' }
   | { type: 'cleared' };
@@ -45,9 +75,16 @@ export type WallsEvent =
 export function applyWallsEvent(state: WallsState, event: WallsEvent): WallsState {
   switch (event.type) {
     case 'found':
-      return { planes: event.planes, wanted: state.wanted };
+      return {
+        planes: event.planes,
+        wanted: state.wanted,
+        message: event.note ?? undefined,
+        qualityNote: event.qualityNote ?? undefined,
+        photoWidth: event.photoWidth,
+        photoHeight: event.photoHeight,
+      };
     case 'unavailable':
-      return { planes: [], wanted: state.wanted, message: event.message };
+      return { ...state, planes: [], message: event.message };
     case 'toggle':
       return { ...state, wanted: !state.wanted };
     case 'cleared':

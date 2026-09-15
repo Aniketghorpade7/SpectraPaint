@@ -3,6 +3,7 @@
   "hardware": "GitHub Actions ubuntu-latest, 2-core / 7 GB",
   "numpy": "2.5.2",
   "python": "3.12.3",
+  "execution_profile": "cpu-better",
   "threshold_multiplier": 2.0,
   "method": "Median of three consecutive runs of the same commit on the standard private-repo runner. Each figure is itself a median of nine timed repeats after two warm-ups. The observed spread between runs was 15-20 percent, which is what the budget has to tolerate without crying wolf.",
   "why_this_threshold": "Twice the baseline. Run-to-run noise is under 25 percent, so 2x does not fire by accident, and the regression that actually matters -- a 3x on the per-shade render, which would make the product unusable while every functional test stayed green -- trips it decisively. See docs/design-decisions.md sections 9b and 13.",

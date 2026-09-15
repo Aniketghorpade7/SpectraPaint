@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
+  ExportResult,
   ProgressStreamEvent,
   RenderResult,
   WallsResult,
 } from '../../../desktop/src/bridge-types';
+import { applyExportEvent, INITIAL_EXPORT_STATE, type ExportState } from './export';
 import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
 import {
   ALL_WALLS,
@@ -14,6 +16,12 @@ import {
   renderPayload,
   toggleTarget,
 } from './accent';
+import {
+  effectiveArmedTool,
+  toggleArmedTool,
+  type CorrectionTool,
+  type TapPoint,
+} from './corrections';
 import { applyWallsEvent, INITIAL_WALLS_STATE, type WallsState } from './walls';
 
 /**
@@ -47,7 +55,7 @@ export type RenderMode = 'realistic' | 'true_colour';
 
 export interface Consultation {
   state: ConsultationState;
-  start: () => void;
+  start: () => Promise<string | null>;
   discard: () => void;
   /** Put a reopened Consultation on screen: already prepared, nothing left to wait for (issue #11). */
   adopt: (sessionId: string, imageDataUrl: string) => void;
@@ -72,6 +80,26 @@ export interface Consultation {
   renderMode: RenderMode;
   /** Switch between Realistic and True Colour; repaints the current Shade if one is on screen. */
   toggleRenderMode: () => void;
+  /** Which correction tool is armed right now (ticket #10) — Add auto-arms when the photo has no
+   * Wall Plane at all, since there is nothing else to do. The next tap on the photo performs it. */
+  armedTool: CorrectionTool | null;
+  /** Arm a correction tool; arming the already-armed tool disarms it — the same toggle
+   * toggleWalls/toggleTarget/toggleRenderMode already use, not a new interaction to learn. */
+  armTool: (tool: CorrectionTool) => void;
+  /** Perform the armed tool's correction at a tapped point, then disarm. A no-op with nothing
+   * armed or the photo not ready — safe to call from a click handler unconditionally. */
+  correctWallsAt: (point: TapPoint) => void;
+  /** The service's own message when the last correction tap was refused, safe to show as-is.
+   * Cleared on the next tool armed or the next successful correction. The existing walls are
+   * never touched by a refusal — this is a note beside them, never a dead end. */
+  correctionMessage?: string;
+  /** The failure code behind `correctionMessage`, when there is one. `session_not_found` is the
+   * one the surface reacts to differently — see `render.code` (issue #15). */
+  correctionCode?: string;
+  /** Full-resolution JPEG export via the OS share sheet (issue #12) — non-blocking. */
+  exportState: ExportState;
+  exportRender: () => void;
+  dismissExport: () => void;
 }
 
 /** The fallback shown before the stream's first message arrives. */
@@ -83,6 +111,21 @@ const RENDER_FAILED_MESSAGE = 'The wall could not be repainted. Please try anoth
 
 const WALLS_UNAVAILABLE_MESSAGE =
   'The walls in this photo could not be shown. The photo can still be repainted.';
+
+const CORRECTION_FAILED_MESSAGE = 'That could not be done. The walls stay as they were.';
+
+/**
+ * Shown instead of the service's own `session_not_found` message (issue #15).
+ *
+ * A sidecar restart wipes the service's in-memory sessions, but never the Consultation itself —
+ * its photo and Wall Planes were already saved before this could happen (issue #11's auto-save).
+ * The backend's own wording, "start a new one," is technically true but sends the Dealer to lose
+ * work that reopening would recover intact; naming the actual recovery here is what keeps this
+ * from being a dead end that quietly fails every retry instead of a visibly working one.
+ */
+export const MESSAGE_SESSION_LOST =
+  'SpectraPaint had to restart. Please reopen this consultation from Bundles to continue — ' +
+  'nothing has been lost.';
 
 /**
  * The phase transition the progress stream drives, as a pure function so it is testable without a
@@ -111,11 +154,19 @@ export function useConsultation(): Consultation {
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
   const [walls, setWalls] = useState<WallsState>(INITIAL_WALLS_STATE);
   const [renderMode, setRenderMode] = useState<RenderMode>('realistic');
+  const [exportState, setExportState] = useState<ExportState>(INITIAL_EXPORT_STATE);
   // Which wall the next Shade paints, and what each wall is already carrying. Held here rather than
   // in the render state because it outlives a single repaint: an Accent Wall is built one wall at a
   // time, and the second tap has to know what the first one did (ticket #7).
   const [target, setTarget] = useState<PaintTarget>(ALL_WALLS);
   const [assignments, setAssignments] = useState<Assignments>({});
+  // What the Dealer explicitly armed, if anything — corrections.effectiveArmedTool is what turns
+  // this into what is actually armed, so auto-arming Add on a zero-plane photo can never drift
+  // out of sync with whether a plane exists (ticket #10, implementation-decisions.md #39).
+  const [explicitTool, setExplicitTool] = useState<CorrectionTool | null>(null);
+  const [correctionMessage, setCorrectionMessage] = useState<string | undefined>(undefined);
+  const [correctionCode, setCorrectionCode] = useState<string | undefined>(undefined);
+  const armedTool = effectiveArmedTool(explicitTool, walls.planes.length);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // A subscription must not outlive the surface: discarding, starting again, or unmounting
@@ -164,17 +215,25 @@ export function useConsultation(): Consultation {
       applyWallsEvent(
         previous,
         result.status === 'ready'
-          ? { type: 'found', planes: result.planes }
+          ? {
+              type: 'found',
+              planes: result.planes,
+              note: result.note,
+              qualityNote: result.qualityNote,
+              photoWidth: result.photoWidth,
+              photoHeight: result.photoHeight,
+            }
           : { type: 'unavailable', message: result.message },
       ),
     );
   }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (): Promise<string | null> => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
+    setExportState(INITIAL_EXPORT_STATE);
     setState({ phase: 'uploading', progressMessage: LOADING_MESSAGE });
 
     try {
@@ -183,7 +242,7 @@ export function useConsultation(): Consultation {
         case 'cancelled':
           // Walking away is a decision, not a failure — back to where the Dealer was, silently.
           setState({ phase: 'idle' });
-          break;
+          return null;
         case 'ready': {
           const { sessionId, imageDataUrl } = result;
           const unsubscribe = window.spectrapaint.onProgress(sessionId, (event) => {
@@ -205,11 +264,11 @@ export function useConsultation(): Consultation {
           });
           unsubscribeRef.current = unsubscribe;
           setState((previous) => ({ ...previous, sessionId, imageDataUrl }));
-          break;
+          return sessionId;
         }
         case 'failed':
           setState({ phase: 'failed', message: result.message });
-          break;
+          return null;
       }
     } catch (error) {
       // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
@@ -219,6 +278,7 @@ export function useConsultation(): Consultation {
         phase: 'failed',
         message: 'The photo could not be loaded. Please try another photo.',
       });
+      return null;
     }
   }, [endSession, loadWalls]);
 
@@ -230,9 +290,13 @@ export function useConsultation(): Consultation {
     }
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
+    setExportState(INITIAL_EXPORT_STATE);
     setTarget(ALL_WALLS);
     setAssignments({});
     setRenderMode('realistic');
+    setExplicitTool(null);
+    setCorrectionMessage(undefined);
+    setCorrectionCode(undefined);
     setState({ phase: 'idle' });
   }, [state, endSession]);
 
@@ -242,6 +306,7 @@ export function useConsultation(): Consultation {
       // waiting. The walls are asked for once, exactly as a freshly prepared photo would (issue #11).
       setRender(INITIAL_RENDER_STATE);
       setWalls(INITIAL_WALLS_STATE);
+      setExportState(INITIAL_EXPORT_STATE);
       setTarget(ALL_WALLS);
       setAssignments({});
       setState({ phase: 'ready', sessionId, imageDataUrl });
@@ -260,7 +325,7 @@ export function useConsultation(): Consultation {
       // the state it records cannot disagree.
       const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
       setAssignments(updated);
-      const payload = renderPayload(updated);
+      const payload = renderPayload(updated, walls.planes);
 
       let result: RenderResult;
       try {
@@ -294,7 +359,10 @@ export function useConsultation(): Consultation {
             type: 'failed',
             shadeCode,
             code: result.code,
-            message: result.message,
+            // session_not_found means a sidecar restart, not that this Shade failed (issue #15);
+            // the service's own "start a new one" wording would send the Dealer to lose work that
+            // reopening recovers intact.
+            message: result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
           }),
         );
       }
@@ -324,7 +392,7 @@ export function useConsultation(): Consultation {
     // If a Shade is already on screen, repaint it in the new mode so the Dealer sees the
     // difference without tapping again (CONTEXT.md: Realistic vs True Colour).
     if (state.phase === 'ready' && state.sessionId && Object.keys(assignments).length > 0) {
-      const payload = renderPayload(assignments);
+      const payload = renderPayload(assignments, walls.planes);
       const shadeForState = Object.values(assignments)[0] ?? 'repaint';
       setRender((previous) =>
         applyRenderEvent(previous, { type: 'requested', shadeCode: shadeForState }),
@@ -346,7 +414,8 @@ export function useConsultation(): Consultation {
                 type: 'failed',
                 shadeCode: shadeForState,
                 code: result.code,
-                message: result.message,
+                message:
+                  result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
               }),
             );
           }
@@ -363,7 +432,117 @@ export function useConsultation(): Consultation {
           );
         });
     }
-  }, [renderMode, state.phase, state.sessionId, assignments]);
+  }, [renderMode, state.phase, state.sessionId, assignments, walls.planes]);
+
+  const armTool = useCallback((tool: CorrectionTool) => {
+    setExplicitTool((previous) => toggleArmedTool(previous, tool));
+    setCorrectionMessage(undefined);
+    setCorrectionCode(undefined);
+  }, []);
+
+  const correctWallsAt = useCallback(
+    (point: TapPoint) => {
+      if (armedTool === null || state.phase !== 'ready' || !state.sessionId) return;
+      const tool = armedTool;
+      const sessionId = state.sessionId;
+      // One tap, one correction: disarm immediately rather than staying in a mode, matching
+      // ui-guidelines.md's "act, do not confirm" rule for the rest of this surface.
+      setExplicitTool(null);
+      setCorrectionMessage(undefined);
+      setCorrectionCode(undefined);
+
+      void (async () => {
+        let result: WallsResult;
+        try {
+          result = await window.spectrapaint.correctWalls(sessionId, tool, point);
+        } catch (error) {
+          // The bridge rejected without a result (not a service refusal). Never dead-end: the
+          // existing walls are untouched, so this is a note beside them, not a lost photo.
+          console.error('[consultation] could not correct the walls:', error);
+          setCorrectionMessage(CORRECTION_FAILED_MESSAGE);
+          return;
+        }
+
+        if (result.status === 'ready') {
+          setWalls((previous) =>
+            applyWallsEvent(previous, {
+              type: 'found',
+              planes: result.planes,
+              note: result.note,
+              qualityNote: result.qualityNote,
+              photoWidth: result.photoWidth,
+              photoHeight: result.photoHeight,
+            }),
+          );
+          // A split or merge can retire a plane id the Dealer had targeted or already assigned a
+          // Shade to; fall back to painting every wall and drop the stale assignment rather than
+          // reference a plane that no longer exists (implementation-decisions.md #40).
+          const ids = new Set(result.planes.map((plane) => plane.planeId));
+          setTarget((previous) =>
+            previous.kind === 'plane' && !ids.has(previous.planeId) ? ALL_WALLS : previous,
+          );
+          setAssignments((previous) =>
+            Object.fromEntries(Object.entries(previous).filter(([planeId]) => ids.has(planeId))),
+          );
+        } else {
+          // The service's own message names the right tool instead — "already part of a wall,
+          // try Split" — and the existing walls stay exactly as they were. Except for
+          // session_not_found (issue #15): the service's own wording ("start a new one") would
+          // send the Dealer to lose work that reopening recovers intact, so that one code gets a
+          // message of this surface's own.
+          setCorrectionMessage(
+            result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
+          );
+          setCorrectionCode(result.code);
+        }
+      })();
+    },
+    [armedTool, state.phase, state.sessionId],
+  );
+
+  const exportRender = useCallback(() => {
+    if (state.phase !== 'ready' || !state.sessionId || Object.keys(assignments).length === 0)
+      return;
+    setExportState((previous) => applyExportEvent(previous, { type: 'requested' }));
+    const payload = renderPayload(assignments, walls.planes);
+    void window.spectrapaint
+      .export(state.sessionId, payload, renderMode)
+      .then((result: ExportResult) => {
+        if (result.status === 'ready') {
+          setExportState((previous) =>
+            applyExportEvent(previous, {
+              type: 'ready',
+              filename: result.filename,
+              filePath: result.filePath,
+            }),
+          );
+        } else if (result.status === 'cancelled') {
+          setExportState((previous) => applyExportEvent(previous, { type: 'cancelled' }));
+        } else {
+          setExportState((previous) =>
+            applyExportEvent(previous, {
+              type: 'failed',
+              code: result.code,
+              message: result.message,
+            }),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[consultation] export failed:', error);
+        setExportState((previous) =>
+          applyExportEvent(previous, {
+            type: 'failed',
+            code: 'export_failed',
+            message: 'The export could not be completed. Please try again.',
+          }),
+        );
+      });
+  }, [state.phase, state.sessionId, assignments, walls.planes, renderMode]);
+
+  const dismissExport = useCallback(() => {
+    setExportState((previous) => applyExportEvent(previous, { type: 'dismiss' }));
+  }, []);
 
   return {
     state,
@@ -380,5 +559,13 @@ export function useConsultation(): Consultation {
     selectWall,
     renderMode,
     toggleRenderMode,
+    armedTool,
+    armTool,
+    correctWallsAt,
+    correctionMessage,
+    correctionCode,
+    exportState,
+    exportRender,
+    dismissExport,
   };
 }

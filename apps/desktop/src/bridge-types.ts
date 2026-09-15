@@ -64,6 +64,8 @@ export type CreateConsultationResult =
  */
 export interface WallPlaneOverlay {
   planeId: string;
+  /** Paintable Plane surface — wall or ceiling (CONTEXT.md). */
+  surface: 'wall' | 'ceiling';
   coverage: number;
   photoWidth: number;
   photoHeight: number;
@@ -74,13 +76,42 @@ export interface WallPlaneOverlay {
 /**
  * The walls found in a photo, or a failure carrying the service's own message — "no wall could be
  * found in that photo" being the case worth passing through verbatim.
+ *
+ * `note` is the service's plain-language explanation for an empty `planes` — automatic detection
+ * found nothing at all (ticket #10) — and `null` the rest of the time; never shown as an error,
+ * since the photo is still reachable through the correction surface's Add tool. `photoWidth`/
+ * `photoHeight` are top-level rather than read off `planes[0]`, because they must still be known
+ * when `planes` is empty: turning a tap into a point in the photo's own pixel space is exactly
+ * what the Add tool needs to do in that case.
+ *
+ * `qualityNote` (issue #15) is unrelated to `note`: it is the service's plain-language warning
+ * about the photo itself — dark, blurred, heavily clipped — never a reason preparation refuses it,
+ * and never cleared by a correction, which only ever changes the planes.
  */
 export type WallsResult =
-  | { status: 'ready'; planes: WallPlaneOverlay[] }
+  | {
+      status: 'ready';
+      planes: WallPlaneOverlay[];
+      note: string | null;
+      qualityNote: string | null;
+      photoWidth: number;
+      photoHeight: number;
+    }
   | { status: 'failed'; code: string; message: string };
 
+/** Which correction tool made the tap — Add, Split, Merge, or Add Ceiling (ticket #39). */
+export type CorrectionTool = 'add' | 'add-ceiling' | 'split' | 'merge';
+
+/** Where the Dealer tapped, in the prepared photo's own pixel space — the same space
+ * `WallsResult`'s `photoWidth`/`photoHeight` describe. */
+export interface TapPoint {
+  x: number;
+  y: number;
+}
+
 export type RenderResult =
-  { status: 'ready'; imageDataUrl: string } | { status: 'failed'; code: string; message: string };
+  | { status: 'ready'; imageDataUrl: string; executionProfile: string }
+  | { status: 'failed'; code: string; message: string };
 
 /**
  * One stored image from the library (issue #11): a Consultation's photo as prepared, or one of its
@@ -142,6 +173,17 @@ export interface SpectraPaintBridge {
   walls(sessionId: string): Promise<WallsResult>;
 
   /**
+   * Correct the detected Wall Planes by tapping — Add, Split or Merge (ticket #10). `point` is
+   * the tapped pixel in the photo's own space (`WallsResult.photoWidth`/`photoHeight`); main
+   * resolves which plane(s) it affects, so the renderer never names a plane id for this. Returns
+   * the updated plane list in the exact shape `walls()` does, so a correction's result is handled
+   * exactly like a fresh load. A tap that does not satisfy its tool's precondition — already
+   * covered, not on a plane, not near a seam — comes back as a `failed` result carrying the
+   * service's own message, safe to show as-is; the existing planes are untouched.
+   */
+  correctWalls(sessionId: string, tool: CorrectionTool, point: TapPoint): Promise<WallsResult>;
+
+  /**
    * The status right now. Read on mount, because the service can become ready before the boot
    * screen has finished loading and subscribed.
    */
@@ -156,4 +198,67 @@ export interface SpectraPaintBridge {
    * the secret in its header — the same rule as every image in this app — and returns a data URL.
    */
   storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult>;
+
+  /**
+   * Export the current repaint at full resolution as a JPEG and hand it to
+   * the OS share sheet (issue #12). The stored PNG archive is never handed
+   * out directly; a fresh JPEG is rendered and saved via the native dialog.
+   * The filename carries the Shade Code and name.
+   */
+  export(
+    sessionId: string,
+    shadeCodeOrAssignments: string | Record<string, string>,
+    mode?: 'realistic' | 'true_colour',
+  ): Promise<ExportResult>;
+
+  /**
+   * Bundles by bytes + disk free (issue #13).
+   */
+  storage(): Promise<ServiceResponse<{ bundles: BundleStorage[]; disk: DiskInfo }>>;
+
+  /** Delete a Consultation and its files (issue #13). */
+  deleteConsultation(consultationId: string): Promise<ServiceResponse>;
+
+  /** The shell's own low-disk probe (issue #13) — works even when the service is down. */
+  disk(): Promise<DiskProbe>;
+
+  // Execution profile and quality tier methods
+  /** Get the current execution profile (e.g., "gpu-better", "cpu-faster"). */
+  getExecutionProfile(): Promise<string>;
+
+  /** Set the execution profile (format: "hardware-quality", e.g., "gpu-better"). */
+  setExecutionProfile(profile: string): Promise<void>;
+
+  /** Get the current quality tier ("faster" or "better"). */
+  getQualityTier(): Promise<string>;
+
+  /** Set the quality tier ("faster" or "better"). */
+  setQualityTier(tier: string): Promise<void>;
+}
+
+export type ExportResult =
+  | { status: 'ready'; filePath: string; filename: string; executionProfile: string }
+  | { status: 'cancelled' }
+  | { status: 'failed'; code: string; message: string };
+
+export interface BundleStorage {
+  bundle_id: string;
+  name: string;
+  created_at: string;
+  consultation_count: number;
+  is_default: number;
+  bytes: number;
+}
+
+export interface DiskInfo {
+  free_bytes: number;
+  total_bytes: number;
+  low: boolean;
+  warning: string | null;
+}
+
+export interface DiskProbe {
+  freeBytes: number;
+  totalBytes: number;
+  low: boolean;
 }

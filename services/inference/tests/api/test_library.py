@@ -24,7 +24,7 @@ from spectrapaint.api.app import create_app
 from spectrapaint.api.preparation import Stage
 from spectrapaint.catalogue import CatalogueFileMissing
 from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID
-from spectrapaint.storage import DEFAULT_BUNDLE_NAME, Store, resolve_storage_dir
+from spectrapaint.storage import Store, resolve_storage_dir
 from tests.api.conftest import stub_preparation_stages
 
 SECRET = "test-secret-not-a-real-one"
@@ -80,7 +80,7 @@ def test_uploading_saves_a_consultation_without_anyone_pressing_save(
 ) -> None:
     session_id = upload(client, png_bytes(NEUTRAL_ROOM_SRGB))
 
-    default = next(b for b in store.list_bundles() if b["name"] == DEFAULT_BUNDLE_NAME)
+    default = next(b for b in store.list_bundles() if b["is_default"] == 1)
     consultations = store.list_consultations(default["bundle_id"])
     assert [c["consultation_id"] for c in consultations] == [session_id]
 
@@ -144,9 +144,7 @@ def test_deleting_a_bundle_moves_its_consultations_to_the_default_bundle(
 
     # The Consultation survives — under the default Bundle, not in the bin.
     default = next(
-        b
-        for b in client.get("/bundles", headers=auth()).json()["bundles"]
-        if b["name"] == DEFAULT_BUNDLE_NAME
+        b for b in client.get("/bundles", headers=auth()).json()["bundles"] if b["is_default"] == 1
     )
     remaining = client.get(f"/bundles/{default['bundle_id']}/consultations", headers=auth())
     assert [c["consultation_id"] for c in remaining.json()["consultations"]] == [session_id]
@@ -156,6 +154,29 @@ def test_an_unknown_bundle_is_a_clean_404(client: TestClient) -> None:
     response = client.get("/bundles/nope/consultations", headers=auth())
     assert response.status_code == 404
     assert response.json()["code"] == "bundle_not_found"
+
+
+def test_default_bundle_cannot_be_renamed(client: TestClient) -> None:
+    default = next(
+        b for b in client.get("/bundles", headers=auth()).json()["bundles"] if b["is_default"] == 1
+    )
+    response = client.patch(
+        f"/bundles/{default['bundle_id']}", headers=auth(), json={"name": "Hacked"}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "default_bundle_protected"
+    bundles = client.get("/bundles", headers=auth()).json()["bundles"]
+    assert [b["name"] for b in bundles].count("Consultations") == 1
+    assert default["bundle_id"] in {b["bundle_id"] for b in bundles}
+
+
+def test_default_bundle_cannot_be_deleted(client: TestClient) -> None:
+    default = next(
+        b for b in client.get("/bundles", headers=auth()).json()["bundles"] if b["is_default"] == 1
+    )
+    response = client.delete(f"/bundles/{default['bundle_id']}", headers=auth())
+    assert response.status_code == 409
+    assert response.json()["code"] == "default_bundle_protected"
 
 
 # -- stored renders -------------------------------------------------------------------------------

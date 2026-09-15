@@ -25,6 +25,7 @@ lets a read run while a write commits.
 import json
 import os
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -44,7 +45,8 @@ _CREATE_BUNDLES = """
 CREATE TABLE IF NOT EXISTS bundles (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -100,30 +102,114 @@ class Store:
 
         self._connection = sqlite3.connect(directory / DATABASE_FILENAME, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         # WAL lets a render being saved and a list being browsed happen at once, which a
         # counter-side app does constantly: save one render, show the previous one.
         self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA foreign_keys=ON")
         with self._connection:
             self._connection.execute(_CREATE_BUNDLES)
             self._connection.execute(_CREATE_CONSULTATIONS)
             self._connection.execute(_CREATE_RENDERS)
             for statement in _CREATE_INDEXES:
                 self._connection.execute(statement)
+        self._ensure_bundles_schema()
 
     # -- bundles -------------------------------------------------------------------------------
 
-    def create_bundle(self, name: str) -> dict:
+    def _ensure_bundles_schema(self) -> None:
+        """Migrate existing databases to the is_default column (review item #4)."""
+        columns = {
+            row["name"] for row in self._connection.execute("PRAGMA table_info(bundles)").fetchall()
+        }
+        if "is_default" not in columns:
+            with self._lock, self._connection:
+                self._connection.execute(
+                    "ALTER TABLE bundles ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"
+                )
+                # Backfill: the oldest bundle named Consultations becomes the default.
+                # If the default was renamed under the old name-matching code, no row
+                # matches the name — fall back to the oldest bundle overall, which is
+                # the renamed default (reproduced in review: Renamed by dealer + Sharma house).
+                cursor = self._connection.execute(
+                    """
+                    UPDATE bundles SET is_default = 1 WHERE id = (
+                        SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1
+                    )
+                    """,
+                    (DEFAULT_BUNDLE_NAME,),
+                )
+                if cursor.rowcount == 0:
+                    self._connection.execute(
+                        """
+                        UPDATE bundles SET is_default = 1 WHERE id = (
+                            SELECT id FROM bundles ORDER BY created_at LIMIT 1
+                        ) AND NOT EXISTS (SELECT 1 FROM bundles WHERE is_default = 1)
+                        """
+                    )
+        # Repair already-migrated DBs where previous backfill created a phantom
+        # Consultations (count==1 but wrong bundle). Idempotent, runs every init.
+        with self._lock, self._connection:
+            count = self._connection.execute(
+                "SELECT COUNT(*) FROM bundles WHERE is_default = 1"
+            ).fetchone()[0]
+            if count != 1:
+                self._connection.execute("UPDATE bundles SET is_default = 0")
+                self._connection.execute(
+                    """
+                    UPDATE bundles SET is_default = 1 WHERE id = (
+                        SELECT id FROM bundles ORDER BY created_at LIMIT 1
+                    ) AND (SELECT COUNT(*) FROM bundles) > 0
+                    """
+                )
+            else:
+                default = self._connection.execute(
+                    "SELECT id, name FROM bundles WHERE is_default = 1"
+                ).fetchone()
+                if default and default["name"] == DEFAULT_BUNDLE_NAME:
+                    cnt_default = self._connection.execute(
+                        "SELECT COUNT(*) FROM consultations WHERE bundle_id = ?",
+                        (default["id"],),
+                    ).fetchone()[0]
+                    if cnt_default == 0:
+                        candidate = self._connection.execute(
+                            """
+                            SELECT id FROM bundles WHERE is_default = 0
+                            AND EXISTS (
+                                SELECT 1 FROM consultations WHERE bundle_id = bundles.id
+                            )
+                            ORDER BY created_at LIMIT 1
+                            """
+                        ).fetchone()
+                        if candidate:
+                            self._connection.execute(
+                                "UPDATE bundles SET is_default = 0 WHERE is_default = 1"
+                            )
+                            self._connection.execute(
+                                "UPDATE bundles SET is_default = 1 WHERE id = ?",
+                                (candidate["id"],),
+                            )
+
+    def create_bundle(self, name: str, *, is_default: bool = False) -> dict:
         bundle_id = f"bundle_{os.urandom(12).hex()}"
         created_at = _now()
-        with self._connection:
+        is_default_int = 1 if is_default else 0
+        with self._lock, self._connection:
             self._connection.execute(
-                "INSERT INTO bundles (id, name, created_at) VALUES (?, ?, ?)",
-                (bundle_id, name, created_at),
+                "INSERT INTO bundles (id, name, created_at, is_default) VALUES (?, ?, ?, ?)",
+                (bundle_id, name, created_at, is_default_int),
             )
-        return {"bundle_id": bundle_id, "name": name, "created_at": created_at}
+        return {
+            "bundle_id": bundle_id,
+            "name": name,
+            "created_at": created_at,
+            "is_default": is_default_int,
+        }
 
     def rename_bundle(self, bundle_id: str, name: str) -> bool:
-        with self._connection:
+        if self.is_default_bundle(bundle_id):
+            return False
+        with self._lock, self._connection:
             cursor = self._connection.execute(
                 "UPDATE bundles SET name = ? WHERE id = ?", (name, bundle_id)
             )
@@ -136,42 +222,63 @@ class Store:
         if not self._bundle_exists(bundle_id):
             return False
 
-        default_id = self._default_bundle_id()
-        if bundle_id == default_id:
+        if self.is_default_bundle(bundle_id):
             return False
 
-        with self._connection:
-            self._connection.execute("DELETE FROM bundles WHERE id = ?", (bundle_id,))
+        default_id = self._default_bundle_id()
+
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET bundle_id = ? WHERE bundle_id = ?",
                 (default_id, bundle_id),
             )
+            self._connection.execute("DELETE FROM bundles WHERE id = ?", (bundle_id,))
         return True
 
     def list_bundles(self) -> list[dict]:
         self._default_bundle_id()
-        rows = self._connection.execute(
-            "SELECT b.id AS bundle_id, b.name, b.created_at,"
-            " (SELECT count(*) FROM consultations c WHERE c.bundle_id = b.id) AS consultation_count"
-            " FROM bundles b ORDER BY b.created_at"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT b.id AS bundle_id, b.name, b.created_at, b.is_default, "
+                "(SELECT count(*) FROM consultations c WHERE c.bundle_id = b.id) "
+                "AS consultation_count FROM bundles b ORDER BY b.created_at"
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def _bundle_exists(self, bundle_id: str) -> bool:
-        row = self._connection.execute(
-            "SELECT 1 FROM bundles WHERE id = ?", (bundle_id,)
-        ).fetchone()
-        return row is not None
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM bundles WHERE id = ?", (bundle_id,)
+            ).fetchone()
+            return row is not None
+
+    def is_default_bundle(self, bundle_id: str) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT is_default FROM bundles WHERE id = ?", (bundle_id,)
+            ).fetchone()
+            return bool(row and row["is_default"])
 
     def _default_bundle_id(self) -> str:
         """The default Bundle's id, creating it if this is the first ask."""
-        row = self._connection.execute(
-            "SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1",
-            (DEFAULT_BUNDLE_NAME,),
-        ).fetchone()
-        if row is not None:
-            return str(row["id"])
-        return str(self.create_bundle(DEFAULT_BUNDLE_NAME)["bundle_id"])
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id FROM bundles WHERE is_default = 1 ORDER BY created_at LIMIT 1",
+            ).fetchone()
+            if row is not None:
+                return str(row["id"])
+            # Fallback for databases predating is_default: look up by legacy name.
+            legacy = self._connection.execute(
+                "SELECT id FROM bundles WHERE name = ? ORDER BY created_at LIMIT 1",
+                (DEFAULT_BUNDLE_NAME,),
+            ).fetchone()
+            if legacy is not None:
+                with self._connection:
+                    self._connection.execute(
+                        "UPDATE bundles SET is_default = 1 WHERE id = ?", (str(legacy["id"]),)
+                    )
+                return str(legacy["id"])
+            return str(self.create_bundle(DEFAULT_BUNDLE_NAME, is_default=True)["bundle_id"])
 
     def require_bundle(self, bundle_id: str) -> bool:
         return self._bundle_exists(bundle_id)
@@ -183,7 +290,7 @@ class Store:
         walking away mid-consultation cannot lose the Room Photo."""
         relative = f"{_PHOTO_DIR}/{consultation_id}.orig"
         self._write_bytes(relative, original_photo)
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "INSERT INTO consultations (id, bundle_id, original_path, created_at)"
                 " VALUES (?, ?, ?, ?)",
@@ -191,75 +298,206 @@ class Store:
             )
 
     def save_preparation(
-        self, consultation_id: str, photo_png: bytes, mattes: list[tuple[str, bytes]]
+        self,
+        consultation_id: str,
+        photo_png: bytes,
+        mattes: list[tuple[str, bytes, str]] | list[tuple[str, bytes]],
     ) -> None:
         """Record what preparation produced, as the images reopening will load.
 
         The photo is stored at preview scale — the scale every render so far has been made at —
-        and one Alpha Matte per Wall Plane. Together they are everything "try another Shade"
-        needs, which is why a reopened Consultation skips preparation entirely.
+        and one Alpha Matte per Paintable Plane (walls and ceiling). Together they are everything
+        "try another Shade" needs, which is why a reopened Consultation skips preparation entirely.
+        Each matte entry carries its surface (wall | ceiling) so a reopened ceiling restores with
+        the right base-colour grouping — a ceiling grouped with a wall breaks silently.
         """
 
         photo_relative = f"{_PHOTO_DIR}/{consultation_id}.png"
         self._write_bytes(photo_relative, photo_png)
 
         planes = []
-        for plane_id, matte_png in mattes:
+        for entry in mattes:
+            if len(entry) == 3:
+                plane_id, matte_png, surface = entry  # type: ignore[misc]
+            else:
+                plane_id, matte_png = entry  # type: ignore[misc]
+                surface = "wall"
             relative = f"{_MATTE_DIR}/{consultation_id}_{plane_id}.png"
             self._write_bytes(relative, matte_png)
-            planes.append({"plane_id": plane_id, "matte_path": relative})
+            planes.append({"plane_id": plane_id, "matte_path": relative, "surface": surface})
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET photo_path = ?, planes_json = ? WHERE id = ?",
                 (photo_relative, json.dumps(planes), consultation_id),
             )
 
-    def preparation_of(self, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes]]] | None:
+    def preparation_of(
+        self, consultation_id: str
+    ) -> tuple[bytes, list[tuple[str, bytes, str]]] | None:
         """The stored photo and Alpha Mattes, or None when this Consultation was never prepared
-        (its session ended before preparation finished)."""
-
-        row = self._connection.execute(
-            "SELECT photo_path, planes_json FROM consultations WHERE id = ?", (consultation_id,)
-        ).fetchone()
-        if row is None or row["photo_path"] is None or row["planes_json"] is None:
-            return None
-
-        photo = self._read_bytes(str(row["photo_path"]))
-        if photo is None:
-            return None
-
-        planes: list[tuple[str, bytes]] = []
-        for plane in json.loads(row["planes_json"]):
-            matte = self._read_bytes(str(plane["matte_path"]))
-            if matte is None:
+        (its session ended before preparation finished). Each matte entry carries its surface
+        (wall | ceiling); older rows without a surface are read as wall for backward compat."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT photo_path, planes_json FROM consultations WHERE id = ?", (consultation_id,)
+            ).fetchone()
+            if row is None or row["photo_path"] is None or row["planes_json"] is None:
                 return None
-            planes.append((str(plane["plane_id"]), matte))
-        return photo, planes
+
+            photo = self._read_bytes(str(row["photo_path"]))
+            if photo is None:
+                return None
+
+            planes: list[tuple[str, bytes, str]] = []
+            for plane in json.loads(row["planes_json"]):
+                matte = self._read_bytes(str(plane["matte_path"]))
+                if matte is None:
+                    return None
+                surface = str(plane.get("surface", "wall"))
+                planes.append((str(plane["plane_id"]), matte, surface))
+            return photo, planes
+
+    def original_bytes(self, consultation_id: str) -> bytes | None:
+        """The original uploaded bytes for this Consultation, if stored."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path FROM consultations WHERE id = ?", (consultation_id,)
+            ).fetchone()
+            if row is None or row["original_path"] is None:
+                return None
+            return self._read_bytes(str(row["original_path"]))
 
     def consultation_exists(self, consultation_id: str) -> bool:
-        row = self._connection.execute(
-            "SELECT 1 FROM consultations WHERE id = ?", (consultation_id,)
-        ).fetchone()
-        return row is not None
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM consultations WHERE id = ?", (consultation_id,)
+            ).fetchone()
+            return row is not None
 
     def place_consultation_in_bundle(self, consultation_id: str, bundle_id: str) -> None:
         """File one Consultation under one Bundle — how a job's photos travel together."""
 
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE consultations SET bundle_id = ? WHERE id = ?",
                 (bundle_id, consultation_id),
             )
 
     def list_consultations(self, bundle_id: str) -> list[dict]:
-        rows = self._connection.execute(
-            "SELECT c.id AS consultation_id, c.created_at,"
-            " (SELECT count(*) FROM renders r WHERE r.consultation_id = c.id) AS render_count"
-            " FROM consultations c WHERE c.bundle_id = ? ORDER BY c.created_at DESC",
-            (bundle_id,),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT c.id AS consultation_id, c.created_at,"
+                " (SELECT count(*) FROM renders r WHERE r.consultation_id = c.id) AS render_count"
+                " FROM consultations c WHERE c.bundle_id = ? ORDER BY c.created_at DESC",
+                (bundle_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def bundle_bytes(self, bundle_id: str) -> int:
+        """Total bytes on disk used by this Bundle's Consultations and their Renders."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id FROM consultations WHERE bundle_id = ?", (bundle_id,)
+            ).fetchall()
+            consultation_ids = [str(row["id"]) for row in rows]
+        total = 0
+        for cid in consultation_ids:
+            total += self.consultation_bytes(cid)
+        return total
+
+    def storage_overview(self) -> list[dict]:
+        """Bundles with their disk usage, sorted largest first so deletion is informed."""
+        bundles = self.list_bundles()
+        for bundle in bundles:
+            bundle["bytes"] = self.bundle_bytes(str(bundle["bundle_id"]))
+        bundles.sort(key=lambda b: b["bytes"], reverse=True)
+        return bundles
+
+    def consultation_bytes(self, consultation_id: str) -> int:
+        """Bytes for one Consultation: its photos, mattes and renders."""
+        total = 0
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path, photo_path, planes_json FROM consultations WHERE id = ?",
+                (consultation_id,),
+            ).fetchone()
+            if row is not None:
+                for key in ("original_path", "photo_path"):
+                    rel = row[key]
+                    if rel:
+                        total += self._file_size(str(rel))
+                if row["planes_json"]:
+                    try:
+                        planes = json.loads(row["planes_json"])
+                        for plane in planes:
+                            rel = plane.get("matte_path")
+                            if rel:
+                                total += self._file_size(str(rel))
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+            renders = self._connection.execute(
+                "SELECT png_path FROM renders WHERE consultation_id = ?", (consultation_id,)
+            ).fetchall()
+            for r in renders:
+                total += self._file_size(str(r["png_path"]))
+        return total
+
+    def delete_consultation(self, consultation_id: str) -> bool:
+        """Delete a Consultation and every file it owns: photo, mattes and renders."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT original_path, photo_path, planes_json FROM consultations WHERE id = ?",
+                (consultation_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            renders = self._connection.execute(
+                "SELECT png_path FROM renders WHERE consultation_id = ?", (consultation_id,)
+            ).fetchall()
+            render_paths = [str(r["png_path"]) for r in renders]
+
+            # Collect matte paths before deleting rows.
+            matte_paths: list[str] = []
+            if row["planes_json"]:
+                try:
+                    for plane in json.loads(row["planes_json"]):
+                        rel = plane.get("matte_path")
+                        if rel:
+                            matte_paths.append(str(rel))
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
+            photo_paths = [str(row[p]) for p in ("original_path", "photo_path") if row[p]]
+
+            with self._connection:
+                self._connection.execute(
+                    "DELETE FROM renders WHERE consultation_id = ?", (consultation_id,)
+                )
+                self._connection.execute(
+                    "DELETE FROM consultations WHERE id = ?", (consultation_id,)
+                )
+
+        # Remove files outside the lock — DB is already consistent.
+        for rel in [*photo_paths, *matte_paths, *render_paths]:
+            try:
+                path = self.directory / rel
+                if path.is_file():
+                    path.unlink()
+            except OSError:
+                # Log but do not fail the delete — the record is already gone.
+                pass
+        return True
+
+    def _file_size(self, relative_path: str) -> int:
+        try:
+            path = self.directory / relative_path
+            if path.is_file():
+                return path.stat().st_size
+        except OSError:
+            pass
+        return 0
 
     # -- renders ---------------------------------------------------------------------------------
 
@@ -285,7 +523,7 @@ class Store:
         render_id = os.urandom(16).hex()
         relative = f"{_RENDER_DIR}/{render_id}.png"
         self._write_bytes(relative, png)
-        with self._connection:
+        with self._lock, self._connection:
             self._connection.execute(
                 "INSERT INTO renders ("
                 " id, consultation_id, created_at, execution_profile, mode,"
@@ -311,41 +549,40 @@ class Store:
         return render_id
 
     def list_renders(self, consultation_id: str) -> list[dict]:
-        rows = self._connection.execute(
-            "SELECT id AS render_id, created_at, execution_profile, mode,"
-            " assignments_json, resolved_lab_json,"
-            " catalogue_id, catalogue_name, catalogue_version, width, height"
-            " FROM renders WHERE consultation_id = ? ORDER BY created_at",
-            (consultation_id,),
-        ).fetchall()
-        results = []
-        for row in rows:
-            entry = dict(row)
-            entry["assignments"] = json.loads(entry.pop("assignments_json"))
-            entry["resolved_lab"] = json.loads(entry.pop("resolved_lab_json"))
-            results.append(entry)
-        return results
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id AS render_id, created_at, execution_profile, mode,"
+                " assignments_json, resolved_lab_json,"
+                " catalogue_id, catalogue_name, catalogue_version, width, height"
+                " FROM renders WHERE consultation_id = ? ORDER BY created_at",
+                (consultation_id,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                entry = dict(row)
+                entry["assignments"] = json.loads(entry.pop("assignments_json"))
+                entry["resolved_lab"] = json.loads(entry.pop("resolved_lab_json"))
+                results.append(entry)
+            return results
 
     def render_png(self, render_id: str) -> bytes | None:
         """The stored render, exactly the bytes that were written — never re-encoded."""
-        row = self._connection.execute(
-            "SELECT png_path FROM renders WHERE id = ?", (render_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        return self._read_bytes(str(row["png_path"]))
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT png_path FROM renders WHERE id = ?", (render_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self._read_bytes(str(row["png_path"]))
 
     def render_consultation(self, render_id: str) -> str | None:
-        row = self._connection.execute(
-            "SELECT consultation_id FROM renders WHERE id = ?", (render_id,)
-        ).fetchone()
-        return None if row is None else str(row["consultation_id"])
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT consultation_id FROM renders WHERE id = ?", (render_id,)
+            ).fetchone()
+            return None if row is None else str(row["consultation_id"])
 
     # -- image plumbing --------------------------------------------------------------------------
-
-    def read_image(self, relative_path: str) -> bytes | None:
-        """Bytes from the store by recorded path — the only way file paths leave this class."""
-        return self._read_bytes(relative_path)
 
     def _write_bytes(self, relative_path: str, contents: bytes) -> None:
         path = self.directory / relative_path

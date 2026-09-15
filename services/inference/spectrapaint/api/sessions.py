@@ -79,12 +79,19 @@ class SessionRegistry:
         # Live session id -> the Consultation its work belongs to. The same id on upload; the
         # Consultation's original id after a reopen.
         self._consultations: dict[str, str] = {}
-        self._persisted: set[str] = set()
+        self._persisted: set[str] = (
+            set()
+        )  # guarded by consultation_id, not session_id (see persist_preparation)
+        # Original upload bytes per live session, kept for full-resolution export
+        # (issue #12). Preview preparation downscales; export re-renders from the
+        # original without re-running the model.
+        self._originals: dict[str, bytes] = {}
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
         job = PreparationJob(self._preparation_stages(contents))
         self._sessions[session_id] = job
+        self._originals[session_id] = contents
         if self._store is not None:
             # Auto-save: the photo exists as a Consultation from this moment, whatever happens next.
             self._store.register_consultation(session_id, contents)
@@ -111,23 +118,33 @@ class SessionRegistry:
         """The Consultation this live session belongs to."""
         return self._consultations.get(session_id)
 
+    def original_bytes(self, session_id: str) -> bytes | None:
+        """The original upload bytes for this live session, if held in memory."""
+        return self._originals.get(session_id)
+
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
-        """Store what preparation produced, once per session.
+        """Store what preparation produced, once per consultation.
 
         Called from ``require_photo`` — the one gate every render passes — so the artifacts exist
         before the first repaint does, and a reopened Consultation never re-runs preparation. A
         second call is a no-op: preparation runs once per photo, so what was stored is final.
+        Guard on consultation_id, not session_id — a reopened session has a fresh id mapped to
+        the original consultation, so a session guard would re-encode and rewrite on every reopen.
         """
 
-        if self._store is None or session_id in self._persisted:
+        if self._store is None:
             return
         consultation_id = self._consultations.get(session_id)
         if consultation_id is None:
             return
+        if consultation_id in self._persisted:
+            return
 
-        mattes = [(plane.plane_id, _encode_matte(plane.alpha)) for plane in photo.planes]
+        mattes = [
+            (plane.plane_id, _encode_matte(plane.alpha), plane.surface) for plane in photo.planes
+        ]
         self._store.save_preparation(consultation_id, _encode_photo(photo.srgb), mattes)
-        self._persisted.add(session_id)
+        self._persisted.add(consultation_id)
 
     def job(self, session_id: str) -> PreparationJob | None:
         return self._sessions.get(session_id)
@@ -138,6 +155,11 @@ class SessionRegistry:
         if session_id not in self._sessions:
             return False
         del self._sessions[session_id]
+        # The live mapping is per-session; the persisted set is per-consultation and stays
+        # so a reopened session still guards on consultation_id. Without this pop the
+        # _consultations dict grows for the life of the process.
+        self._consultations.pop(session_id, None)
+        self._originals.pop(session_id, None)
         return True
 
 
@@ -145,12 +167,15 @@ def _registry(request: Request) -> SessionRegistry:
     return request.app.state.session_registry
 
 
-async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
-    """The session's prepared photo, or a clean error.
+def require_job(request: Request, session_id: str) -> PreparationJob:
+    """The session's job, or a clean error — the lookup ``require_photo`` already does, exposed
+    on its own for a route that also needs to *mutate* the session afterwards.
 
-    Waits for the session's background preparation to reach its terminal event, then returns the
-    photo it produced. Public so the render endpoint shares the same message and response shape as
-    every other session-scoped route.
+    Ticket #10's correction routes are the only callers: they read the current photo through
+    ``require_photo`` as normal, then write a correction back through this job's
+    ``replace_planes``/``cache_features``. Kept separate from ``require_photo`` rather than
+    changing its return type, so the two existing routes that only ever read (``planes.py``,
+    ``renders.py``) stay exactly as they were.
     """
 
     job = _registry(request).job(session_id)
@@ -160,7 +185,23 @@ async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
             code=SESSION_NOT_FOUND,
             message=_MESSAGE_SESSION_NOT_FOUND,
         )
+    return job
 
+
+async def require_photo(request: Request, session_id: str) -> PreparedPhoto:
+    """The session's prepared photo, or a clean error.
+
+    Waits for the session's background preparation to reach its terminal event, then returns the
+    photo it produced — or, since ticket #10, the same photo with its Wall Planes as any
+    correction since has left them: ``PreparationJob`` mutates its own cached result in place
+    rather than preparation running again, so this always reads the session's current state, not
+    a stale first answer.
+
+    Public so the render endpoint shares the same message and response shape as every other
+    session-scoped route.
+    """
+
+    job = require_job(request, session_id)
     photo = await job.photo()
     if photo is None:
         raise ServiceError(

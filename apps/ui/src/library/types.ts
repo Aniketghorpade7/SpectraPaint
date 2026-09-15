@@ -10,6 +10,7 @@ export interface BundleSummary {
   name: string;
   created_at: string;
   consultation_count: number;
+  is_default: number;
 }
 
 export interface ConsultationSummary {

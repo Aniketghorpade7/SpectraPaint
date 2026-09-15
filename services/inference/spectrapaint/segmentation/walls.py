@@ -25,33 +25,40 @@ from dataclasses import dataclass
 import numpy as np
 
 from spectrapaint.runtime.graphs import Graphs
-from spectrapaint.segmentation.matte import refiner_alpha, wall_alpha
+from spectrapaint.segmentation.matte import RefinerFeatures, decode_alpha, encode_photo, wall_alpha
 from spectrapaint.segmentation.prompts import prompts_for
 from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
 from spectrapaint.segmentation.split import split_alpha_into_planes
 
-# Shown to the Dealer as-is when a photo has no wall worth painting.
+# Shown to the Dealer as-is when a photo has no wall worth painting. Not a dead end (conventions.md
+# §5, ticket #10): preparation still finishes, so this is the note on an otherwise-ready photo with
+# zero Wall Planes, and the correction surface's Add tool is where the Dealer goes next.
 MESSAGE_NO_WALL_FOUND = (
-    "No wall could be found in that photo. Please try a photo taken further back, with more of the "
-    "wall in view."
+    "No wall could be found in that photo automatically. Tap where a wall is to add it, or try a "
+    "photo taken further back, with more of the wall in view."
 )
 
 # Below this fraction of the frame there is no wall worth offering to repaint. A wall glimpsed
 # between furniture in two percent of the pixels is not something a Customer can judge a colour
 # from, and recolouring it would look like a rendering fault rather than a paint choice.
 MINIMUM_WALL_FRACTION = 0.02
+# Same threshold for a ceiling — a sliver of ceiling is not a paintable surface either.
+MINIMUM_CEILING_FRACTION = 0.02
 
 # The Wall Plane id for the single region this ticket produces. Ticket #7 replaces this with one id
 # per plane; the render contract's `assignments` map already accommodates that without changing.
 FIRST_WALL_PLANE_ID = "wall_plane_1"
+CEILING_PLANE_ID = "ceiling_plane_1"
 
 
 class NoWallFound(Exception):
-    """This photo has no wall to paint.
+    """Automatic detection found no wall to paint in this photo.
 
     Carries a plain-language ``message`` the UI may show as-is, and the usual ``detail`` for the
     log — a Dealer cannot act on a coverage fraction, and whoever reads the log cannot act without
-    one (conventions.md §5).
+    one (conventions.md §5). Since ticket #10, preparation catches this rather than letting it fail
+    the session: the photo still becomes a ready, zero-plane consultation the Dealer can tap a wall
+    into, and this is where that note comes from.
     """
 
     def __init__(self, detail: str) -> None:
@@ -62,15 +69,31 @@ class NoWallFound(Exception):
 
 @dataclass(frozen=True)
 class WallPlane:
-    """One Wall Plane: its id, and the soft Alpha Matte saying which pixels it covers."""
+    """One Paintable Plane: its id, surface kind, and the soft
+    Alpha Matte saying which pixels it covers.
+
+    ``surface`` is ``wall`` or ``ceiling`` — the ``surface`` field
+    the REST contract exposes (CONTEXT.md: Paintable Plane).
+    Until this ticket every plane was a wall; a ceiling is the
+    same treatment without the plane-splitting step, and its base
+    colour is never grouped with a wall's even when the two are
+    a similar pale colour.
+    """
 
     plane_id: str
     alpha: np.ndarray  # HxWx1 float32 in [0, 1]
+    surface: str = "wall"  # "wall" | "ceiling"
 
     @property
     def coverage(self) -> float:
         """The share of the photo this plane covers, weighted by how covered each pixel is."""
         return float(self.alpha.mean())
+
+
+def get_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
+    """The semantic pass without a threshold — always returns what the model thinks is there."""
+
+    return semantic_regions(graphs.semantic, photo_u8)
 
 
 def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
@@ -81,7 +104,7 @@ def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
     after the refiner has run has spent the most expensive seconds in the pipeline.
     """
 
-    regions = semantic_regions(graphs.semantic, photo_u8)
+    regions = get_regions(graphs, photo_u8)
     if regions.wall_fraction < MINIMUM_WALL_FRACTION:
         raise NoWallFound(
             f"the semantic pass labelled {regions.wall_fraction:.1%} of the photo as wall, "
@@ -90,8 +113,18 @@ def wall_regions(graphs: Graphs, photo_u8: np.ndarray) -> SemanticRegions:
     return regions
 
 
-def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) -> list[WallPlane]:
-    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7)."""
+def planes_from(
+    graphs: Graphs,
+    photo_u8: np.ndarray,
+    regions: SemanticRegions,
+    features: RefinerFeatures,
+) -> list[WallPlane]:
+    """Refine the semantic region into Wall Planes — split by vertical structure (issue #7).
+
+    ``features`` is the photo's already-encoded SAM 2 output (:func:`encode_photo`), supplied
+    rather than computed here so preparation can hold onto it: ticket #10's corrections decode
+    against the same features without paying the encode a second time.
+    """
 
     prompts = prompts_for(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
@@ -99,7 +132,7 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
             "no point sits far enough inside the wall region to prompt the refiner with"
         )
 
-    refined = refiner_alpha(graphs, photo_u8, prompts)
+    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
     alpha = wall_alpha(photo_u8, regions, refined)
 
     # Single-plane guard: the matte as a whole must still cover enough.
@@ -168,11 +201,77 @@ def planes_from(graphs: Graphs, photo_u8: np.ndarray, regions: SemanticRegions) 
     return wall_planes
 
 
-def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
-    """Every Wall Plane in the photo, in one call.
+def ceiling_from(
+    graphs: Graphs,
+    photo_u8: np.ndarray,
+    regions: SemanticRegions,
+    features: RefinerFeatures,
+) -> WallPlane | None:
+    """One Ceiling Plane, if the semantic ceiling is worth offering — no splitting.
 
-    Preparation runs the two halves as separate stages so it can report progress between them;
-    this is the same pipeline for callers that have nothing to report to.
+    A ceiling in one Room Photo is essentially always one region (unlike a wall which is split by
+    vertical structure), so this is a single decode plus the same soft-matte treatment
+    ``segmentation/matte.py`` already has, almost certainly without ``split.py``'s plane splitting.
+    Already-encoded features are reused, so this costs the cheap ~120 ms decode rather than a second
+    ~2 s encode (implementation-decisions.md #39).
+    Returns ``None`` when no ceiling worth offering is found — the common case for a photo cropped
+    to the walls, not a failure.
     """
 
-    return planes_from(graphs, photo_u8, wall_regions(graphs, photo_u8))
+    from spectrapaint.segmentation.matte import ceiling_alpha
+    from spectrapaint.segmentation.prompts import prompts_for_ceiling
+
+    if regions.ceiling_fraction < MINIMUM_CEILING_FRACTION:
+        return None
+    prompts = prompts_for_ceiling(regions, graphs.refiner_decoder.config)
+    if prompts.positive_count == 0:
+        return None
+    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    alpha = ceiling_alpha(photo_u8, regions, refined)
+    candidate = WallPlane(plane_id=CEILING_PLANE_ID, alpha=alpha, surface="ceiling")
+    if candidate.coverage < MINIMUM_CEILING_FRACTION:
+        return None
+    return candidate
+
+
+def find_wall_planes(graphs: Graphs, photo_u8: np.ndarray) -> list[WallPlane]:
+    """Every Paintable Plane in the photo, in one call.
+
+    Preparation runs the stages separately so it can report progress between them and keep the
+    encoded features afterwards; this is the same pipeline for callers that have nothing to report
+    to and nothing to hold onto once it returns. Includes wall planes (split) and at most one
+    ceiling plane.
+    """
+
+    regions = wall_regions(graphs, photo_u8)
+    features = encode_photo(graphs, photo_u8)
+    wall_planes = planes_from(graphs, photo_u8, regions, features)
+    ceiling = ceiling_from(graphs, photo_u8, regions, features)
+    if ceiling is not None:
+        # Ensure ceiling does not double-claim wall pixels — wall and ceiling mattes are already
+        # exclusive via semantic exclusions, but resolve any residual overlap by stronger claim.
+        wall_claim = np.zeros(photo_u8.shape[:2], dtype=np.float32)
+        for plane in wall_planes:
+            wall_claim = np.maximum(wall_claim, plane.alpha[..., 0])
+        ceiling_claim = ceiling.alpha[..., 0]
+        overlap = (wall_claim >= 0.5) & (ceiling_claim >= 0.5)
+        if np.any(overlap):
+            # Zero ceiling where wall is confidently covering — wall wins where both claim.
+            resolved = np.where(ceiling_claim > wall_claim, ceiling_claim, 0.0).astype(np.float32)
+            # Only zero where wall confidently claims;
+            # keep ceiling elsewhere.
+            mask = wall_claim >= 0.5
+            resolved = np.where(
+                mask & (wall_claim >= ceiling_claim),
+                0.0,
+                ceiling.alpha[..., 0],
+            ).astype(np.float32)
+            ceiling = WallPlane(
+                plane_id=ceiling.plane_id,
+                alpha=resolved[..., None],
+                surface="ceiling",
+            )
+            if ceiling.coverage < MINIMUM_CEILING_FRACTION:
+                return wall_planes
+        return [*wall_planes, ceiling]
+    return wall_planes

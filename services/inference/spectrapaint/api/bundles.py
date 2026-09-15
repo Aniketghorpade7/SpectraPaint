@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from spectrapaint.api.errors import (
     BUNDLE_NOT_FOUND,
     CONSULTATION_NOT_FOUND,
+    DEFAULT_BUNDLE_PROTECTED,
     MALFORMED_REQUEST,
     PREPARATION_UNAVAILABLE,
     RENDER_NOT_FOUND,
@@ -45,6 +46,7 @@ router = APIRouter(tags=["library"])
 MAX_BUNDLE_NAME_LENGTH = 80
 
 _MESSAGE_BUNDLE_NOT_FOUND = "That bundle is not in your library."
+_MESSAGE_DEFAULT_BUNDLE_PROTECTED = "The default bundle cannot be renamed or deleted."
 _MESSAGE_CONSULTATION_NOT_FOUND = "That consultation is not in your library."
 _MESSAGE_RENDER_NOT_FOUND = "That repaint is not in this consultation's history."
 _MESSAGE_PREPARATION_UNAVAILABLE = (
@@ -94,7 +96,20 @@ async def create_bundle(request: Request, body: BundleCreate) -> dict:
 
 @router.patch("/bundles/{bundle_id}")
 async def rename_bundle(request: Request, bundle_id: str, body: BundleCreate) -> dict:
-    renamed = _store(request).rename_bundle(bundle_id, _clean_name(body.name))
+    store = _store(request)
+    if not store.require_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=BUNDLE_NOT_FOUND,
+            message=_MESSAGE_BUNDLE_NOT_FOUND,
+        )
+    if store.is_default_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_409_CONFLICT,
+            code=DEFAULT_BUNDLE_PROTECTED,
+            message=_MESSAGE_DEFAULT_BUNDLE_PROTECTED,
+        )
+    renamed = store.rename_bundle(bundle_id, _clean_name(body.name))
     if not renamed:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,7 +121,20 @@ async def rename_bundle(request: Request, bundle_id: str, body: BundleCreate) ->
 
 @router.delete("/bundles/{bundle_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bundle(request: Request, bundle_id: str) -> None:
-    deleted = _store(request).delete_bundle(bundle_id)
+    store = _store(request)
+    if not store.require_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=BUNDLE_NOT_FOUND,
+            message=_MESSAGE_BUNDLE_NOT_FOUND,
+        )
+    if store.is_default_bundle(bundle_id):
+        raise ServiceError(
+            status_code=status.HTTP_409_CONFLICT,
+            code=DEFAULT_BUNDLE_PROTECTED,
+            message=_MESSAGE_DEFAULT_BUNDLE_PROTECTED,
+        )
+    deleted = store.delete_bundle(bundle_id)
     if not deleted:
         raise ServiceError(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -228,7 +256,7 @@ async def reopen_consultation(request: Request, consultation_id: str) -> dict[st
 # -- helpers -------------------------------------------------------------------------------------
 
 
-def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes]]]:
+def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple[str, bytes, str]]]:
     stored = store.preparation_of(consultation_id)
     if stored is None:
         if not store.consultation_exists(consultation_id):
@@ -245,22 +273,36 @@ def _require_preparation(store, consultation_id: str) -> tuple[bytes, list[tuple
     return stored
 
 
-def _prepared_photo_from(photo_png: bytes, mattes: list[tuple[str, bytes]]) -> PreparedPhoto:
+def _prepared_photo_from(
+    photo_png: bytes, mattes: list[tuple[str, bytes]] | list[tuple[str, bytes, str]]
+) -> PreparedPhoto:
     """Rebuild the prepared photo from its stored images.
 
     This is the inverse of what sessions.py encodes: the photo decodes to the same sRGB array
     preparation produced, the linear form follows from it through the same LUT the decode stage
     uses, and each matte decodes back to its float Alpha. No model runs — which is the point.
+    Each matte now carries its surface (wall | ceiling); older rows without it default to wall.
     """
 
     with Image.open(io.BytesIO(photo_png)) as image:
         srgb = np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
 
     planes = []
-    for plane_id, matte_png in mattes:
+    for entry in mattes:
+        if len(entry) == 3:
+            plane_id, matte_png, surface = entry  # type: ignore[misc]
+        else:
+            plane_id, matte_png = entry  # type: ignore[misc]
+            surface = "wall"
         with Image.open(io.BytesIO(matte_png)) as image:
             channel = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
-        planes.append(WallPlane(plane_id=plane_id, alpha=channel.reshape((*channel.shape, 1))))
+        planes.append(
+            WallPlane(
+                plane_id=plane_id,
+                alpha=channel.reshape((*channel.shape, 1)),
+                surface=surface,
+            )
+        )
 
     return PreparedPhoto(
         linear=np.ascontiguousarray(linearise_u8(srgb), dtype=np.float32),

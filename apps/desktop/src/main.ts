@@ -1,12 +1,31 @@
-import { app, BrowserWindow, type WebContents } from 'electron';
+import { app, BrowserWindow, type WebContents, ipcMain } from 'electron';
 import path from 'node:path';
 
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
+import { registerCorrectionsBridge } from './corrections-bridge';
+import {
+  EXECUTION_PROFILE_GET_CHANNEL,
+  EXECUTION_PROFILE_SET_CHANNEL,
+  QUALITY_TIER_GET_CHANNEL,
+  QUALITY_TIER_SET_CHANNEL,
+} from './channels';
 import { registerCreateConsultationBridge } from './create-consultation';
+import { registerExportBridge } from './export-bridge';
+import {
+  getExecutionProfile,
+  getHardwareProfile,
+  getQualityTier,
+  restoreQualityTier,
+  setHardwareProfile,
+  setOnProfileChange,
+  setQualityTier,
+} from './execution-profile';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
+import { registerDiskBridge } from './disk-bridge';
+import { registerStorageBridge } from './storage-bridge';
 import { registerStoredImageBridge } from './stored-image-bridge';
 import { registerWallsBridge } from './walls-bridge';
 import { SidecarStartError, startSidecar, type Sidecar } from './sidecar';
@@ -26,6 +45,19 @@ const PRELOAD_SCRIPT = path.join(__dirname, 'preload.js');
 let sidecar: Sidecar | null = null;
 let mainWindow: BrowserWindow | null = null;
 const bootStatus = new BootStatusHub();
+
+// A profile change needs a service restart to take effect: the sidecar reads its hardware and
+// quality settings from the environment it is launched with (sidecar.ts).
+function restartSidecar(): void {
+  if (!sidecar) return;
+  const stopping = sidecar;
+  sidecar = null;
+  stopping.stop().then(() => {
+    startService();
+  });
+}
+
+setOnProfileChange(restartSidecar);
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -76,6 +108,8 @@ async function startService(): Promise<void> {
         console.log(`[sidecar] ${phase}`);
         bootStatus.set(bootStatusFor(phase));
       },
+      hardwareProfile: getHardwareProfile(),
+      qualityTier: getQualityTier(),
     });
     console.log(`[sidecar] listening on ${sidecar.baseUrl}`);
   } catch (error) {
@@ -86,17 +120,52 @@ async function startService(): Promise<void> {
 }
 
 void app.whenReady().then(async () => {
+  // The persisted tier is in place before the sidecar starts, so the service is launched with
+  // the tier the Dealer actually chose rather than the default (issue #14 AC3).
+  restoreQualityTier();
   registerServiceBridge(() => sidecar, isTrustedSender);
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
   registerRenderBridge(() => sidecar, isTrustedSender);
+  registerExportBridge(
+    () => sidecar,
+    () => mainWindow,
+    isTrustedSender,
+  );
   registerWallsBridge(() => sidecar, isTrustedSender);
+  registerCorrectionsBridge(() => sidecar, isTrustedSender);
   registerStoredImageBridge(() => sidecar, isTrustedSender);
+  registerStorageBridge(() => sidecar, isTrustedSender);
+  registerDiskBridge(isTrustedSender);
   registerCreateConsultationBridge(
     () => sidecar,
     () => mainWindow,
     isTrustedSender,
   );
   registerBootStatusBridge(bootStatus, startService, isTrustedSender);
+
+  ipcMain.handle(EXECUTION_PROFILE_GET_CHANNEL, (event): string => {
+    return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu-better';
+  });
+
+  ipcMain.handle(EXECUTION_PROFILE_SET_CHANNEL, async (event, profile: string): Promise<void> => {
+    // The composite is set by splitting it back into the two settings the Dealer actually
+    // overrides — hardware and tier — each of which validates its own value and restarts the
+    // sidecar when either changes.
+    if (!isTrustedSender(event.sender)) return;
+    const [hardware, tier] = profile.split('-');
+    if (hardware === undefined || tier === undefined) return;
+    setHardwareProfile(hardware);
+    setQualityTier(tier);
+  });
+
+  ipcMain.handle(QUALITY_TIER_GET_CHANNEL, (event): string => {
+    return isTrustedSender(event.sender) ? getQualityTier() : 'better';
+  });
+
+  ipcMain.handle(QUALITY_TIER_SET_CHANNEL, async (event, tier: string): Promise<void> => {
+    if (!isTrustedSender(event.sender)) return;
+    setQualityTier(tier);
+  });
   mainWindow = createWindow();
   bootStatus.attach(mainWindow);
 

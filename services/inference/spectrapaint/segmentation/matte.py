@@ -28,10 +28,12 @@ faint shadows of the furniture into the coverage itself.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from PIL import Image
 
-from spectrapaint.imaging import dilate, erode
+from spectrapaint.imaging import dilate, erode, guided_filter
 from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.prompts import PromptSet
 from spectrapaint.segmentation.semantic import SemanticRegions, pixel_values
@@ -82,22 +84,51 @@ def _resize(array: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     )
 
 
-def refiner_alpha(graphs: Graphs, photo_u8: np.ndarray, prompts: PromptSet) -> np.ndarray:
-    """SAM 2's answer for this prompt set, as a soft map at photo resolution.
+@dataclass(frozen=True)
+class RefinerFeatures:
+    """SAM 2's encoder output for one photo: expensive to produce, cheap to decode against
+    repeatedly.
 
-    The encode is the expensive half and depends only on the photo, so it is run here once; the
-    decode is cheap. Ticket #7 will re-run only the decode, per Wall Plane, against the same
-    features.
+    Kept as its own type, rather than the encoder's raw list, so a caller that holds one across a
+    request boundary — preparation, then any correction that follows (ticket #10) — is holding
+    something with a name, not three anonymous arrays.
+    """
+
+    feature_0: np.ndarray
+    feature_1: np.ndarray
+    feature_2: np.ndarray
+
+
+def encode_photo(graphs: Graphs, photo_u8: np.ndarray) -> RefinerFeatures:
+    """Run SAM 2's encoder once. The expensive half — ~2.0s measured
+    (implementation-decisions.md #23) — and independent of any prompt, so it is paid once per
+    photo and never again for that photo, however many prompt sets follow.
     """
 
     encoder_config = graphs.refiner_encoder.config
     features = graphs.refiner_encoder.run({"pixel_values": pixel_values(photo_u8, encoder_config)})
+    return RefinerFeatures(feature_0=features[0], feature_1=features[1], feature_2=features[2])
+
+
+def decode_alpha(
+    graphs: Graphs,
+    features: RefinerFeatures,
+    prompts: PromptSet,
+    photo_shape: tuple[int, int],
+) -> np.ndarray:
+    """SAM 2's answer for this prompt set, as a soft map at photo resolution, decoded against
+    already-encoded features.
+
+    Cheap — ~120ms measured (implementation-decisions.md #23) — which is what makes a correction
+    tap (ticket #10) affordable without re-preparing the photo: preparation encodes once via
+    :func:`encode_photo`, and every add/split correction calls only this.
+    """
 
     mask_logits, _iou = graphs.refiner_decoder.run(
         {
-            "feature_0": features[0],
-            "feature_1": features[1],
-            "feature_2": features[2],
+            "feature_0": features.feature_0,
+            "feature_1": features.feature_1,
+            "feature_2": features.feature_2,
             "point_coords": prompts.coords,
             "point_labels": prompts.labels,
         }
@@ -105,56 +136,19 @@ def refiner_alpha(graphs: Graphs, photo_u8: np.ndarray, prompts: PromptSet) -> n
 
     # (batch, object, mask, height, width) -> the one mask that was asked for.
     logits = np.asarray(mask_logits, dtype=np.float32).reshape(-1, *mask_logits.shape[-2:])[0]
-    return np.clip(_sigmoid(_resize(logits, photo_u8.shape[:2])), 0.0, 1.0).astype(np.float32)
+    return np.clip(_sigmoid(_resize(logits, photo_shape)), 0.0, 1.0).astype(np.float32)
 
 
-def _box_mean(values: np.ndarray, radius: int) -> np.ndarray:
-    """Mean of ``values`` over a square window, in time independent of the window size.
+def refiner_alpha(graphs: Graphs, photo_u8: np.ndarray, prompts: PromptSet) -> np.ndarray:
+    """SAM 2's answer for this prompt set, encoding and decoding in one call.
 
-    A summed-area table, so a wide window costs what a narrow one does. Written out rather than
-    taken from a library because the service depends on numpy and Pillow only, and this is the one
-    piece of the edge-aware pass that would otherwise want scipy.
+    Kept for a caller with no reason to hold the features past one prompt set. The pipeline
+    (segmentation/walls.py) calls :func:`encode_photo` and :func:`decode_alpha` separately instead,
+    precisely so the features survive past this one call.
     """
 
-    padded = np.pad(values, radius + 1, mode="edge")
-    integral = padded.cumsum(axis=0).cumsum(axis=1)
-
-    height, width = values.shape
-    side = 2 * radius + 1
-    bottom = slice(side, side + height)
-    top = slice(0, height)
-    right = slice(side, side + width)
-    left = slice(0, width)
-
-    total = (
-        integral[bottom, right]
-        - integral[top, right]
-        - integral[bottom, left]
-        + integral[top, left]
-    )
-    return (total / float(side * side)).astype(np.float32)
-
-
-def guided_filter(guide: np.ndarray, target: np.ndarray, radius: int, epsilon: float) -> np.ndarray:
-    """Smooth ``target`` while following the edges of ``guide``.
-
-    The standard formulation: fit ``target ≈ a * guide + b`` over every window, then average the
-    coefficients. Where the guide has an edge the fit follows it; where the guide is flat the fit
-    degenerates to a local mean, which is exactly the behaviour wanted — sharp at the wall's
-    boundary, smooth across its shadows.
-    """
-
-    mean_guide = _box_mean(guide, radius)
-    mean_target = _box_mean(target, radius)
-    mean_product = _box_mean(guide * target, radius)
-    mean_square = _box_mean(guide * guide, radius)
-
-    covariance = mean_product - mean_guide * mean_target
-    variance = mean_square - mean_guide * mean_guide
-
-    a = covariance / (variance + epsilon)
-    b = mean_target - a * mean_guide
-    return (_box_mean(a, radius) * guide + _box_mean(b, radius)).astype(np.float32)
+    features = encode_photo(graphs, photo_u8)
+    return decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
 
 
 def luminance_of(photo_u8: np.ndarray) -> np.ndarray:
@@ -168,7 +162,6 @@ def luminance_of(photo_u8: np.ndarray) -> np.ndarray:
 
     weights = np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
     return (photo_u8.astype(np.float32) @ weights) / 255.0
-
 
 
 def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarray:
@@ -194,6 +187,41 @@ def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarr
     """
 
     return (regions.wall_confidence < WALL_CONFIDENCE_FLOOR) & ~confident_wall & ~regions.wall
+
+
+def soften_boundary(photo_u8: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """Sharpen a matte's own edge with a luminance-guided filter, confined to a band around
+    where the matte crosses its own 0.5 level. Returns a 2-D array, same shape as ``alpha``.
+
+    Split out of :func:`wall_alpha` so a caller with no ``SemanticRegions`` to restore shadow or
+    remove exclusions from — ticket #10's Add tool, where the Dealer's own tap is the only signal
+    — still gets the same soft-edge treatment as every other Wall Plane. A razor edge is the
+    clearest visual sign an image has been altered (CONTEXT.md, "Alpha Matte"), and that has to
+    hold for a manually-added plane exactly as much as an automatically-found one.
+
+    The matte is resolved into three zones, found *spatially* from where it crosses its own edge
+    level rather than by asking which alpha values happen to look intermediate. Those are not the
+    same thing: a network that returned a uniformly unsure mask would otherwise make the whole
+    photo "boundary", hand the guided filter the interior, and let the photo's texture modulate
+    coverage — painting faint shadows of the furniture into the alpha itself.
+    """
+
+    radius = max(1, round(min(alpha.shape) * _BAND_FRACTION))
+    guide = luminance_of(photo_u8)
+    sharpened = guided_filter(guide, alpha, radius, _GUIDE_EPSILON)
+
+    inside = alpha >= _EDGE_LEVEL
+    core = erode(inside, radius)
+    reach = dilate(inside, radius)
+    band = reach & ~core
+
+    # Softness belongs at the edges and nowhere else: "soft matte edges are used only where a wall
+    # meets a non-wall" (spec, "Corners"). So the interior is fully covered and the exterior is not
+    # covered at all, both by definition, and only the band carries a fractional value. This is also
+    # what keeps the matte usable when the refiner returns a mask it is unsure of everywhere — the
+    # uncertainty is confined to the boundary, instead of quietly becoming a wall the render can
+    # only half paint.
+    return np.where(core, 1.0, np.where(band, sharpened, 0.0)).astype(np.float32)
 
 
 def wall_alpha(
@@ -222,34 +250,50 @@ def wall_alpha(
     alpha = np.where(regions.excluded, 0.0, alpha)
 
     # A floor under SAM 2's own guess (#31): below WALL_CONFIDENCE_FLOOR the semantic pass will not
-    # vouch for a pixel, so SAM 2's appearance-driven coverage there is not trusted either.
+    # vouch for a pixel, so SAM 2's appearance-driven coverage there is not trusted either. Before
+    # the boundary is softened, not after: the floor is a statement about which pixels are wall at
+    # all, and softening is what resolves the edge of whatever survives it.
     alpha = np.where(_unvouched(regions, confident_wall), 0.0, alpha)
 
-    radius = max(1, round(min(alpha.shape) * _BAND_FRACTION))
-    guide = luminance_of(photo_u8)
-    sharpened = guided_filter(guide, alpha, radius, _GUIDE_EPSILON)
-
-    # The matte is resolved into three zones, found *spatially* from where it crosses its own edge
-    # level rather than by asking which alpha values happen to look intermediate. Those are not the
-    # same thing: a network that returned a uniformly unsure mask would otherwise make the whole
-    # photo "boundary", hand the guided filter the interior, and let the photo's texture modulate
-    # coverage — painting faint shadows of the furniture into the alpha itself.
-    inside = alpha >= _EDGE_LEVEL
-    core = erode(inside, radius)
-    reach = dilate(inside, radius)
-    band = reach & ~core
-
-    # Softness belongs at the edges and nowhere else: "soft matte edges are used only where a wall
-    # meets a non-wall" (spec, "Corners"). So the interior is fully covered and the exterior is not
-    # covered at all, both by definition, and only the band carries a fractional value. This is also
-    # what keeps the matte usable when the refiner returns a mask it is unsure of everywhere — the
-    # uncertainty is confined to the boundary, instead of quietly becoming a wall the render can
-    # only half paint.
-    alpha = np.where(core, 1.0, np.where(band, sharpened, 0.0))
+    alpha = soften_boundary(photo_u8, alpha)
 
     # The filter's window straddles the boundary, so it can pull a little coverage onto an excluded
     # pixel. Re-imposed afterwards, because "never paint a window" is not a preference to be
     # averaged with its neighbours.
     alpha = np.where(regions.excluded, 0.0, alpha)
+
+    return np.clip(alpha, 0.0, 1.0).astype(np.float32)[..., None]
+
+
+def ceiling_alpha(
+    photo_u8: np.ndarray,
+    regions: SemanticRegions,
+    refined: np.ndarray,
+) -> np.ndarray:
+    """The finished ceiling matte: HxWx1 float32 in [0, 1].
+
+    Same treatment as :func:`wall_alpha` — SAM 2's mask
+    refined by the semantic pass and then softened — but
+    without plane splitting (a ceiling in one photo is
+    essentially always one region). The ceiling's own coverage
+    carries its own base colour and light map, and is never
+    grouped with a wall's, even when the two happen to be a
+    similar pale colour.
+    """
+
+    alpha = refined.astype(np.float32).copy()
+
+    confident_ceiling = regions.ceiling & (
+        regions.ceiling_confidence >= SEMANTIC_OVERRULE_CONFIDENCE
+    )
+    # Ceiling excluded set is wall plus the other non-ceiling exclusions; build without re-using the
+    # wall's `excluded` which already contains ceiling.
+    other_excluded = regions.excluded & ~regions.ceiling
+    ceiling_excluded = regions.wall | other_excluded
+    alpha = np.where(confident_ceiling & ~ceiling_excluded, 1.0, alpha)
+    alpha = np.where(ceiling_excluded, 0.0, alpha)
+
+    alpha = soften_boundary(photo_u8, alpha)
+    alpha = np.where(ceiling_excluded, 0.0, alpha)
 
     return np.clip(alpha, 0.0, 1.0).astype(np.float32)[..., None]

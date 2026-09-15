@@ -1,11 +1,13 @@
 """The localhost REST contract.
 
     GET    /health
+    GET    /execution-profile                       (what produced a result)  <- issue #14
     POST   /sessions              (photo upload) -> { session_id }    <- issue #2
     GET    /sessions/{id}/events                  (progress stream)   <- issue #4
     GET    /sessions/{id}/planes                                        <- issue #6
     GET    /sessions/{id}/planes/{plane_id}/matte                       <- issue #6
     POST   /sessions/{id}/renders { assignments, mode }
+    POST   /sessions/{id}/exports { assignments, mode }  -> JPEG      <- issue #12
     DELETE /sessions/{id}                                              <- issue #2
     GET    /catalogue                             (what is loaded)     <- issue #5
     GET    /catalogue/shades                      (browse or search)   <- issue #5
@@ -13,7 +15,8 @@
     GET|POST|PATCH|DELETE /bundles*          (the library)        <- issue #11
     GET|POST /consultations/{id}/*           (reopen, history)    <- issue #11
 
-Every endpoint in the contract now exists.
+Every endpoint in the contract now exists, including the execution-profile read the Dealer's
+settings surface and the benchmark use to say what produced a result (issue #14).
 """
 
 from collections.abc import Callable
@@ -24,11 +27,14 @@ from spectrapaint.api.auth import secret_required
 from spectrapaint.api.bundles import router as bundles_router
 from spectrapaint.api.catalogue import router as catalogue_router
 from spectrapaint.api.errors import install_error_handlers
+from spectrapaint.api.execution_profile import router as execution_profile_router
+from spectrapaint.api.exports import router as exports_router
 from spectrapaint.api.planes import router as planes_router
 from spectrapaint.api.preparation import Stage, build_preparation_stages
 from spectrapaint.api.renders import router as renders_router
 from spectrapaint.api.sessions import SessionRegistry
 from spectrapaint.api.sessions import router as sessions_router
+from spectrapaint.api.storage import router as storage_router
 from spectrapaint.catalogue import Catalogue, open_catalogue
 from spectrapaint.storage import Store
 
@@ -78,8 +84,11 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(planes_router)
     app.include_router(renders_router)
+    app.include_router(exports_router)
     app.include_router(catalogue_router)
     app.include_router(bundles_router)
+    app.include_router(storage_router)
+    app.include_router(execution_profile_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

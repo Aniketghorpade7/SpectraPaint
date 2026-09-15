@@ -42,20 +42,23 @@ import io
 import logging
 import threading
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from PIL import Image
 
+from spectrapaint.quality import assess_quality
 from spectrapaint.render.luts import linearise_u8
 from spectrapaint.runtime.graphs import load as load_graphs
 from spectrapaint.runtime.location import ModelsMissing
+from spectrapaint.segmentation.matte import RefinerFeatures, encode_photo
 from spectrapaint.segmentation.semantic import SemanticRegions
 from spectrapaint.segmentation.walls import (
     NoWallFound,
     WallPlane,
+    ceiling_from,
+    get_regions,
     planes_from,
-    wall_regions,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,11 +108,26 @@ class DecodedPhoto:
 
 @dataclass(frozen=True)
 class PreparedPhoto:
-    """The once-per-photo work the render path consumes (issue #3's encode-once rule)."""
+    """The once-per-photo work the render path consumes (issue #3's encode-once rule).
+
+    ``planes`` may be empty: since ticket #10, finding no wall automatically is not a preparation
+    failure — the photo is still ready, ``note`` carries why in plain language, and the Dealer taps
+    a wall in through the correction surface, the same one merge and split use. ``features`` is the
+    photo's already-encoded SAM 2 output, held here so that surface can decode a new prompt without
+    paying the encode again — present whenever the semantic pass found a plausible wall region to
+    encode, ``None`` on the rarer photo where it found nothing at all to work from, in which case
+    the first correction on that session pays the encode once, itself, on demand.
+    """
 
     linear: np.ndarray  # HxWx3 float32, linear RGB at preview scale
     srgb: np.ndarray  # HxWx3 uint8, the same photo as the Dealer sees it
-    planes: tuple[WallPlane, ...]  # every Wall Plane found, in a stable order
+    planes: tuple[WallPlane, ...]  # every Wall Plane found, in a stable order — possibly none
+    note: str | None = None  # plain language, set exactly when planes is empty because none found
+    # Plain language, set when the photo itself is dark, blurred or heavily clipped
+    # (spectrapaint.quality) — never a reason to refuse it (issue #15, "never dead-end"), and
+    # independent of `note`: a poor photo can still have a perfectly findable wall.
+    quality_note: str | None = None
+    features: RefinerFeatures | None = None  # SAM 2's encoder output; None if never encoded
 
     def plane(self, plane_id: str) -> WallPlane | None:
         """The Wall Plane with this id, or None if the photo has no such plane."""
@@ -117,16 +135,6 @@ class PreparedPhoto:
             if plane.plane_id == plane_id:
                 return plane
         return None
-
-    @property
-    def wall_alpha(self) -> np.ndarray:
-        """The first Wall Plane's matte.
-
-        One plane exists today. Kept as a name because the render path and its tests were written
-        against it; ticket #7 renders per plane and this property goes away with the assumption it
-        encodes.
-        """
-        return self.planes[0].alpha
 
 
 class PreparationJob:
@@ -142,6 +150,11 @@ class PreparationJob:
         self._stages = stages
         self._events: list[dict[str, str]] = []
         self._terminal: dict[str, str] | None = None
+        # What preparation produced, and — since ticket #10 — the session's live record: a
+        # correction replaces this with `dataclasses.replace(self._result, ...)` rather than
+        # re-running preparation, so `photo()` keeps returning the *current* Wall Planes (and, if
+        # a correction had to encode SAM 2's features on demand, the cached result of that too)
+        # without a second field to keep in sync with this one.
         self._result: object | None = None
         self._lock = threading.Lock()
         self._thread = threading.Thread(
@@ -164,13 +177,10 @@ class PreparationJob:
         on a reopened photo skips preparation.
         """
 
-        job = cls.__new__(cls)
-        job._stages = []
+        job = cls([])
         job._events = []
         job._terminal = {"phase": "done"}
         job._result = photo
-        job._lock = threading.Lock()
-        job._thread = threading.Thread(target=lambda: None, daemon=True)
         return job
 
     def _run(self) -> None:
@@ -183,11 +193,14 @@ class PreparationJob:
                 # A photo that cannot be prepared fails this job, not the stream: the reader hears
                 # one terminal 'failed' event and the stream closes, like a 'done' would.
                 #
-                # The message is the failure's own where it has one — "no wall could be found" is a
-                # different thing for the Dealer to do about it than "that photo could not be read",
-                # and collapsing both into one message would hide which happened (conventions.md
-                # §5). Anything without a message of its own is a fault we did not anticipate, and
-                # gets the generic one rather than a stack trace.
+                # This is for faults preparation did not anticipate — a missing model directory is
+                # the live example (runtime/location.ModelsMissing). "No wall could be found" is
+                # deliberately not one of them since ticket #10: that is caught inside the stage
+                # itself and turned into a note on an otherwise-ready photo, never a failure here —
+                # see build_preparation_stages. The message is the failure's own where it has one,
+                # because a fault the Dealer can act on differently deserves to say so distinctly
+                # (conventions.md §5); anything without one gets the generic message rather than a
+                # stack trace.
                 logger.warning("Photo preparation failed", exc_info=True)
                 message = getattr(failure, "message", None)
                 with self._lock:
@@ -247,6 +260,33 @@ class PreparationJob:
             result = self._result
         return result if isinstance(result, PreparedPhoto) else None
 
+    def replace_planes(self, planes: tuple[WallPlane, ...]) -> None:
+        """Record the plane list after a correction (ticket #10's add/merge/split).
+
+        Preparation is not re-run: this only ever changes what a later ``photo()`` returns, so a
+        render requested afterwards sees the corrected walls without paying preparation's cost
+        again. A no-op if called before preparation has produced a photo — no correction endpoint
+        does that, since each goes through ``require_photo`` (sessions.py) first, same as every
+        other route that touches a session.
+        """
+
+        with self._lock:
+            if isinstance(self._result, PreparedPhoto):
+                self._result = replace(self._result, planes=planes)
+
+    def cache_features(self, features: RefinerFeatures) -> None:
+        """Record a SAM 2 encode a correction had to run itself, so a later correction on this
+        same session reuses it instead of paying the encoder again.
+
+        Only reached for a session whose semantic pass found no plausible wall region at all —
+        preparation already caches the encode for every other session (difficulty 21). A no-op
+        under the same "preparation must already have produced a photo" rule as ``replace_planes``.
+        """
+
+        with self._lock:
+            if isinstance(self._result, PreparedPhoto):
+                self._result = replace(self._result, features=features)
+
 
 @dataclass
 class _Workspace:
@@ -262,6 +302,14 @@ class _Workspace:
     decoded: DecodedPhoto | None = None
     regions: SemanticRegions | None = None
     planes: tuple[WallPlane, ...] = field(default_factory=tuple)
+    features: RefinerFeatures | None = None
+    # Set exactly when a stage caught NoWallFound instead of raising it further — the one thing
+    # that lets find_the_edges tell "nothing found, legitimately" apart from "look_at_the_room did
+    # not run at all", which is the ordering bug photo() already guards for the decode stage.
+    note: str | None = None
+    # The photo's own quality note (spectrapaint.quality), set once the decode stage has pixels to
+    # judge. Independent of `note` above: a dark or blurry photo can still have a findable wall.
+    quality_note: str | None = None
 
     def photo(self) -> DecodedPhoto:
         """The decoded photo, or a plain failure if the stage that decodes it did not run.
@@ -286,25 +334,107 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
     marker stripped passes it — so the first stage is the first place a photo that only *looks*
     valid is actually read, and it fails preparation cleanly rather than somewhere downstream
     (docs/design-decisions.md §13, "Start on photo load").
+
+    Automatic detection finding no wall is deliberately **not** one of the ways this can fail
+    (ticket #10). ``NoWallFound`` is caught inside the two stages that can raise it, and turned into
+    ``workspace.note`` instead — preparation still reaches ``done`` with an empty ``planes``, which
+    is what lets the Consultation surface land the Dealer on the correction surface's Add tool
+    rather than a dead end (conventions.md §5, design-decisions.md "never dead-end").
     """
 
     workspace = _Workspace()
 
     def decode() -> None:
         workspace.decoded = decode_photo(contents)
+        # Judged here, once, on the pixels every later stage also works from — never a reason to
+        # fail preparation (spectrapaint.quality, issue #15).
+        workspace.quality_note = assess_quality(workspace.decoded.srgb)
 
     def look_at_the_room() -> None:
-        workspace.regions = wall_regions(load_graphs(), workspace.photo().srgb)
+        # Keep full semantic regions even when no wall is worth
+        # offering — a ceiling may still be present (a photo
+        # cropped to the ceiling). The threshold is checked but
+        # the regions are retained for the ceiling pass.
+        try:
+            regions = get_regions(load_graphs(), workspace.photo().srgb)
+            workspace.regions = regions
+            if regions.wall_fraction < 0.02:
+                raise NoWallFound(
+                    f"the semantic pass labelled {regions.wall_fraction:.1%} of the photo as wall, "
+                    f"below the 2% needed"
+                )
+        except NoWallFound as failure:
+            workspace.note = failure.message
+            # regions already stored if get_regions succeeded; only a load failure leaves it None
 
     def find_the_edges() -> None:
         photo = workspace.photo()
+
         if workspace.regions is None:
-            raise RuntimeError("the semantic stage did not run before the refinement stage")
-        workspace.planes = tuple(planes_from(load_graphs(), photo.srgb, workspace.regions))
+            if workspace.note is None:
+                raise RuntimeError("the semantic stage did not run before the refinement stage")
+            # The semantic pass could not be run at all (missing models) or found nothing at all.
+            # Encoding would be wasteful and SAM 2 was never tested against "nothing here".
+            return
+
+        graphs = load_graphs()
+        workspace.features = encode_photo(graphs, photo.srgb)
+        # Wall planes — may be empty if nothing wall-like survived refinement, but that is not a
+        # failure that blocks the ceiling attempt.
+        try:
+            found = planes_from(graphs, photo.srgb, workspace.regions, workspace.features)
+            workspace.planes = tuple(found)
+        except NoWallFound as failure:
+            workspace.note = failure.message
+            workspace.planes = ()
+        # Ceiling — at most one, no splitting. Cheap ~120 ms decode against already-cached features.
+        try:
+            ceiling = ceiling_from(graphs, photo.srgb, workspace.regions, workspace.features)
+        except Exception:
+            # A ceiling that cannot be built degrades to no ceiling, never a failed preparation —
+            # but it must not fail silently: a real bug here would be indistinguishable from
+            # "this photo has no ceiling" for as long as nobody could see it.
+            logger.warning("the ceiling pass failed; proceeding without a ceiling", exc_info=True)
+            ceiling = None
+        if ceiling is not None:
+            # Ensure wall and ceiling do not double-claim pixels where both mattes are confident.
+            if workspace.planes:
+                wall_max = None
+                for plane in workspace.planes:
+                    if wall_max is None:
+                        wall_max = plane.alpha[..., 0].copy()
+                    else:
+                        wall_max = np.maximum(wall_max, plane.alpha[..., 0])
+                if wall_max is not None:
+                    wins = ceiling.alpha[..., 0] >= wall_max
+                    confident_wall = wall_max >= 0.5
+                    resolved = np.where(
+                        confident_wall & ~wins,
+                        0.0,
+                        ceiling.alpha[..., 0],
+                    ).astype(np.float32)
+                    ceiling = WallPlane(
+                        plane_id=ceiling.plane_id, alpha=resolved[..., None], surface="ceiling"
+                    )
+                    if float(resolved.mean()) < 0.02:
+                        ceiling = None
+            if ceiling is not None:
+                workspace.planes = (*workspace.planes, ceiling)
+                # If we now have at least one plane, clear a stale "no wall found" note — the photo
+                # does have something paintable (a ceiling).
+                if workspace.planes:
+                    workspace.note = None
 
     def prepared() -> PreparedPhoto:
         photo = workspace.photo()
-        return PreparedPhoto(linear=photo.linear, srgb=photo.srgb, planes=workspace.planes)
+        return PreparedPhoto(
+            linear=photo.linear,
+            srgb=photo.srgb,
+            planes=workspace.planes,
+            note=workspace.note,
+            quality_note=workspace.quality_note,
+            features=workspace.features,
+        )
 
     return [
         Stage(message="Reading your photo…", run=decode),

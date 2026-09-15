@@ -237,11 +237,15 @@ def wall_matte_of(client: TestClient, session_id: str) -> np.ndarray:
 
     Maximum rather than sum because the planes are a partition: disjoint alphas, so the two agree
     inside the wall, and maximum cannot exceed 1.0 if that ever stops being true.
+
+    Ceiling Planes (ticket #39) are excluded: `<name>.wall.png` labels the ceiling as *not wall*,
+    so a ceiling left in the union would read as wall-leakage rather than as its own surface.
     """
 
     described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
-    assert described, "the photo yielded no Wall Planes at all"
-    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+    walls = [plane for plane in described if plane.get("surface", "wall") == "wall"]
+    assert walls, "the photo yielded no Wall Planes at all"
+    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in walls]
     return np.maximum.reduce(mattes)
 
 
@@ -323,6 +327,59 @@ def test_a_real_photo_can_be_repainted(client: TestClient, photo: Path) -> None:
     )
     assert response.status_code == 201, response.text
     assert response.headers["content-type"] == "image/png"
+
+
+@pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
+@pytest.mark.parametrize("photo", labelled_rooms() or [None], ids=lambda p: p.stem if p else "none")
+def test_the_add_tool_grows_a_plane_from_a_missed_wall(client: TestClient, photo: Path) -> None:
+    """Ticket #10's Add tool, against a real photograph: SAM 2 actually refines from the tap.
+
+    The point tapped is not chosen by hand. It is derived from the hand label this file already
+    loads for the accuracy checks below: a pixel the label calls wall that the automatic matte
+    does not currently cover — exactly the situation #31 catalogues (a door, curtains, hanging
+    clothes claimed instead of the wall behind them) and the situation the ticket names outright
+    (`windows-with-curtains.jpg`'s left-edge return wall). If a photograph's matte happens to
+    already cover every labelled wall pixel, it has nothing to prove here and is skipped rather
+    than forced to fail.
+    """
+
+    session_id = prepare(client, photo)
+    before = wall_matte_of(client, session_id)
+    wall_label, _not_wall_label = labels_for(photo, before.shape)
+
+    missed_y, missed_x = np.nonzero(wall_label & (before < 0.5))
+    if len(missed_y) == 0:
+        pytest.skip(f"{photo.stem}: the automatic matte already covers every labelled wall pixel")
+
+    # A point representative of the missed region rather than sitting on its own noisy boundary
+    # against what already is covered — so, the median. But the median of the ys and the median of
+    # the xs is a pair of independent statistics, and that pair need not be a missed pixel at all:
+    # on a C-shaped or two-lobed missed region it lands in the hollow between the lobes, which is
+    # covered wall, and Add then refuses it with "that's already part of a wall". So the *nearest
+    # actually-missed pixel* to that centre is tapped instead. The shape of the missed region is a
+    # property of the checkpoint and moves whenever the matte changes (it moved when #31's
+    # confidence floor landed), so choosing a point that is guaranteed to be in the set is what
+    # keeps this test about the Add tool rather than about today's matte.
+    centre_y, centre_x = np.median(missed_y), np.median(missed_x)
+    nearest = np.argmin((missed_y - centre_y) ** 2 + (missed_x - centre_x) ** 2)
+    y, x = int(missed_y[nearest]), int(missed_x[nearest])
+
+    response = client.post(f"/sessions/{session_id}/planes", headers=auth(), json={"x": x, "y": y})
+
+    assert response.status_code == 201, (
+        f"Add at a labelled wall pixel ({x}, {y}) on {photo.stem} the automatic matte missed "
+        f"was refused: {response.text}"
+    )
+    after = wall_matte_of(client, session_id)
+
+    # Not "the tapped pixel is now fully confident" — some missed regions are missed because
+    # they are genuinely hard from one point alone (corner-with-clothesline's sliver sits behind
+    # hanging clothes, occluding the wall SAM 2 is asked to find), and a single tap is not
+    # promised to resolve that outright. What the ticket's criterion actually asks is that the
+    # tap moved something: coverage over the region the label calls wall must not have gone
+    # backwards anywhere, and must have improved somewhere the automatic pass had missed.
+    assert (after >= before - 1e-6)[wall_label].all(), "Add made some labelled wall pixel worse"
+    assert after[y, x] > before[y, x], "Add made no difference at the point actually tapped"
 
 
 @pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
@@ -430,10 +487,15 @@ def plane_labels_for(photo: Path, shape: tuple[int, int]) -> list[np.ndarray]:
 
 
 def plane_mattes_of(client: TestClient, session_id: str) -> list[np.ndarray]:
-    """Every Wall Plane's matte, in the order the service lists them."""
+    """Every Wall Plane's matte, in the order the service lists them.
+
+    Ceiling Planes (ticket #39) are excluded — `<name>.planes.png` labels wall planes only, so
+    the plane-count, purity, seam and partition comparisons below are claims about walls.
+    """
 
     described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
-    return [matte_of(client, session_id, plane["plane_id"]) for plane in described]
+    walls = [plane for plane in described if plane.get("surface", "wall") == "wall"]
+    return [matte_of(client, session_id, plane["plane_id"]) for plane in walls]
 
 
 @pytest.mark.skipif(not plane_labelled_rooms(), reason=NO_PLANE_LABELS)

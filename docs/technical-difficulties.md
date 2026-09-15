@@ -335,7 +335,7 @@ change to reach for if the overlay ever moves to a browser target.
 ## 12. The photographs arrived, and the pipeline is less accurate than the thresholds it was given
 
 **Ticket:** #30 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 ·
-**Status:** open — narrowed by #31 (implementation decision 38), not closed
+**Status:** open — narrowed by #31 (implementation decision 49), not closed
 
 Follow-up to [difficulty 9](#9-a-synthetic-room-cannot-tell-you-whether-wall-detection-works), which
 is now **resolved** in its own terms: three hand-labelled rooms are in `data/fixtures/rooms/`, and
@@ -374,7 +374,7 @@ more than it fixed. It must exempt anything SegFormer argmaxed as `wall` however
 deletes shadowed wall (0.765 recall against a 0.80 floor); with the exemption,
 `windows-with-curtains` leakage clears its target at 0.185 and the clothesline moves 0.348 to 0.338.
 The door does not move at all, as predicted. Three further routes were measured and closed — see
-difficulty 19 for the negative-prompt dead end, and implementation decision 38 for the rest. The
+difficulty 26 for the negative-prompt dead end, and implementation decision 49 for the rest. The
 difficulty stays **open** because the two defects it names are still there: this checkpoint paints a
 door and paints half a curtained wall, and no arrangement of the code downstream of it changes
 that.
@@ -527,6 +527,42 @@ which is also more honest about what the contract is. No production code changed
 **Still open:** nothing.
 ---
 
+## 18. Local noise estimation mistook wall texture for sensor grain
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** the first implementation of local per-region noise estimation (`_local_noise_sigma`) computed a local MAD over a 5% window of the high-pass residual. On the `empty-corner.jpg` daylight fixture (the control that must stay below the noise floor), this produced a mean wall sigma of ~0.0097 — above the `_NOISE_FLOOR 0.008` — causing spurious smoothing of a clean wall. The global MAD correctly measured 0.0047 (well below floor). The local MAD was picking up wall texture (stains, scuffs, paint grain) as noise because the window was not wide enough to average out texture variations.
+
+**Why it was hard:** the symptom looked like a tuning problem (floor too low, window too small), but the root cause was conceptual: MAD over a local window cannot distinguish sensor grain from wall texture — both appear as high-frequency variation. The global MAD works because texture averages out over the whole wall. The phone's night mode on `windows-with-curtains.jpg` also denoised the image, making its global sigma *lower* than the daylight fixture (0.0040 vs 0.0047), so no global floor could make the night fixture smooth while leaving the day fixture sharp — the ordering is backwards.
+
+**Where it stands:** resolved by changing the local estimate to a variance-ratio modulation of the global sigma. The global MAD (`_measured_noise_sigma`) gates whether smoothing runs at all. If it exceeds the floor, a local variance map (`_local_noise_sigma`) scales the global sigma by `sqrt(local_var / global_var)`, clipped to [0.25, 4.0]. This preserves the robust global decision while allowing spatial variation where grain genuinely differs (e.g., underexposed corners). The fixture corpus may not exercise the dark-wall criterion at all (night mode denoises dark regions); this is recorded in implementation-decisions.md #37.
+
+---
+
+## 19. Alpha matte selector indexed rows, not pixels
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** `_measured_noise_sigma` and `_smooth_where_dark` used `alpha.reshape(H, -1)[..., 0] > 0.5` to select wall pixels. For an `(H, W, 1)` matte, `reshape(H, -1)` gives `(H, W)`, and `[..., 0]` then takes **column 0 only** — a length-H vector. `residual[on_wall]` therefore kept whole *rows* whose leftmost pixel happened to be wall. At 720 px height, `_NOISE_MINIMUM_PIXELS=1000` could never be met, so the alpha was ignored entirely on all preview resolutions. The frame-wide estimate the review objected to was still what ran.
+
+**Why it was hard:** the bug was a classic NumPy reshaping mistake that looked correct at a glance — `reshape(H, -1)` flattens the spatial dimensions, and `[..., 0]` looks like "channel 0". But it actually selects the first column. The fix is simply `alpha[..., 0] > threshold` to index the channel axis directly, giving an `(H, W)` boolean mask.
+
+**Where it stands:** fixed in both `_measured_noise_sigma` and `_smooth_where_dark`. The threshold `0.5` was also promoted to a named constant `_NOISE_MATTE_THRESHOLD` per conventions §4.
+
+---
+
+## 20. Performance gate silently fell back to plain division
+
+**Ticket:** #9 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** `spikes/latency/bench_render_loop.py` had a `try/except ImportError` that set `_light_map_of = None` when the `spectrapaint` package wasn't installed. CI ran the gate as `uv run --python 3.12 --with "numpy>=2,<3" python spikes/latency/bench_render_loop.py --check` — **without `spectrapaint` installed**. The import failed, the fallback activated, the bench measured the old cheap `linear / base_colour` path, and the gate reported PASS. The PR description claimed "the gate now fails honestly" — false.
+
+**Why it was hard:** the failure was silent by design. The fallback was added for standalone benchmark runs, but in CI it masked the fact that the gate couldn't see the code it was supposed to guard. Conventions §5 forbids silent recovery without a log, and §7b makes the gate required. The gate passing on the wrong code path is exactly the "silent-recovery-without-a-log" the conventions forbid.
+
+**Where it stands:** fixed by making the import authoritative (dropping the `try/except`), installing `spectrapaint-inference` in the CI environment via `--with-editable services/inference` in `.github/workflows/fast-lane.yml`, and hoisting the Light Map computation out of the per-tap path in `render_many` so the gate measures the actual per-tap cost (multiply–composite–encode, ~36 ms at 1280×720).
+
+---
+
 ## 17. Grouping by raw Base Colour splits the same paint at different brightness
 
 **Ticket:** #8 · **Contributor:** Prasad Kathe (hit by an agent) · **Date:** 2026-08-22 · **Status:** resolved
@@ -538,10 +574,71 @@ which is also more honest about what the contract is. No production code changed
 **Where it stands:** resolved — grouping uses tint distance `< 0.08` (`_tint_of`), and a group re-estimates from the union matte so the seam stays interior. Recorded as implementation-decisions.md #36. The threshold is still tuned against two labelled corners; more fixtures are the only honest way to tighten it.
 
 
+---
+
+## 21. Making `NoWallFound` non-fatal crashed the whole test process, not just one test
+
+**Ticket:** #10 · **Contributor:** Aniket Ghorpade (hit by an agent) · **Date:** 2026-09-04 · **Status:** resolved
+
+**What happened:** the first version of the "no wall found is not a preparation failure" change (implementation-decisions.md #39/#40's backend half) made `find_the_edges` call `encode_photo` — SAM 2's encoder — unconditionally, on every photo, including one the semantic pass had just found nothing wall-like in at all. The full fast-lane suite (`pytest -m "not models"`, no real models involved by design) started reporting `188 passed` and then the whole process aborted: `terminate called without an active exception`, preceded by ONNX Runtime errors inside `/vision_encoder/backbone/...` — `Status Message: GetElementType is not implemented`. Deterministic across repeated runs, and isolated by bisection to `tests/api/test_sessions.py` alone.
+
+**Why it was hard:** the crash looked like an ONNX Runtime bug unrelated to anything in the diff, and it happened *after* pytest had already printed a full passing summary, which reads as "the tests are fine, something else is wrong." The actual cause was two facts compounding, neither obvious alone: `tests/api/test_sessions.py` uploads a 1×1 PNG through the *real*, unstubbed `create_app(SECRET)` — real preparation, real `load_graphs()`, running in a background daemon thread the moment `POST /sessions` returns, entirely invisible to a test that never awaits it — because this repository checkout happens to have real model weights under `models/`. Before this change, `wall_regions` raising `NoWallFound` on that degenerate input stopped the stage list immediately, so the encoder was never reached; nothing in the existing suite had ever exercised SAM 2 in-process on a genuinely pathological photo. Catching `NoWallFound` and continuing to `find_the_edges` removed that accidental guard, and SAM 2's exported graph — built and traced against real photographs — simply was not built to survive a 1×1 input, which is a fair thing for it not to survive.
+
+**Where it stands:** resolved — `find_the_edges` now only encodes when `wall_regions` succeeded (`workspace.regions is not None`); a photo where the semantic pass found nothing plausible at all leaves `PreparedPhoto.features` as `None`, and the encode that would have cached it is deferred to whichever correction endpoint eventually needs it. This is a narrower claim than "cache the features unconditionally," and it is recorded as its own reasoning in implementation-decisions.md #41 rather than folded into #40, because it was forced by this crash, not decided ahead of it. Worth naming for whoever writes the correction endpoints: `RefinerFeatures` can legitimately be absent, and an endpoint that assumes it is always there will crash the same way this did.
 
 ---
 
-## 19. Better negative prompts make the matte worse, because the labels they come from are wrong across half the frame
+## 22. The Add tool's exclusivity rule silently degraded an already-correct wall, twice, before it was right
+
+**Ticket:** #10 · **Contributor:** Aniket Ghorpade (hit by an agent) · **Date:** 2026-09-04 · **Status:** resolved
+
+**What happened:** the first version of `segmentation.corrections.add_plane` enforced "every pixel belongs to exactly one plane" by subtracting every existing plane's raw alpha from the newly-decoded one: `new = clip(new - existing, 0, 1)`. Against real fixtures (a new slow-lane test, `test_the_add_tool_grows_a_plane_from_a_missed_wall` in `tests/api/test_walls.py`), this produced a plane whose alpha at the *exact tapped pixel* was materially lower than SAM 2 had actually decoded there — on `windows-with-curtains.jpg` a genuine 0.9-ish decode came out as 0.36, because an adjacent plane's own soft boundary already held a partial, uncertain claim (0.36-ish) on that same pixel and the subtraction ate it regardless. The second version flipped the direction — reduce the *existing* planes wherever the new one claims a pixel — on the reasoning that a deliberate correction should outrank an old automatic guess. Run again against all three fixtures, it failed a *stronger* test (`(after >= before)[wall_label].all()`, i.e. a correction must never make an already-correct labelled pixel worse) on every single fixture: wherever SAM 2's newly-decoded matte brushed against an existing plane's *confident interior* — not just its uncertain edge — that interior lost coverage it had genuinely earned, degrading a wall the automatic pass had already got right.
+
+**Why it was hard:** both versions look locally reasonable and both are wrong for the same structural reason — neither one asks *which claim is actually stronger at this pixel* before resolving it. Version 1 always favours the old plane; version 2 always favours the new one; the correct rule depends on the two alpha values being compared, pixel by pixel, and there is no way to discover that from reading the code — only from measuring what it does to a real photograph, which is exactly why conventions.md §6 keeps this class of behaviour out of unit tests and in the slow lane. The failure mode is also quiet in a way that makes it dangerous: both wrong versions still return `201` with a plausible-looking plane; nothing about the response shape signals that an unrelated part of the photo just got worse.
+
+**Where it stands:** resolved — the pixel with the *higher* alpha wins outright (ties to the new plane, since it exists because the Dealer tapped there), and the loser is zeroed at that pixel rather than reduced by some amount. This makes the union of every plane's coverage `max(new, existing)` everywhere, by construction, which is what actually guarantees "no pixel gets worse" rather than merely making it likely. All three fixtures pass both the per-pixel non-regression assertion and the "the tapped point itself improved" one. Recorded as implementation-decisions.md #42. Worth naming for the next correction this reasoning might apply to: **"resolve two independent soft claims on the same pixel" needs the max-wins rule, not a one-directional subtraction, whichever direction seems intuitively right.**
+
+---
+
+## 23. The wall overlay never actually aligned with the photo — `.consultation__picture` had no positioning context
+
+**Ticket:** #10 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-09-05 · **Status:** resolved
+
+**What happened:** building the tap-layer button for ticket #10's correction surface (`position: absolute; inset: 0`, a sibling of the wall-overlay divs and the wall-chip buttons, all inside `.consultation__picture`), a screenshot of the actual rendered layout showed the wash covering the *entire browser window*, including the toolbar, not just the photo. `.consultation__picture` — the CSS class every one of these `position: absolute` elements needs a *positioned* ancestor from — had no `position` rule at all, anywhere in `consultation.css`, `components.css` or `tokens.css`. `position: absolute` with no positioned ancestor resolves against the initial containing block, which behaves like the viewport. This is not new to ticket #10: the wall-chip buttons (#7) and the wash itself (#6) have had this same latent bug since they shipped.
+
+**Why it was hard:** nothing about it shows up in code review, a type check, or any of the existing tests — `overlayVisible`/`chipPosition` are pure functions and correctly compute *percentages*; what those percentages are relative to is a pure-CSS question neither seam reaches (conventions.md §6: the render engine and the REST contract are the two seams, and this is neither). It also does not show up by *running* the app carelessly: on a single full-bleed photo roughly filling the window, a wash covering the whole viewport and a wash covering just the photo look nearly identical, because there is barely any window left over outside the photo to notice the difference in. It took deliberately building something (the tap-layer) whose *misalignment* was checkable by screenshot — and actually opening the screenshot instead of assuming the CSS was fine — to see it at all.
+
+Fixing the containing block was not the whole fix. Once `.consultation__picture` had `position: relative`, the wash aligned with the *whole flex box* — image plus the caption paragraph beneath it — rather than the image alone, because the caption is a sibling inside the same flex container and the absolutely-positioned children still measure against that combined box. A `position: absolute; inset: 0` sibling can only ever match the box of its *containing block*, never the letterboxed rectangle an `object-fit: contain` image renders inside that box — those are only the same rectangle when the two aspect ratios agree exactly.
+
+**Where it stands:** resolved two ways together — a dedicated `.consultation__frame` wraps only the image and the three absolutely-positioned layers (never the caption), and its `aspect-ratio` is set inline from the displayed image's own `naturalWidth`/`naturalHeight`, read via `onLoad`. Matching the frame's ratio to the photo's own is what removes the letterboxing gap without measuring rendered pixels on every resize. Verified against the real running app (Vite dev server + a scripted Chromium session, `playwright-core` driving `google-chrome-stable` headless — Playwright itself is not installed, `playwright-core` alone was enough since it drives an existing browser rather than downloading one), not just reasoned about: `.consultation__frame`'s and the tap-layer's bounding boxes were measured and confirmed pixel-identical at the same instant, a tap at a known fraction across the rendered element produced the exact expected photo-space coordinate, and the wash's presence while a tool is armed was confirmed by sampling pixel colour rather than trusting a screenshot by eye (see decision #43). Recorded here rather than only fixed silently because the wall-chip buttons have been shipped, unnoticed, in this state since ticket #7 — worth knowing if anyone is asked why a chip or the wash ever looked slightly off on a real photo.
+
+---
+
+## 24. `add_wall` loaded SAM 2 before checking whether the tap even needed it, so CI's model-free lane failed on a precondition test
+
+**Ticket:** #10 · **Contributor:** Aniket Ghorpade (hit by an agent) · **Date:** 2026-09-07 · **Status:** resolved
+
+**What happened:** after the `main` merge, PR #40's CI ("Service tests", `pytest -m "not models"`, which runs with no model weights fetched at all) failed on `test_add_refuses_a_point_already_covered_by_an_existing_plane`: `ModelsMissing`, raised from `runtime.location.resolve_models_dir`, out of `load_graphs()`. It had passed locally throughout development because this checkout happens to have real weights under `models/` — the same shape of gap difficulty 21 already named for a different route.
+
+**Why it was hard:** `segmentation.corrections.add_plane` already checked "is this point already covered" (`_plane_containing`) before doing anything else *inside itself* — the precondition looked correctly ordered by construction. What actually ran first was the route handler, `api/planes.py:add_wall`, which called `load_graphs()` unconditionally before ever calling `add_plane` at all, to have a `Graphs` ready to pass in. So the real order was: load the encoder and decoder graphs, *then* check the precondition, *then* possibly refuse — the opposite of what `test_corrections.py`'s own module docstring already promised: "only what runs *before* any model call — a tap that is already covered, a tap outside the photo — is covered here." Nothing in the fast-lane suite caught it earlier because this machine's `models/` directory made `load_graphs()` succeed even when its result was about to go unused.
+
+**Where it stands:** resolved — the already-covered check is now `corrections.check_addable`, called from `add_wall` before `load_graphs()` (and before the encode-on-demand path difficulty 21 added), with `add_plane` itself calling the same function rather than repeating the check inline. Reproduced the CI failure locally first (`SPECTRAPAINT_MODELS_DIR=/nonexistent-path uv run pytest -m "not models" tests/api/test_corrections.py`) to confirm the fix actually closes the gap a passing local run could not see. Worth naming for the next correction endpoint: a precondition function checking its inputs in the right order is not the same claim as the *route* checking them in the right order — only the outermost caller's sequencing is what a client (or CI) ever observes.
+
+---
+
+## 25. The full-resolution export test could not tell full-res from preview at 256 px
+
+**Ticket:** #12 · **Contributor:** Aniket Ghorpade (hit by an agent) · **Date:** 2026-09-08 · **Status:** resolved
+
+**What happened:** the first `test_export_is_full_res_while_browsing_stays_preview` uploaded a 256×192 fixture — below the `MAX_PREPARED_DIMENSION` 1280 cap — so the browsing render and the export came back at identical pixel sizes, and the test could only assert JPEG-vs-PNG plus headers. The headline acceptance criterion, "export triggers a full-resolution render", had no test actually measuring it; the test's own comment showed the confusion, concluding that the content-type split "proves the export path was taken" when it proves no such thing about resolution.
+
+**Why it was hard:** the stub preparation genuinely caps like production (`decode_photo` downscales above 1280), so any small fixture exercises both paths identically and the difference is invisible — a green test guaranteed nothing about the criterion. A review pass caught what the passing test hid.
+
+**Where it stands:** resolved — the fixture is 1600×1200, above the cap: the browsing render is asserted at `MAX_PREPARED_DIMENSION` and the export at the photo's own size, so the criterion is measured rather than inferred. The same review caught a real bug in the export bridge: the `finally` deleted the temp file on every path, including the dialog-throw fallback that returns the temp file *as* the deliverable — the Dealer would be shown a file that vanished. Cleanup is now conditional on the temp copy not being the file just revealed (recorded in implementation-decisions.md #39).
+
+---
+
+## 26. Better negative prompts make the matte worse, because the labels they come from are wrong across half the frame
 
 **Ticket:** #31 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-09-15 ·
 **Status:** resolved — approach abandoned, and it should not be tried again without new evidence
@@ -581,4 +678,4 @@ to every future idea that reads more classes out of this checkpoint: its labels 
 enough to be **evidence**, not merely not reliable enough to be **rules**. An approach that feeds
 them to SAM 2 needs a reason to believe they are right about *where* the object is, not only about
 *what* it is. The same classes used for outright removal, with prompts untouched, are worth 0.005 —
-measured, and rejected on cost in implementation decision 38.
+measured, and rejected on cost in implementation decision 49.

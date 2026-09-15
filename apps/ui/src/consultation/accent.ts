@@ -57,18 +57,30 @@ export function nextAssignments(
 /**
  * What to send the service: a bare Shade Code, or a Shade per wall.
  *
- * A single code when every wall is getting the same one, because the bridge then discovers the plane
- * ids itself and a photo whose walls were re-split between two taps cannot produce a request naming
- * a plane that no longer exists. A map only when the walls genuinely differ, and only for walls the
- * Dealer has actually chosen a Shade for — an unpainted wall stays the colour it is in the
- * photograph rather than being quietly given somebody else's Shade.
+ * A single code only when *every plane the photo has* is getting the same one, because the bridge
+ * then discovers the plane ids itself and a photo whose walls were re-split between two taps
+ * cannot produce a request naming a plane that no longer exists. A map otherwise — either the
+ * walls genuinely differ, or only some of them have a Shade yet — and only for walls the Dealer
+ * has actually chosen a Shade for, so an unpainted wall stays the colour it is in the photograph
+ * rather than being quietly given somebody else's Shade.
+ *
+ * `planes` is what makes that distinction correct rather than accidental: checking only whether
+ * every *assigned* code matches is trivially true the moment exactly one wall has been painted so
+ * far — a one-entry map has nothing to disagree with itself — which used to collapse "paint just
+ * this one wall" into a bare Shade Code the bridge would apply to every plane in the photo.
+ * Collapsing to a bare code now requires the assignment map to actually cover every plane, not
+ * merely agree with itself.
  */
-export function renderPayload(assignments: Assignments): string | Assignments {
+export function renderPayload(
+  assignments: Assignments,
+  planes: WallPlaneOverlay[],
+): string | Assignments {
   const codes = Object.values(assignments);
   const [first] = codes;
   if (first === undefined) return {};
 
-  const everyWallTheSame = codes.every((code) => code === first);
+  const coversEveryPlane = planes.length > 0 && Object.keys(assignments).length === planes.length;
+  const everyWallTheSame = coversEveryPlane && codes.every((code) => code === first);
   return everyWallTheSame ? first : assignments;
 }
 
@@ -77,7 +89,7 @@ export function renderPayload(assignments: Assignments): string | Assignments {
  *
  * Position, because that is how somebody standing in the room would point at it, and the planes
  * arrive ordered left to right. "Wall Plane" is the word for the code and the glossary, not for a
- * caption over a photograph.
+ * caption over a photograph. A ceiling is always called "the ceiling" regardless of position.
  */
 export function describeWall(index: number, total: number): string {
   if (total <= 1) return 'the wall';
@@ -88,13 +100,27 @@ export function describeWall(index: number, total: number): string {
   return `wall ${index + 1}`;
 }
 
+export function describePlane(plane: WallPlaneOverlay, index: number, total: number): string {
+  if (plane.surface === 'ceiling') return 'the ceiling';
+  return describeWall(index, total);
+}
+
+/** Walls only — a ceiling is its own surface and never takes a wall's positional name (issue #39). */
+function wallsOf(planes: WallPlaneOverlay[]): WallPlaneOverlay[] {
+  return planes.filter((plane) => plane.surface !== 'ceiling');
+}
+
 /** The caption above the photo: what the next Shade tap will do. */
 export function describeTarget(target: PaintTarget, planes: WallPlaneOverlay[]): string {
   if (planes.length <= 1) return '';
   if (target.kind === 'all') {
     return 'Tap a Shade to paint every wall, or tap one wall to paint it on its own.';
   }
-  const index = planes.findIndex((plane) => plane.planeId === target.planeId);
-  if (index < 0) return '';
-  return `Tap a Shade to paint ${describeWall(index, planes.length)}. Tap it again for all of them.`;
+  // Positional names count walls only (issue #39): a ceiling in the list must not turn "the wall"
+  // into "the left wall", nor leave the wall sounding like it sits beside another wall. The target
+  // itself is looked up across every plane — a chosen ceiling names itself as "the ceiling".
+  const plane = planes.find((candidate) => candidate.planeId === target.planeId);
+  if (!plane) return '';
+  const walls = wallsOf(planes);
+  return `Tap a Shade to paint ${describePlane(plane, walls.indexOf(plane), walls.length)}. Tap it again for all of them.`;
 }

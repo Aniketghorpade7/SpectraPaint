@@ -160,15 +160,33 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
 
     expected = {
         ("/health", frozenset({"GET"})),
+        # Issue #14. The execution profile the Dealer's settings surface and the benchmark read,
+        # so what a machine reports and what a result records stay comparable. GET, never taking
+        # an image and never writing.
+        ("/execution-profile", frozenset({"GET"})),
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
         ("/sessions/{session_id}/events", frozenset({"GET"})),
         # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
-        # Issue #6. What walls the photo has, and the matte for one of them. Both GET: neither
-        # takes an image, so encode-once is still structural.
+        # Issue #12. Full-resolution JPEG for the OS share sheet; same assignments as renders.
+        ("/sessions/{session_id}/exports", frozenset({"POST"})),
+        # Issue #6. What walls the photo has, and the matte for one of them. GET, never taking an
+        # image, so encode-once is still structural. Ticket #10 adds a POST on the same path,
+        # its own route object rather than a merged method set (FastAPI registers one per
+        # decorator, even sharing a path): a tapped point, never a Shade or an image, adding a
+        # Wall Plane (the Add tool) rather than naming what to render — still nothing this rule
+        # forbids.
         ("/sessions/{session_id}/planes", frozenset({"GET"})),
+        ("/sessions/{session_id}/planes", frozenset({"POST"})),
         ("/sessions/{session_id}/planes/{plane_id}/matte", frozenset({"GET"})),
+        # Ticket #10's other two correction tools. Same shape as Add: a tapped point in, the
+        # updated plane list out, no photo and no re-preparation.
+        ("/sessions/{session_id}/planes/split", frozenset({"POST"})),
+        ("/sessions/{session_id}/planes/merge", frozenset({"POST"})),
+        # Issue #39. Add the ceiling — same point-prompt decode as Add wall, but tagged
+        # surface="ceiling" and never grouped with a wall's base colour.
+        ("/sessions/{session_id}/planes/ceiling", frozenset({"POST"})),
         # Issue #5. All three are GET: the Catalogue is a data file the service was pointed at, so
         # there is nothing here that writes, and nothing that takes an image.
         ("/catalogue", frozenset({"GET"})),
@@ -191,6 +209,11 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
             frozenset({"GET"}),
         ),
         ("/consultations/{consultation_id}/reopen", frozenset({"POST"})),
+        # Issue #13. Storage view and low-disk warning: bundles by bytes, disk
+        # probe, and deleting a Consultation from the view.
+        ("/storage", frozenset({"GET"})),
+        ("/storage/disk", frozenset({"GET"})),
+        ("/consultations/{consultation_id}", frozenset({"DELETE"})),
     }
 
     actual = set()

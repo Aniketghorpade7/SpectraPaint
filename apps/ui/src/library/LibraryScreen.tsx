@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 
 import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
+import { ProgressMessage } from '../components/ProgressMessage';
+import { SettingsModal } from '../components/SettingsModal';
+import { Toast } from '../components/Toast';
 import type { ConsultationSummary, RenderRecord } from './types';
 import { shadesOf } from './types';
 import type { Library } from './useLibrary';
@@ -20,6 +24,8 @@ export function LibraryScreen({
   library,
   onReopened,
   onNewConsultation,
+  onNewConsultationInBundle,
+  onOpenStorage,
 }: {
   library: Library;
   onReopened: (reopened: {
@@ -28,6 +34,8 @@ export function LibraryScreen({
     imageDataUrl: string;
   }) => void;
   onNewConsultation: () => void;
+  onNewConsultationInBundle: (bundleId: string) => void;
+  onOpenStorage?: () => void;
 }) {
   if (library.openConsultationId) {
     return (
@@ -39,25 +47,100 @@ export function LibraryScreen({
     );
   }
   if (library.openBundleId) {
-    return <BundleDetail library={library} onOpen={library.openConsultation} />;
+    return (
+      <BundleDetail
+        library={library}
+        onOpen={library.openConsultation}
+        onNewConsultationInBundle={onNewConsultationInBundle}
+      />
+    );
   }
-  return <BundleList library={library} onNewConsultation={onNewConsultation} />;
+  return (
+    <BundleList
+      library={library}
+      onNewConsultation={onNewConsultation}
+      onOpenStorage={onOpenStorage}
+    />
+  );
 }
 
 function BundleList({
   library,
   onNewConsultation,
+  onOpenStorage,
 }: {
   library: Library;
   onNewConsultation: () => void;
+  onOpenStorage?: () => void;
 }) {
   const [newName, setNewName] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [qualityTier, setQualityTier] = useState<string>('better');
+
+  const startEditing = (bundleId: string, currentName: string) => {
+    setEditingId(bundleId);
+    setEditingName(currentName);
+  };
+
+  const commitRename = () => {
+    if (!editingId) return;
+    const name = editingName.trim();
+    if (!name) return;
+    void library.renameBundle(editingId, name).then(() => {
+      setEditingId(null);
+      setEditingName('');
+    });
+  };
+
+  const handleQualityTierChange = async (tier: string) => {
+    // Validate the tier before attempting to set it
+    if (tier !== 'faster' && tier !== 'better') {
+      console.error(`Invalid quality tier: ${tier}`);
+      return;
+    }
+
+    try {
+      // Use the exposed spectrapaint API to set the quality tier
+      await window.spectrapaint.setQualityTier(tier);
+      setQualityTier(tier);
+    } catch (error) {
+      console.error('Failed to set quality tier:', error);
+      // In a production app, we would show an error to the user
+    }
+  };
+
+  // Load the current quality tier from the service when the component mounts
+  useEffect(() => {
+    const loadQualityTier = async () => {
+      try {
+        const tier = await window.spectrapaint.getQualityTier();
+        if (tier === 'faster' || tier === 'better') {
+          setQualityTier(tier);
+        } else {
+          // Default to better if we get an unexpected value
+          setQualityTier('better');
+        }
+      } catch (error) {
+        console.error('Failed to get quality tier:', error);
+        // Default to better if we can't get it
+        setQualityTier('better');
+      }
+    };
+
+    loadQualityTier();
+  }, []);
 
   return (
     <main className="library">
       <header className="library__bar">
         <h1 className="library__title">Bundles</h1>
-        <Button onClick={onNewConsultation}>New consultation</Button>
+        <div className="library__bar-actions">
+          <Button onClick={onNewConsultation}>New consultation</Button>
+          {onOpenStorage ? <Button onClick={onOpenStorage}>Storage</Button> : null}
+          <Button onClick={() => setIsSettingsOpen(true)}>Settings</Button>
+        </div>
       </header>
 
       {library.message ? (
@@ -65,6 +148,14 @@ function BundleList({
           message={library.message}
           actionLabel="Try again"
           onAction={() => void library.refreshBundles()}
+        />
+      ) : null}
+
+      {library.lastDeleted ? (
+        <Toast
+          message={`Bundle “${library.lastDeleted.name}” deleted — consultations moved to Consultations.`}
+          actionLabel="Undo"
+          onAction={() => void library.undoDeleteBundle()}
         />
       ) : null}
 
@@ -90,43 +181,83 @@ function BundleList({
         </Button>
       </form>
 
+      {!library.bundlesLoaded ? <ProgressMessage>Loading your bundles…</ProgressMessage> : null}
+
       <ul className="library__list">
         {library.bundles.map((bundle) => (
           <li key={bundle.bundle_id} className="library__row">
-            <button
-              type="button"
-              className="library__open"
-              onClick={() => void library.openBundle(bundle.bundle_id)}
-            >
-              <span className="library__name">{bundle.name}</span>
-              <span className="library__meta">
-                {bundle.consultation_count === 1
-                  ? '1 consultation'
-                  : `${bundle.consultation_count} consultations`}
-              </span>
-            </button>
-            {bundle.name !== 'Consultations' ? (
-              <>
+            {editingId === bundle.bundle_id ? (
+              <form
+                className="library__create library__row--editing"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  commitRename();
+                }}
+              >
+                <input
+                  className="library__input"
+                  value={editingName}
+                  maxLength={80}
+                  onChange={(event) => setEditingName(event.target.value)}
+                  aria-label="Bundle name"
+                  autoFocus
+                />
+                <Button type="submit" disabled={!editingName.trim()}>
+                  Save
+                </Button>
                 <Button
+                  type="button"
                   className="library__small-action"
                   onClick={() => {
-                    const name = window.prompt('Rename this bundle', bundle.name);
-                    if (name && name.trim()) void library.renameBundle(bundle.bundle_id, name);
+                    setEditingId(null);
+                    setEditingName('');
                   }}
                 >
-                  Rename
+                  Cancel
                 </Button>
-                <Button
-                  className="library__small-action"
-                  onClick={() => void library.deleteBundle(bundle.bundle_id)}
+              </form>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="library__open"
+                  onClick={() => void library.openBundle(bundle.bundle_id)}
                 >
-                  Delete
-                </Button>
+                  <span className="library__name">{bundle.name}</span>
+                  <span className="library__meta">
+                    {bundle.consultation_count === 1
+                      ? '1 consultation'
+                      : `${bundle.consultation_count} consultations`}
+                  </span>
+                </button>
+                {!bundle.is_default ? (
+                  <>
+                    <Button
+                      className="library__small-action"
+                      onClick={() => startEditing(bundle.bundle_id, bundle.name)}
+                    >
+                      Rename
+                    </Button>
+                    <Button
+                      className="library__small-action"
+                      onClick={() => void library.deleteBundle(bundle.bundle_id)}
+                    >
+                      Delete
+                    </Button>
+                  </>
+                ) : null}
               </>
-            ) : null}
+            )}
           </li>
         ))}
       </ul>
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onQualityTierChange={handleQualityTierChange}
+        currentQualityTier={qualityTier}
+      />
     </main>
   );
 }
@@ -134,29 +265,41 @@ function BundleList({
 function BundleDetail({
   library,
   onOpen,
+  onNewConsultationInBundle,
 }: {
   library: Library;
   onOpen: (consultationId: string) => void;
+  onNewConsultationInBundle: (bundleId: string) => void;
 }) {
+  const openId = library.openBundleId ?? '';
   return (
     <main className="library">
       <header className="library__bar">
         <Button onClick={library.backToBundles}>All bundles</Button>
         <h1 className="library__title">Consultations</h1>
+        <Button onClick={() => onNewConsultationInBundle(openId)}>New consultation</Button>
       </header>
 
       {library.message ? (
         <ErrorState
           message={library.message}
           actionLabel="Try again"
-          onAction={() => void library.refreshBundles()}
+          onAction={() => void library.openBundle(openId)}
+        />
+      ) : null}
+
+      {library.lastDeleted ? (
+        <Toast
+          message={`Bundle “${library.lastDeleted.name}” deleted.`}
+          actionLabel="Undo"
+          onAction={() => void library.undoDeleteBundle()}
         />
       ) : null}
 
       {library.consultations === null ? (
-        <p className="library__meta">Loading…</p>
+        <ProgressMessage>Loading…</ProgressMessage>
       ) : library.consultations.length === 0 ? (
-        <p className="library__hint">No consultations in this bundle yet.</p>
+        <EmptyState message="No consultations in this bundle yet." />
       ) : (
         <ul className="library__list">
           {library.consultations.map((consultation) => (
@@ -164,6 +307,7 @@ function BundleDetail({
               key={consultation.consultation_id}
               consultation={consultation}
               onOpen={onOpen}
+              library={library}
             />
           ))}
         </ul>
@@ -175,10 +319,14 @@ function BundleDetail({
 function ConsultationRow({
   consultation,
   onOpen,
+  library,
 }: {
   consultation: ConsultationSummary;
   onOpen: (consultationId: string) => void;
+  library: Library;
 }) {
+  const [moving, setMoving] = useState(false);
+
   return (
     <li className="library__row">
       <button
@@ -195,6 +343,42 @@ function ConsultationRow({
             : `${consultation.render_count} repaints shown`}
         </span>
       </button>
+      {library.bundles.length > 1 ? (
+        moving ? (
+          <select
+            className="library__input library__move-select"
+            defaultValue=""
+            aria-label="Move to bundle"
+            onChange={(event) => {
+              const bundleId = event.target.value;
+              if (!bundleId) {
+                setMoving(false);
+                return;
+              }
+              void library
+                .placeConsultation(bundleId, consultation.consultation_id)
+                .then(() => setMoving(false));
+            }}
+            onBlur={() => setMoving(false)}
+            autoFocus
+          >
+            <option value="" disabled>
+              Move to…
+            </option>
+            {library.bundles
+              .filter((b) => b.bundle_id !== library.openBundleId)
+              .map((b) => (
+                <option key={b.bundle_id} value={b.bundle_id}>
+                  {b.name}
+                </option>
+              ))}
+          </select>
+        ) : (
+          <Button className="library__small-action" onClick={() => setMoving(true)}>
+            Move
+          </Button>
+        )
+      ) : null}
     </li>
   );
 }
@@ -238,7 +422,7 @@ function ConsultationHistory({
         <ErrorState
           message={library.message}
           actionLabel="Try again"
-          onAction={() => void library.refreshBundles()}
+          onAction={() => void library.retryConsultation()}
         />
       ) : null}
 
@@ -251,8 +435,11 @@ function ConsultationHistory({
       ) : null}
 
       <h2 className="library__subtitle">Shades already tried</h2>
+      {library.renders === null && !library.message ? (
+        <ProgressMessage>Loading…</ProgressMessage>
+      ) : null}
       {library.renders !== null && library.renders.length === 0 ? (
-        <p className="library__hint">No shade has been tried in this consultation yet.</p>
+        <EmptyState message="No shade has been tried in this consultation yet." />
       ) : null}
       <div className="library__renders">
         {(library.renders ?? []).map((render) => (

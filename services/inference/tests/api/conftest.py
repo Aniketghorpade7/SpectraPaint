@@ -21,7 +21,7 @@ soft edge band, which is what lets it assert that the composite stays clean at a
 import numpy as np
 
 from spectrapaint.api.preparation import PreparedPhoto, Stage, decode_photo
-from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID, WallPlane
+from spectrapaint.segmentation.walls import FIRST_WALL_PLANE_ID, MESSAGE_NO_WALL_FOUND, WallPlane
 
 # The test matte's geometry, as production's stub had it (docs/implementation-decisions.md §18).
 STUB_WIDTH_FRACTION = 0.60
@@ -114,3 +114,52 @@ def stub_preparation_stages(contents: bytes) -> list[Stage]:
     """
 
     return [Stage(message="Reading your photo…", run=lambda: prepared_photo_of(contents))]
+
+
+def no_wall_found_photo_of(contents: bytes) -> PreparedPhoto:
+    """The same genuine decode, with zero Wall Planes and the note automatic detection leaves.
+
+    Stands in for what ticket #10 makes ``build_preparation_stages`` produce when the real pipeline
+    catches ``NoWallFound`` instead of failing the job — a photo the contract tests can exercise
+    without a model in sight (conventions.md §6), since the real "detection finds nothing" path has
+    no fixture of its own to run against yet (data/fixtures/rooms/README.md).
+    """
+
+    decoded = decode_photo(contents)
+    return PreparedPhoto(
+        linear=decoded.linear,
+        srgb=decoded.srgb,
+        planes=(),
+        note=MESSAGE_NO_WALL_FOUND,
+    )
+
+
+def no_wall_found_preparation_stages(contents: bytes) -> list[Stage]:
+    """Preparation that finds no wall at all — the manual-fallback path (ticket #10)."""
+
+    return [Stage(message="Reading your photo…", run=lambda: no_wall_found_photo_of(contents))]
+
+
+def poor_quality_photo_of(contents: bytes) -> PreparedPhoto:
+    """The same genuine decode, with a Wall Plane found and a quality note attached regardless.
+
+    Stands in for what ``spectrapaint.quality.assess_quality`` sets on a dark, blurred or heavily
+    clipped photo (issue #15) — this contract test asks only whether the note the pipeline attaches
+    reaches the Dealer, not whether any particular photo triggers one; that heuristic is exercised
+    directly, on synthetic images, by tests/render/test_quality.py.
+    """
+
+    decoded = decode_photo(contents)
+    plane = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=rectangular_matte(decoded.srgb.shape[:2]))
+    return PreparedPhoto(
+        linear=decoded.linear,
+        srgb=decoded.srgb,
+        planes=(plane,),
+        quality_note="This photo is quite dark, so the colours shown may look muted.",
+    )
+
+
+def poor_quality_preparation_stages(contents: bytes) -> list[Stage]:
+    """Preparation that finds a wall but flags the photo's own quality (ticket #15)."""
+
+    return [Stage(message="Reading your photo…", run=lambda: poor_quality_photo_of(contents))]

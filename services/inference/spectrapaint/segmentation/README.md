@@ -17,6 +17,15 @@ The modules, in pipeline order:
 | `matte.py` | Runs the refiner and builds the soft matte — shadow restored, exclusions removed, boundary sharpened |
 | `split.py` | Splits the wall matte into Wall Planes by vertical structure (edge + shading valley), hard partition — soft only wall↔non-wall, crisp wall↔wall |
 | `walls.py` | Composes the above into Wall Planes, validates the partition, and decides when there is no wall to find |
+| `corrections.py` | Ticket #10: adds, splits or merges a Wall Plane from one tapped point — Add decodes against SAM 2's already-encoded features, Split and Merge are plain array operations on the existing mattes, no model call |
+
+Ticket #10: `NoWallFound` is no longer fatal to preparation — `api/preparation.py` catches it and the
+photo becomes a ready, zero-plane consultation with a plain-language `note` instead, which is what
+makes the correction surface the fallback the spec asks for ("no wall detected → fall through to
+manual tap"). `matte.encode_photo`/`matte.decode_alpha` split what `matte.refiner_alpha` used to do
+in one call, so preparation can hold onto the encoded features for a correction to decode against
+later without re-running SAM 2's encoder. See `docs/implementation-decisions.md` §39–41 and
+`docs/technical-difficulties.md` #21–22.
 
 Ticket #7: `walls.planes_from` now returns `wall_plane_1..N` (typically 1-3) via `split.split_alpha_into_planes`; every wall pixel belongs to exactly one plane and the sum of planes equals the original matte (no dark seam). See `split.py` module docstring and `docs/implementation-decisions.md:30`.
 

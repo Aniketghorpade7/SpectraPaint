@@ -5,6 +5,7 @@ import { applyWallsEvent, INITIAL_WALLS_STATE, overlayVisible } from './walls';
 
 const plane: WallPlaneOverlay = {
   planeId: 'wall_plane_1',
+  surface: 'wall',
   coverage: 0.42,
   photoWidth: 1280,
   photoHeight: 720,
@@ -14,18 +15,86 @@ const plane: WallPlaneOverlay = {
 
 describe('applyWallsEvent', () => {
   it('holds the planes the service found', () => {
-    const state = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'found', planes: [plane] });
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, {
+      type: 'found',
+      planes: [plane],
+      note: null,
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
 
     expect(state.planes).toEqual([plane]);
     expect(state.message).toBeUndefined();
+    expect(state.photoWidth).toBe(1280);
+    expect(state.photoHeight).toBe(720);
+  });
+
+  it('holds the photo’s own dimensions even when no plane was found at all', () => {
+    // Ticket #10: automatic detection finding nothing is not a failure — the Add tool still
+    // needs the photo's pixel space to turn a tap into a point in it.
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, {
+      type: 'found',
+      planes: [],
+      note: 'No wall could be found in that photo automatically.',
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
+
+    expect(state.planes).toEqual([]);
+    expect(state.message).toBe('No wall could be found in that photo automatically.');
+    expect(state.photoWidth).toBe(1280);
+    expect(state.photoHeight).toBe(720);
+  });
+
+  it('holds the photo’s own quality note, independent of the wall note', () => {
+    // Ticket #15: a poor photo still has its wall found — the two notes describe different things.
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, {
+      type: 'found',
+      planes: [plane],
+      note: null,
+      qualityNote: 'This photo is quite dark, so the colours shown may look muted.',
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
+
+    expect(state.message).toBeUndefined();
+    expect(state.qualityNote).toBe(
+      'This photo is quite dark, so the colours shown may look muted.',
+    );
   });
 
   it('keeps the Dealer’s choice to hide the overlay when new planes arrive', () => {
     const hidden = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'toggle' });
 
-    const state = applyWallsEvent(hidden, { type: 'found', planes: [plane] });
+    const state = applyWallsEvent(hidden, {
+      type: 'found',
+      planes: [plane],
+      note: null,
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
 
     expect(state.wanted).toBe(false);
+  });
+
+  it('clears a stale note once a correction leaves the photo with planes again', () => {
+    const noted = applyWallsEvent(INITIAL_WALLS_STATE, {
+      type: 'found',
+      planes: [],
+      note: 'No wall could be found in that photo automatically.',
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
+
+    const state = applyWallsEvent(noted, {
+      type: 'found',
+      planes: [plane],
+      note: null,
+      photoWidth: 1280,
+      photoHeight: 720,
+    });
+
+    expect(state.message).toBeUndefined();
   });
 
   it('records why there is no overlay without discarding the preference', () => {
@@ -41,7 +110,7 @@ describe('applyWallsEvent', () => {
 
   it('clears back to the initial state when the photo is put down', () => {
     const state = applyWallsEvent(
-      { planes: [plane], wanted: false, message: 'x' },
+      { planes: [plane], wanted: false, message: 'x', photoWidth: 1280, photoHeight: 720 },
       {
         type: 'cleared',
       },
@@ -51,24 +120,34 @@ describe('applyWallsEvent', () => {
   });
 });
 
+function found(planes: WallPlaneOverlay[]) {
+  return {
+    type: 'found' as const,
+    planes,
+    note: null,
+    photoWidth: 1280,
+    photoHeight: 720,
+  };
+}
+
 describe('overlayVisible', () => {
   it('shows the overlay once planes are known', () => {
-    const state = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'found', planes: [plane] });
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, found([plane]));
 
     expect(overlayVisible(state, false)).toBe(true);
   });
 
   it('never shows the overlay over a repaint', () => {
     // ui-guidelines.md: nothing may sit between the Customer and the colour they are judging.
-    const state = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'found', planes: [plane] });
+    const state = applyWallsEvent(INITIAL_WALLS_STATE, found([plane]));
 
     expect(overlayVisible(state, true)).toBe(false);
   });
 
   it('stays off when the Dealer has hidden it', () => {
-    const found = applyWallsEvent(INITIAL_WALLS_STATE, { type: 'found', planes: [plane] });
+    const found_ = applyWallsEvent(INITIAL_WALLS_STATE, found([plane]));
 
-    expect(overlayVisible(applyWallsEvent(found, { type: 'toggle' }), false)).toBe(false);
+    expect(overlayVisible(applyWallsEvent(found_, { type: 'toggle' }), false)).toBe(false);
   });
 
   it('has nothing to show when no plane was found', () => {

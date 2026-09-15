@@ -1,9 +1,12 @@
+import { useState, type MouseEvent, type SyntheticEvent } from 'react';
+
 import { CataloguePanel } from '../catalogue/CataloguePanel';
 import { useCatalogue } from '../catalogue/useCatalogue';
 import { Button } from '../components/Button';
 import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
-import { describeTarget, describeWall, isTargeted } from './accent';
+import { describePlane, describeTarget, isTargeted } from './accent';
+import { describeArmedTool, tapPointFromFraction } from './corrections';
 import type { Consultation } from './useConsultation';
 import { overlayVisible } from './walls';
 
@@ -49,8 +52,29 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     selectWall,
     renderMode,
     toggleRenderMode,
+    armedTool,
+    armTool,
+    correctWallsAt,
+    correctionMessage,
+    correctionCode,
+    exportState,
+    exportRender,
+    dismissExport,
   } = consultation;
   const catalogue = useCatalogue();
+  // The displayed image's own aspect ratio, read off it once it decodes. Sets the exact box the
+  // wall overlay, the wall-chip buttons and the correction tap-layer all align to — see
+  // consultation.css on `.consultation__frame` for why this cannot be answered from CSS alone.
+  // Recomputed on every image swap (before/after toggle), which is harmless: the repaint and the
+  // original share the same aspect ratio, preparation only ever scales uniformly.
+  const [photoAspectRatio, setPhotoAspectRatio] = useState<number | null>(null);
+
+  function handlePhotoLoad(event: SyntheticEvent<HTMLImageElement>) {
+    const image = event.currentTarget;
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+      setPhotoAspectRatio(image.naturalWidth / image.naturalHeight);
+    }
+  }
 
   if (state.phase === 'ready') {
     // The repaint replaces the photo on screen; the toggle returns to the original. Before that,
@@ -58,7 +82,26 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     const visibleImage =
       render.showingRender && render.imageDataUrl ? render.imageDataUrl : state.imageDataUrl;
 
-    const showWalls = overlayVisible(walls, render.showingRender);
+    // A tool armed keeps the overlay up regardless of the Dealer's earlier hide/show choice —
+    // correcting walls that are not visible is not a thing a Dealer can do (ticket #10).
+    const showWalls = overlayVisible(walls, render.showingRender) || armedTool !== null;
+    // Wall-only counts (issue #39): the ceiling is its own surface and never takes a wall's
+    // positional name, so neither the chips' totals nor "found N walls" may count it.
+    const wallPlanes = walls.planes.filter((plane) => plane.surface !== 'ceiling');
+    const wallCount = wallPlanes.length;
+
+    function handlePhotoTap(event: MouseEvent<HTMLButtonElement>) {
+      if (walls.photoWidth <= 0 || walls.photoHeight <= 0) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      correctWallsAt(
+        tapPointFromFraction(
+          (event.clientX - rect.left) / rect.width,
+          (event.clientY - rect.top) / rect.height,
+          walls.photoWidth,
+          walls.photoHeight,
+        ),
+      );
+    }
 
     return (
       <main className="consultation">
@@ -70,6 +113,31 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 {walls.wanted ? 'Hide the walls found' : 'Show the walls found'}
               </Button>
             ) : null}
+            {!render.showingRender ? (
+              <>
+                <Button onClick={() => armTool('add')} aria-pressed={armedTool === 'add'}>
+                  Add a wall
+                </Button>
+                {!walls.planes.some((p) => p.surface === 'ceiling') ? (
+                  <Button
+                    onClick={() => armTool('add-ceiling')}
+                    aria-pressed={armedTool === 'add-ceiling'}
+                  >
+                    Add ceiling
+                  </Button>
+                ) : null}
+                {walls.planes.length >= 1 ? (
+                  <Button onClick={() => armTool('split')} aria-pressed={armedTool === 'split'}>
+                    Split a wall
+                  </Button>
+                ) : null}
+                {walls.planes.length >= 2 ? (
+                  <Button onClick={() => armTool('merge')} aria-pressed={armedTool === 'merge'}>
+                    Merge walls
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
             {render.phase === 'ready' ? (
               <Button onClick={toggleBeforeAfter}>
                 {render.showingRender ? 'Show original photo' : 'Show repaint'}
@@ -78,79 +146,139 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
             <Button onClick={toggleRenderMode} aria-pressed={renderMode === 'true_colour'}>
               {renderMode === 'realistic' ? 'True Colour mode' : 'Realistic mode'}
             </Button>
+            {render.phase === 'ready' ? (
+              <Button onClick={exportRender} disabled={exportState.phase === 'exporting'}>
+                {exportState.phase === 'exporting' ? 'Exporting…' : 'Export and share'}
+              </Button>
+            ) : null}
             <Button onClick={discard}>Discard photo</Button>
           </div>
         </div>
         <div className="consultation__work">
           <div className="consultation__stage">
             <div className="consultation__picture">
-              <img
-                className="consultation__photo"
-                src={visibleImage}
-                alt="The Customer's room photo"
-              />
-              {showWalls
-                ? walls.planes.map((plane) => (
-                    // The matte is applied as a CSS mask, so the wash appears exactly where the
-                    // Alpha Matte says the wall is — including its soft edge, which a border or an
-                    // outline could not express.
-                    <div
-                      key={plane.planeId}
-                      className={
-                        isTargeted(paint.target, plane.planeId)
-                          ? 'consultation__wall-overlay consultation__wall-overlay--chosen'
-                          : 'consultation__wall-overlay'
-                      }
-                      style={{ maskImage: `url(${plane.matteDataUrl})` }}
-                      aria-hidden="true"
-                    />
-                  ))
-                : null}
-              {showWalls && walls.planes.length > 1
-                ? walls.planes.map((plane, index) => (
-                    // Choosing a wall is a real `<button>`: a div with a click handler is not one
-                    // (ui-guidelines.md), and choosing the accent wall by keyboard has to work. It
-                    // is a chip over the wall rather than the wash itself, because a mask clips what
-                    // is painted and not what is clickable — two full-size masked buttons would
-                    // overlap, and the upper one would swallow every tap meant for the lower.
-                    <button
-                      key={`choose-${plane.planeId}`}
-                      type="button"
-                      className={
-                        isTargeted(paint.target, plane.planeId)
-                          ? 'consultation__wall-chip consultation__wall-chip--chosen'
-                          : 'consultation__wall-chip'
-                      }
-                      style={chipPosition(plane, index, walls.planes.length)}
-                      aria-pressed={isTargeted(paint.target, plane.planeId)}
-                      onClick={() => selectWall(plane.planeId)}
-                    >
-                      {describeWall(index, walls.planes.length)}
-                      {paint.assignments[plane.planeId]
-                        ? ` · ${paint.assignments[plane.planeId]}`
-                        : ''}
-                    </button>
-                  ))
-                : null}
+              <div
+                className="consultation__frame"
+                style={photoAspectRatio ? { aspectRatio: photoAspectRatio } : undefined}
+              >
+                <img
+                  className="consultation__photo"
+                  src={visibleImage}
+                  alt="The Customer's room photo"
+                  onLoad={handlePhotoLoad}
+                />
+                {showWalls
+                  ? walls.planes.map((plane) => (
+                      // The matte is applied as a CSS mask, so the wash appears exactly where the
+                      // Alpha Matte says the wall is — including its soft edge, which a border or
+                      // an outline could not express.
+                      <div
+                        key={plane.planeId}
+                        className={
+                          isTargeted(paint.target, plane.planeId)
+                            ? 'consultation__wall-overlay consultation__wall-overlay--chosen'
+                            : 'consultation__wall-overlay'
+                        }
+                        style={{ maskImage: `url(${plane.matteDataUrl})` }}
+                        aria-hidden="true"
+                      />
+                    ))
+                  : null}
+                {showWalls && armedTool === null && walls.planes.length > 1
+                  ? walls.planes.map((plane, index) => (
+                      // Choosing a wall is a real `<button>`: a div with a click handler is not
+                      // one (ui-guidelines.md), and choosing the accent wall by keyboard has to
+                      // work. It is a chip over the wall rather than the wash itself, because a
+                      // mask clips what is painted and not what is clickable — two full-size
+                      // masked buttons would overlap, and the upper one would swallow every tap
+                      // meant for the lower.
+                      <button
+                        key={`choose-${plane.planeId}`}
+                        type="button"
+                        className={
+                          isTargeted(paint.target, plane.planeId)
+                            ? 'consultation__wall-chip consultation__wall-chip--chosen'
+                            : 'consultation__wall-chip'
+                        }
+                        style={chipPosition(plane, index, wallCount)}
+                        aria-pressed={isTargeted(paint.target, plane.planeId)}
+                        onClick={() => selectWall(plane.planeId)}
+                      >
+                        {describePlane(plane, index, wallCount)}
+                        {paint.assignments[plane.planeId]
+                          ? ` · ${paint.assignments[plane.planeId]}`
+                          : ''}
+                      </button>
+                    ))
+                  : null}
+                {showWalls && armedTool !== null ? (
+                  // The correction surface itself: one tool armed at a time (ticket #10). A real
+                  // `<button>` covering the photo — the same reason the chip above is a button
+                  // and not a div — with no chrome of its own, since the room photo is what it
+                  // sits on.
+                  <button
+                    type="button"
+                    className="consultation__tap-layer"
+                    aria-label={describeArmedTool(armedTool)}
+                    onClick={handlePhotoTap}
+                  />
+                ) : null}
+              </div>
               {showWalls ? (
                 <p className="consultation__wall-note">
-                  {walls.planes.length === 1
-                    ? 'This is the wall SpectraPaint found.'
-                    : `SpectraPaint found ${walls.planes.length} walls. ${describeTarget(
-                        paint.target,
-                        walls.planes,
-                      )}`}
+                  {armedTool !== null
+                    ? describeArmedTool(armedTool)
+                    : wallCount === 1
+                      ? 'This is the wall SpectraPaint found.'
+                      : `SpectraPaint found ${wallCount} walls. ${describeTarget(
+                          paint.target,
+                          walls.planes,
+                        )}`}
                 </p>
               ) : null}
               {walls.message ? <p className="consultation__wall-note">{walls.message}</p> : null}
+              {walls.qualityNote ? (
+                // The photo's own warning (issue #15) — dark, blurred or heavily clipped — shown
+                // regardless of whether a wall was found, since it says nothing about the walls.
+                <p className="consultation__wall-note">{walls.qualityNote}</p>
+              ) : null}
+              {correctionMessage && correctionCode !== 'session_not_found' ? (
+                <p className="consultation__wall-note">{correctionMessage}</p>
+              ) : null}
+              {correctionMessage && correctionCode === 'session_not_found' ? (
+                // A sidecar restart, not a refused tap (issue #15) — the walls the Dealer sees are
+                // frozen at whatever they were, and no further tap here can ever succeed.
+                <ErrorState
+                  message={correctionMessage}
+                  actionLabel="Go to Bundles"
+                  onAction={discard}
+                />
+              ) : null}
               {render.phase === 'rendering' ? (
                 <ProgressMessage>Repainting the wall…</ProgressMessage>
               ) : null}
               {render.phase === 'failed' && render.message ? (
                 <ErrorState
                   message={render.message}
-                  actionLabel="Choose another Shade"
-                  onAction={dismissRender}
+                  actionLabel={
+                    render.code === 'session_not_found' ? 'Go to Bundles' : 'Choose another Shade'
+                  }
+                  onAction={render.code === 'session_not_found' ? discard : dismissRender}
+                />
+              ) : null}
+              {exportState.phase === 'exporting' ? (
+                <ProgressMessage>Preparing your export…</ProgressMessage>
+              ) : null}
+              {exportState.phase === 'ready' && exportState.filename ? (
+                <p className="consultation__wall-note">
+                  Exported {exportState.filename} — choose another Shade to keep browsing.
+                </p>
+              ) : null}
+              {exportState.phase === 'failed' && exportState.message ? (
+                <ErrorState
+                  message={exportState.message}
+                  actionLabel="Try export again"
+                  onAction={dismissExport}
                 />
               ) : null}
             </div>

@@ -48,3 +48,147 @@
   color: var(--grey-6);
   font-size: var(--text-body);
 }
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.empty-state__message {
+  margin: 0;
+  color: var(--grey-5);
+  font-size: var(--text-body);
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid var(--grey-3);
+  border-radius: 4px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--grey-1);
+}
+
+.toast__message {
+  color: var(--grey-6);
+  font-size: var(--text-body);
+}
+
+.toast__action {
+  flex-shrink: 0;
+}
+
+/* Settings Modal */
+.settings-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.settings-modal-content {
+  background: var(--grey-1);
+  border-radius: 8px;
+  width: 90%;
+  max-width: 400px;
+  max-height: 90vh;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+.settings-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--grey-3);
+}
+
+.settings-modal-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: var(--weight-emphasis);
+  color: var(--grey-6);
+}
+
+.settings-modal-close {
+  background: transparent;
+  border: none;
+  font-size: var(--text-body);
+  line-height: 1;
+  color: var(--grey-5);
+  cursor: pointer;
+  padding: 0;
+}
+
+.settings-modal-close:hover {
+  color: var(--grey-6);
+}
+
+.settings-modal-body {
+  padding: var(--space-6);
+}
+
+.settings-modal-section {
+  margin-bottom: var(--space-6);
+}
+
+.settings-modal-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-modal-label {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-emphasis);
+  color: var(--grey-6);
+}
+
+.settings-modal-control {
+  margin-bottom: var(--space-4);
+}
+
+.settings-modal-control select {
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  background: var(--grey-2);
+  border: 1px solid var(--grey-3);
+  border-radius: 4px;
+  font-size: var(--text-body);
+  color: var(--grey-6);
+}
+
+.settings-modal-control select:focus-visible {
+  outline: 2px solid var(--grey-5);
+  outline-offset: 2px;
+}
+
+.settings-modal-control select[disabled] {
+  background: var(--grey-1);
+  color: var(--grey-4);
+  cursor: not-allowed;
+}
+
+.settings-modal-description {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--grey-5);
+}
+
+.settings-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--grey-3);
+}

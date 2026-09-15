@@ -19,6 +19,11 @@ export interface RenderState {
   imageDataUrl?: string;
   /** Plain language, safe to show as-is. Present only when the phase is 'failed'. */
   message?: string;
+  /** The service's machine-readable failure code, present only when the phase is 'failed'.
+   * `session_not_found` is the one the surface treats specially (issue #15): it means the sidecar
+   * restarted since this Consultation's session was created, not that the Shade itself failed, and
+   * no retry against the same session id will ever succeed. */
+  code?: string;
   /** Whether the repaint or the original photo is on screen after a success. */
   showingRender: boolean;
 }
@@ -34,7 +39,13 @@ export const INITIAL_RENDER_STATE: RenderState = { phase: 'idle', showingRender:
 export function applyRenderEvent(state: RenderState, event: RenderEvent): RenderState {
   switch (event.type) {
     case 'requested':
-      return { ...state, phase: 'rendering', shadeCode: event.shadeCode, message: undefined };
+      return {
+        ...state,
+        phase: 'rendering',
+        shadeCode: event.shadeCode,
+        message: undefined,
+        code: undefined,
+      };
     case 'ready':
       // A reply for a Shade the Dealer has since replaced is stale: the requested event for the
       // newer Shade moved the state on, and an old success must not overwrite it.
@@ -44,13 +55,20 @@ export function applyRenderEvent(state: RenderState, event: RenderEvent): Render
         shadeCode: event.shadeCode,
         imageDataUrl: event.imageDataUrl,
         message: undefined,
+        code: undefined,
         showingRender: true,
       };
     case 'failed':
       // Same staleness rule as 'ready': a failure for a superseded request must not surface.
       if (state.phase !== 'rendering' || state.shadeCode !== event.shadeCode) return state;
       // Back to the original photo, with the message the Dealer can act on — not a dead end.
-      return { ...state, phase: 'failed', message: event.message, showingRender: false };
+      return {
+        ...state,
+        phase: 'failed',
+        message: event.message,
+        code: event.code,
+        showingRender: false,
+      };
     case 'toggle':
       return state.phase === 'ready' ? { ...state, showingRender: !state.showingRender } : state;
     default:

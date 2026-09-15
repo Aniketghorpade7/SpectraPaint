@@ -21,11 +21,16 @@ import type { Sidecar } from './sidecar';
  * The matte is fetched here rather than pointed at from an `<img src>`, because an `<img>` in the
  * renderer would have to carry the secret in a URL — the same reason the progress stream is a
  * fetch in main rather than an `EventSource`.
+ *
+ * `overlaysFrom` and `serviceRefusal` are exported for `corrections-bridge.ts` (ticket #10): every
+ * correction answers with the exact same shape `GET .../planes` does, so fetching each plane's
+ * matte and turning a non-`ok` response into a `WallsResult` is the same work in both places, not
+ * a coincidence worth re-implementing.
  */
 
 // Session ids are uuid4().hex — exactly 32 lowercase hex digits. Anything else is refused before it
 // reaches a path, so the renderer cannot name a route outside the contract.
-const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
+export const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
 
 // Plane ids come from the service, but they are round-tripped through the renderer before being
 // used in a path, so they are checked on the way back in.
@@ -37,12 +42,25 @@ const WALLS_FAILED_MESSAGE =
 const SERVICE_UNAVAILABLE_MESSAGE =
   'SpectraPaint could not reach its own service. Please restart the app.';
 
-interface PlaneDescription {
+export interface PlaneDescription {
   plane_id: string;
+  surface: 'wall' | 'ceiling';
   coverage: number;
   photo_width: number;
   photo_height: number;
   bounds: { left: number; top: number; right: number; bottom: number } | null;
+}
+
+/** The shape every planes-listing and every correction answers with (implementation-decisions.md
+ * #40/#42) — `note` and the top-level dimensions exist precisely for the photo that has none.
+ * `quality_note` (issue #15) is unrelated to `note`: it describes the photo itself — dark, blurred,
+ * heavily clipped — and stays the same across a correction, which only ever changes the planes. */
+export interface PlanesResponseBody {
+  planes: PlaneDescription[];
+  note: string | null;
+  quality_note: string | null;
+  photo_width: number;
+  photo_height: number;
 }
 
 export function registerWallsBridge(
@@ -70,31 +88,8 @@ export function registerWallsBridge(
         return await serviceRefusal(listed);
       }
 
-      const { planes } = (await listed.json()) as { planes: PlaneDescription[] };
-      const overlays: WallPlaneOverlay[] = [];
-
-      for (const plane of planes) {
-        if (!PLANE_ID_PATTERN.test(plane.plane_id)) {
-          continue;
-        }
-        const matte = await fetch(
-          `${sidecar.baseUrl}/sessions/${sessionId}/planes/${plane.plane_id}/matte`,
-          { headers },
-        );
-        if (!matte.ok) {
-          return await serviceRefusal(matte);
-        }
-        overlays.push({
-          planeId: plane.plane_id,
-          coverage: plane.coverage,
-          photoWidth: plane.photo_width,
-          photoHeight: plane.photo_height,
-          bounds: plane.bounds,
-          matteDataUrl: photoDataUrl(new Uint8Array(await matte.arrayBuffer()), 'image/png'),
-        });
-      }
-
-      return { status: 'ready', planes: overlays };
+      const body = (await listed.json()) as PlanesResponseBody;
+      return await overlaysFrom(sidecar, sessionId, body);
     } catch (error) {
       // Never dead-end: the UI gets a result it can act on rather than a hanging promise. An
       // overlay that cannot be drawn is a cosmetic loss, and the message says so — the photo is
@@ -105,7 +100,55 @@ export function registerWallsBridge(
   });
 }
 
-async function serviceRefusal(response: Response): Promise<WallsResult> {
+/**
+ * A planes-response body from the service, resolved into a `WallsResult` — one matte fetch per
+ * plane, each becoming a data URL the renderer can draw directly.
+ *
+ * Shared by `registerWallsBridge` and `corrections-bridge.ts`: a correction's response has this
+ * exact shape (implementation-decisions.md #40), so both fetch the same way rather than the
+ * correction bridge re-implementing this loop beside it.
+ */
+export async function overlaysFrom(
+  sidecar: Sidecar,
+  sessionId: string,
+  body: PlanesResponseBody,
+): Promise<WallsResult> {
+  const headers = { Authorization: `Bearer ${sidecar.secret}` };
+  const overlays: WallPlaneOverlay[] = [];
+
+  for (const plane of body.planes) {
+    if (!PLANE_ID_PATTERN.test(plane.plane_id)) {
+      continue;
+    }
+    const matte = await fetch(
+      `${sidecar.baseUrl}/sessions/${sessionId}/planes/${plane.plane_id}/matte`,
+      { headers },
+    );
+    if (!matte.ok) {
+      return await serviceRefusal(matte);
+    }
+    overlays.push({
+      planeId: plane.plane_id,
+      surface: plane.surface ?? 'wall',
+      coverage: plane.coverage,
+      photoWidth: plane.photo_width,
+      photoHeight: plane.photo_height,
+      bounds: plane.bounds,
+      matteDataUrl: photoDataUrl(new Uint8Array(await matte.arrayBuffer()), 'image/png'),
+    });
+  }
+
+  return {
+    status: 'ready',
+    planes: overlays,
+    note: body.note,
+    qualityNote: body.quality_note,
+    photoWidth: body.photo_width,
+    photoHeight: body.photo_height,
+  };
+}
+
+export async function serviceRefusal(response: Response): Promise<WallsResult> {
   // The service's own message where there is one, because it is written for the Dealer to read
   // (conventions.md §5) and is more specific than anything this layer could invent — "no wall could
   // be found in that photo" being exactly the case worth passing through verbatim.

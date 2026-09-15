@@ -6,6 +6,11 @@
 
 All steps in linear RGB, including the composite.
 
+The Light Map's division carries three robustness refinements for real photographs (#9): a blend
+toward single-brightness division as the Base Colour saturates, a ceiling on runaway values, and
+noise-measured smoothing of dark regions. All three degrade to the plain division on clean,
+neutral input. Their tunables live at the top of engine.py, each with the reasoning.
+
 Kept as a pure function with no I/O, because colour correctness is analytically checkable:
 build a photo as known_shading * known_base and the correct output is known_shading * target.
 This is test Seam 2.
