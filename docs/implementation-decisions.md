@@ -1184,3 +1184,78 @@ Realistic mode multiplies `light_tint = median(interior)/luma` (`estimate_light_
 
 **Consequence:** the threshold is a tuned constant against two labelled corners — enough to stop the algorithm being obviously wrong, not enough to call it right; growing `data/fixtures/rooms/` is the lever to tighten it. A mis-group is silent (wrong brightness ratio or a two-toned room rendered as one), so `measured.toml` remains the place to catch it. The header satisfies "recorded on every render" for the HTTP contract; the persisted stamp belongs to storage (`#11` `Bundle → Render`), where the same field will be written alongside catalogue identity and execution profile.
 
+
+---
+
+## 38. The wall matte gets a confidence floor, and #31's other three directions are closed as measured dead ends
+
+**Ticket:** #31 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-09-15
+
+**Decided:** one change to the pipeline — a `WALL_CONFIDENCE_FLOOR` of 0.9 in `matte.py`, applied by
+`_unvouched()`. A pixel SAM 2 claims is wall is dropped when the semantic pass will not vouch for it,
+with two exemptions: pixels the restore step already forced to 1.0, and **anything SegFormer's own
+argmax called `wall`, however unsure**. The thresholds in `tests/api/test_walls.py` are unchanged at
+IoU 0.60 and leakage 0.20, and `measured.toml` keeps the ratchet of decision 32. The other three
+candidate directions in #31 are closed, each with numbers rather than an opinion.
+
+Measured on the three fixtures, before and after:
+
+| Photograph | Leakage | Wall IoU | Shadowed-wall recall |
+|---|---|---|---|
+| `empty-corner` | 0.209 → 0.209 | 0.946 → 0.944 | 0.993 |
+| `corner-with-clothesline` | 0.348 → **0.338** | 0.768 → 0.771 | 0.971 |
+| `windows-with-curtains` | 0.239 → **0.185** ✓ | 0.369 → **0.389** | 0.910 → **0.801** |
+
+**Why:** the floor is the only one of the four directions that pays. It retires one failing metric
+outright — `windows-with-curtains` leakage now clears its 0.20 target and its entry is gone from
+`measured.toml` — and moves `empty-corner` by nothing at all, exactly as #31 predicted: a floor can
+only remove what the checkpoint was unsure of, and on that door it is 0.97 sure.
+
+The argmax exemption is the whole of why the floor is shippable. Without it the same floor scores
+0.765 shadowed-wall recall on `windows-with-curtains` against a floor of 0.80 — it deletes wall in
+shadow, which is the single failure `design-decisions.md` §5 calls the most damaging one. Two
+weaker forms were measured and rejected: reading the confidence through a box mean first changes no
+metric on any fixture to three decimal places, because the band-and-core step already resolves the
+matte spatially; and holding argmax-wall pixels to a *lower* floor instead of exempting them is back
+to 0.776 recall at 0.35, because that shadowed wall is labelled `wall` at only 0.2 to 0.35
+confidence.
+
+**Negative prompts from a second tier of classes were built, measured and reverted.** The reasoning
+for trying was sound — the over-claim originates in SAM 2's mask, `prompts.py` draws negatives only
+from the four exclusions, and SegFormer *does* correctly call some of the clothes `apparel` and
+`towel` — so the full path was implemented: a `DISTRACTOR_CLASSES` tier in `tools/export_onnx.py`
+(curtain, apparel, towel, mirror), written to `runtime.json` under its own key, carried as a third
+map on `SemanticRegions`, and sampled as negative points. It makes the matte **worse**: leakage on
+`corner-with-clothesline` rises from 0.338 to 0.369 while IoU falls from 0.771 to 0.752. Five
+variants were measured — gating the points to low wall-confidence (0.5, 0.3, 0.1), guaranteeing the
+exclusions their points before the distractors get any, and widening the negative share to 0.50 and
+0.40 — and every one of them is worse than exclusions alone on that photograph. The cause is the
+same domain gap seen from a new angle: the checkpoint labels 17.8% of that photograph and 48.3% of
+`windows-with-curtains` as a distractor, far more than those objects occupy, so the negative points
+land on real wall and SAM 2 pulls its boundary off wall it had right. The labels are not reliable
+enough to be *evidence*, not merely not reliable enough to be *rules*.
+
+**Promoting those classes to real exclusions was measured too, and is not worth its cost.** With
+prompts left alone, removing `curtain` and `mirror` from the matte scores 0.336 / 0.180 / 0.390
+against the shipped 0.338 / 0.185 / 0.389 — better on every metric, worse on none, and worth at most
+0.005. That is too little to buy a design commitment: it makes an absolute rule
+(`design-decisions.md` §5: a pixel leaves the wall because the model named it, and nothing brings it
+back) out of labels we have just watched misfire across half a frame.
+
+**The thresholds are left where they are.** #31 offered revising them as a fourth direction, and the
+case against is that the one photograph that fails them is not a threshold problem. `empty-corner`
+misses 0.20 by 0.009 with everything else about it correct, and `windows-with-curtains` misses IoU
+0.60 by 0.21 — no honest number covers both, and a threshold moved to accommodate a door painted at
+0.97 confidence would be a number chosen to make a known defect read as a pass. The ratchet in
+`measured.toml` already does the job a revised threshold would: the lane is green, a regression still
+fails it, and the shortfall stays visible.
+
+**Consequence:** the shadowed-wall margin on `windows-with-curtains` is now **0.001** — 0.801 against
+a floor of 0.800, down from 0.910. That is the floor's real price and it is thin: a Pillow release
+that resizes a label by one pixel could trip it. It is recorded in `measured.toml`'s header as the
+number to watch, and a future change that needs room should reconsider the floor rather than lower
+that test. Two of the three fixtures still fail their leakage target and `windows-with-curtains`
+still misses IoU 0.60 by a wide margin; with this checkpoint fixed, nothing in this entry changes
+that, and the remaining route is the one
+[`docs/handoff/custom-wall-segmentation-model.md`](./handoff/custom-wall-segmentation-model.md)
+describes. Reversing the floor means deleting `_unvouched()` and re-recording three baselines.

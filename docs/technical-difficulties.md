@@ -334,7 +334,8 @@ change to reach for if the overlay ever moves to a browser target.
 
 ## 12. The photographs arrived, and the pipeline is less accurate than the thresholds it was given
 
-**Ticket:** #30 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 · **Status:** open
+**Ticket:** #30 · **Contributor:** Aniket Ghorpade · **Date:** 2026-08-21 ·
+**Status:** open — narrowed by #31 (implementation decision 38), not closed
 
 Follow-up to [difficulty 9](#9-a-synthetic-room-cannot-tell-you-whether-wall-detection-works), which
 is now **resolved** in its own terms: three hand-labelled rooms are in `data/fixtures/rooms/`, and
@@ -367,6 +368,16 @@ drops 58% of the clothesline over-claim while keeping 98% of true wall, which wo
 photograph; on the door it keeps 81% of true wall and 79% of the over-claim, because the model is
 confidently wrong rather than unsure. `windows-with-curtains` cannot reach IoU 0.60 by any of these
 routes: its certain wall is 10% of the frame while the matte claims 40%.
+
+**What #31 changed (2026-09-15):** that 0.9 confidence floor now ships, and measuring it settled
+more than it fixed. It must exempt anything SegFormer argmaxed as `wall` however unsure, or it
+deletes shadowed wall (0.765 recall against a 0.80 floor); with the exemption,
+`windows-with-curtains` leakage clears its target at 0.185 and the clothesline moves 0.348 to 0.338.
+The door does not move at all, as predicted. Three further routes were measured and closed — see
+difficulty 19 for the negative-prompt dead end, and implementation decision 38 for the rest. The
+difficulty stays **open** because the two defects it names are still there: this checkpoint paints a
+door and paints half a curtained wall, and no arrangement of the code downstream of it changes
+that.
 
 **Where it stands:** open, and the lane is green rather than red — each fixture is now held to what
 it measured (`data/fixtures/rooms/measured.toml`, decision 32) instead of to a target the pipeline
@@ -526,3 +537,48 @@ which is also more honest about what the contract is. No production code changed
 
 **Where it stands:** resolved — grouping uses tint distance `< 0.08` (`_tint_of`), and a group re-estimates from the union matte so the seam stays interior. Recorded as implementation-decisions.md #36. The threshold is still tuned against two labelled corners; more fixtures are the only honest way to tighten it.
 
+
+
+---
+
+## 19. Better negative prompts make the matte worse, because the labels they come from are wrong across half the frame
+
+**Ticket:** #31 · **Contributor:** Aniket Ghorpade (found by an agent) · **Date:** 2026-09-15 ·
+**Status:** resolved — approach abandoned, and it should not be tried again without new evidence
+
+Follow-up to [difficulty 12](#12-the-photographs-arrived-and-the-pipeline-is-less-accurate-than-the-thresholds-it-was-given).
+
+**What happened:** #31 listed "SAM 2 prompting: the spill originates in the refined mask, so better
+negative prompts on the named exclusions may contain it" as a candidate direction, and it is the
+best-reasoned one on the list. `prompts.py` draws negative points only from the four excluded
+classes, so on `corner-with-clothesline` SAM 2 receives *no* negative evidence at all about the
+clothes it then paints — while SegFormer does correctly label some of those pixels `apparel` and
+`towel`. Adding a second tier of classes as negative points looked like free containment at the
+place the leak starts.
+
+It measures worse. Leakage on that photograph rose from 0.338 to 0.369 and wall IoU fell from 0.771
+to 0.752 — both moving the wrong way at once.
+
+**Why it was hard:** the failure is invisible from the semantic map's confusion table, which is
+where the idea came from and where the labels look useful. Counting how much of the *frame* each
+class claims is what explains it: the checkpoint calls 17.8% of `corner-with-clothesline` and 48.3%
+of `windows-with-curtains` a curtain, apparel, towel or mirror — several times what those objects
+actually occupy. So the negative points land on real wall, SAM 2 believes them, and it pulls its
+boundary off wall it previously had right. Leakage and IoU degrade together, which is the signature
+of a mask that moved rather than one that shrank.
+
+Two plausible explanations were ruled out before accepting that. Gating the points to pixels where
+wall confidence is under 0.5, 0.3 or 0.1 changes nothing — the grid sampler already picks
+low-confidence pixels, so the gate mostly reselects the same points. Budget displacement is not it
+either: negatives grew from 4 points to 10 and the fear was that floor and ceiling lost their slots,
+but sampling the exclusions first and giving the distractors only the remainder still loses (0.354
+against 0.338), as does widening the negative share from 0.625 to 0.50 or 0.40.
+
+**Where it stands:** abandoned, and the plumbing reverted — `tools/export_onnx.py`, `semantic.py`
+and `prompts.py` are back to the four-class tier, and the graphs re-exported so `runtime.json`
+matches the exporter that wrote it. The finding worth keeping is the general one, because it applies
+to every future idea that reads more classes out of this checkpoint: its labels are not reliable
+enough to be **evidence**, not merely not reliable enough to be **rules**. An approach that feeds
+them to SAM 2 needs a reason to believe they are right about *where* the object is, not only about
+*what* it is. The same classes used for outright removal, with prompts untouched, are worth 0.005 —
+measured, and rejected on cost in implementation decision 38.
