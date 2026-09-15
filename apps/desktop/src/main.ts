@@ -4,6 +4,12 @@ import path from 'node:path';
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
 import { registerCorrectionsBridge } from './corrections-bridge';
+import {
+  EXECUTION_PROFILE_GET_CHANNEL,
+  EXECUTION_PROFILE_SET_CHANNEL,
+  QUALITY_TIER_GET_CHANNEL,
+  QUALITY_TIER_SET_CHANNEL,
+} from './channels';
 import { registerCreateConsultationBridge } from './create-consultation';
 import { registerExportBridge } from './export-bridge';
 import {
@@ -136,37 +142,20 @@ void app.whenReady().then(async () => {
     isTrustedSender,
   );
   registerBootStatusBridge(bootStatus, startService, isTrustedSender);
-  const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';
-  const EXECUTION_PROFILE_SET_CHANNEL = 'spectrapaint:execution-profile:set';
-  const QUALITY_TIER_GET_CHANNEL = 'spectrapaint:quality-tier:get';
-  const QUALITY_TIER_SET_CHANNEL = 'spectrapaint:quality-tier:set';
 
   ipcMain.handle(EXECUTION_PROFILE_GET_CHANNEL, (event): string => {
     return isTrustedSender(event.sender) ? getExecutionProfile() : 'cpu-better';
   });
 
   ipcMain.handle(EXECUTION_PROFILE_SET_CHANNEL, async (event, profile: string): Promise<void> => {
-    // We do not allow setting the execution profile directly via IPC; it is derived from hardware and quality.
-    // If needed, we could parse the profile and set hardware and quality, but for simplicity we ignore.
-    // The dealer should use the quality tier channels to override.
+    // The composite is set by splitting it back into the two settings the Dealer actually
+    // overrides — hardware and tier — each of which validates its own value and restarts the
+    // sidecar when either changes.
     if (!isTrustedSender(event.sender)) return;
-    // Optionally, we could split the profile and set hardware and quality, but we don't allow changing hardware via IPC.
-    // For now, we ignore this channel for setting, or we could log a warning.
-    // We'll just return without doing anything to avoid breaking existing code that might use it.
-    // But note: the existing test might use this channel? We don't know.
-    // We'll keep it for compatibility but only allow setting if it matches the current hardware profile?
-    // Alternatively, we can remove this channel and only keep the quality tier channels.
-    // However, the existing code might rely on it. We'll keep it and update both hardware and quality if possible.
-    // We'll split the profile by '-' and if we have two parts, set hardware and quality.
-    // If not, we ignore.
-    const parts = profile.split('-');
-    if (parts.length === 2) {
-      const hw = parts[0];
-      const qt = parts[1];
-      setHardwareProfile(hw as string);
-      setQualityTier(qt as string);
-    }
-    // If not, we do nothing.
+    const [hardware, tier] = profile.split('-');
+    if (hardware === undefined || tier === undefined) return;
+    setHardwareProfile(hardware);
+    setQualityTier(tier);
   });
 
   ipcMain.handle(QUALITY_TIER_GET_CHANNEL, (event): string => {
