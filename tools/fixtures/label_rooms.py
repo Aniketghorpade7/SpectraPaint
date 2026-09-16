@@ -317,6 +317,197 @@ ROOMS: list[Room] = [
         ],
         note="one plane, night lighting with a blown-out band, windows and a switch plate",
     ),
+    Room(
+        # Stock photograph (Unsplash), already in the directory for #31: a single flat wall of
+        # strongly patterned wallpaper with a curtain at the right edge. The "wall with a strong
+        # pattern" failure mode issue #33 asks the set to cover: every column carries texture, so
+        # the energy cue is texture everywhere — the flat-wall case at its hardest. One Wall Plane;
+        # the bed, nightstands, candelabra and curtain are furniture and soft furnishings, not
+        # wall, and the patterned wall behind them is only labelled where the photograph shows it.
+        stem="patterned-wallpaper-with-curtain",
+        size=(2000, 2000),
+        planes=[
+            Plane(
+                name="patterned wall",
+                polygons=[
+                    [
+                        (0, 25),
+                        (1448, 25),
+                        (1360, 910),
+                        (570, 910),
+                        (570, 1240),
+                        (0, 1240),
+                    ],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The curtain's left edge: folds make the exact boundary unknowable.
+            [(1330, 0), (1500, 0), (1420, 1250), (1250, 1250)],
+            # The headboard's carved crown, where wall stops being visible.
+            [(560, 860), (1370, 860), (1370, 960), (560, 960)],
+            # The nightstands and what is visible of the wall between and beside them.
+            [(80, 1150), (620, 1150), (620, 1400), (80, 1400)],
+            [(1610, 1150), (1800, 1150), (1800, 1330), (1610, 1330)],
+            # The ceiling sliver at the top of the frame.
+            [(0, 0), (2000, 0), (2000, 60), (0, 60)],
+        ],
+        note="one plane, strongly patterned wallpaper, curtain at the right edge",
+    ),
+    Room(
+        # Stock photograph (Wikimedia Commons, CC BY-SA 4.0), already in the directory for #31:
+        # a dim washroom seen at an angle — three walls meeting at two slanted corners, a mirror
+        # bridging the left corner, tiled wainscot below cream paint. The three-wall room and the
+        # rolled-camera failure modes issue #33 asks the set to cover, in one photograph.
+        #
+        # The **wall** is labelled; the **planes** are not, and that is deliberate and measured.
+        # Three planes are visible — left (windowed), back (mirror and sink), right (dispenser
+        # and toilet) — but the boundaries the plane label would assert are not measurable from
+        # this photograph: the left corner is photometrically faint and the right corner has none
+        # at all (cream wall against cream wall, both lit — step contrast 0.12/px against 22+ for
+        # the object edges nearby), and with the seam cap lifted the splitter places its seams on
+        # the sink's shadow edge and the dispenser's edge instead. The corners sit at x~996 and
+        # x~1747 (measured from where the wainscot-top lines meet); the detector's seams land at
+        # x~934 and x~1430. The windows-with-curtains precedent, in reverse: there the *label*
+        # was arguable; here the three planes are plain to a person and the detector is not equal
+        # to them yet. See decision 50 in docs/implementation-decisions.md.
+        #
+        # The wall regions below follow the lines that did measure cleanly (luminance scans on
+        # object-free columns, cross-checked against grid overlays): the wainscot top runs
+        # (0,781)->(220,689)->(466,576)->(490,501)->(550,364)->(996,350) on the left wall — the
+        # tile is nearly flat at y~360 right of the window and meets the back wall's own tile top
+        # (~y 350-418) at the corner — then ~418 flat behind the dispenser and ~423->449 rising
+        # across the right wall. The tile meets its baseboard at (0,1320)->(310,1229)->(466,1184)
+        # on the left wall and ~y1160-1173 at the back wall's right end; the right wall's
+        # baseboard sits at ~y965, hidden behind the toilet. The ceiling line is ~y15. Window,
+        # mirror and furniture are excluded by omission — wall = the union of these polygons,
+        # everything else not wall — and the grey quads cover what tracing cannot settle: both
+        # corners, the object boundaries, the mirror's tilted frame, and a narrow band along each
+        # floor junction (the floor below it stays not-wall, where a shadowed-wall error would
+        # otherwise hide).
+        stem="dim-room-with-mirror",
+        label_planes=False,
+        size=(2000, 1333),
+        planes=[
+            Plane(
+                name="left wall (windowed)",
+                polygons=[
+                    # The tile wainscot: wainscot top measured at (0,781)->(220,689)->
+                    # (466,576)->(490,501)->(550,364)->(996,350), baseboard at
+                    # (0,1320)->(310,1229)->(466,1184); the corner strip below y~1050 is grey.
+                    [
+                        (0, 781),
+                        (220, 689),
+                        (466, 576),
+                        (490, 501),
+                        (550, 364),
+                        (996, 350),
+                        (996, 1050),
+                        (466, 1184),
+                        (310, 1229),
+                        (0, 1320),
+                    ],
+                    # Cream under the window, down to the wainscot.
+                    [(0, 575), (466, 455), (466, 576), (220, 689), (0, 781)],
+                    # The window-bottom wedge at the far left, where the opening meets the
+                    # frame edge.
+                    [(0, 462), (60, 505), (105, 550), (0, 572)],
+                    # Cream between the window's right edge and the mirror's left edge.
+                    [(466, 0), (535, 0), (540, 150), (550, 364), (490, 501), (466, 576)],
+                    # Cream below the mirror, running across the corner onto the back wall.
+                    [(540, 150), (1160, 370), (1160, 403), (996, 335), (550, 364)],
+                ],
+            ),
+            Plane(
+                name="back wall (mirror and sink)",
+                polygons=[
+                    # Cream from the corner to the paper-towel dispenser.
+                    [(1020, 15), (1250, 15), (1250, 447), (1020, 335)],
+                    # Cream above the dispenser.
+                    [(1250, 15), (1520, 15), (1520, 110), (1250, 110)],
+                    # Cream from the dispenser to the right corner; the tile top behind it
+                    # measures flat at ~y418.
+                    [(1520, 15), (1747, 15), (1747, 423), (1520, 418)],
+                    # Tile left of the sink.
+                    [(1020, 335), (1050, 349), (1050, 948), (1020, 951)],
+                    # The tile wainscot from the sink to the right corner: top ~418 flat then
+                    # 423 at the corner, baseboard 1160-1173 at the right end; the sink's
+                    # shadowed tile below y435 is grey (see uncertain).
+                    [
+                        (1050, 349),
+                        (1100, 375),
+                        (1240, 418),
+                        (1520, 418),
+                        (1747, 423),
+                        (1747, 1160),
+                        (1630, 1169),
+                        (1490, 1110),
+                        (1050, 1110),
+                        (1050, 948),
+                    ],
+                ],
+            ),
+            Plane(
+                name="right wall (dispenser and toilet)",
+                polygons=[
+                    # The cream return wall; its tile top continues the back wall's at
+                    # ~423->449 rising to the right edge.
+                    [(1765, 15), (2000, 15), (2000, 449), (1765, 423)],
+                    # Its tile, down to the baseboard at ~y965 — mostly behind the toilet and
+                    # the grab bar, both grey.
+                    [(1765, 423), (2000, 449), (2000, 965), (1765, 965)],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The ceiling junction, lost in shadow along the whole width.
+            [(0, 0), (2000, 0), (2000, 28), (0, 28)],
+            # The floor junction, as a narrow band along the measured baseboard lines — the
+            # floor below stays not-wall, so a matte claiming it still counts as leakage.
+            [(0, 1320), (466, 1184), (996, 1050), (996, 1110), (466, 1244), (0, 1333)],
+            [
+                (996, 1050),
+                (1490, 1110),
+                (1630, 1169),
+                (1747, 1160),
+                (1747, 1220),
+                (1630, 1230),
+                (1490, 1170),
+                (996, 1110),
+            ],
+            [(1747, 1160), (2000, 1180), (2000, 1240), (1747, 1220)],
+            # The left corner: faint (paint against paint in shadow) and its exact column is
+            # x = 996 +/- 20; greyed full-height, down to where the floor band takes over.
+            [(970, 15), (1020, 15), (1020, 1055), (970, 1055)],
+            # The right corner: cream against cream with both sides lit — no photometric edge
+            # exists at all; its column (x ~ 1747) is known only from the tile junction below.
+            [(1725, 15), (1765, 15), (1765, 825), (1725, 820)],
+            # The mirror, a tilted quad bridging the left corner: top edge (535,0)->(1125,160),
+            # bottom edge (540,150)->(1160,370), read off a grid overlay.
+            [(535, 0), (1125, 160), (1160, 370), (540, 150)],
+            # The window's frame margins: right edge and bottom edge.
+            [(400, 0), (435, 0), (492, 455), (462, 462)],
+            [(0, 552), (470, 435), (472, 470), (0, 592)],
+            # The chair against the left wall's wainscot, back top edge sloping with the
+            # perspective; its legs below the quad are furniture and honestly not-wall.
+            [(275, 655), (500, 560), (805, 515), (805, 1000), (275, 1055)],
+            # Sink, trap, and the tile their shadow drowns (luminance ~0-80 down to y~1100).
+            [(1050, 435), (1490, 435), (1490, 1110), (1050, 1110)],
+            # The waste bin under the grab bar.
+            [(1540, 1060), (1640, 1060), (1640, 1310), (1540, 1310)],
+            # Paper-towel dispenser, spanning the right corner's cream.
+            [(1240, 100), (1530, 100), (1530, 400), (1240, 400)],
+            # Soap dispenser beside it.
+            [(1490, 190), (1570, 190), (1570, 310), (1490, 310)],
+            # Grab bar and its shadow, crossing both back and right walls.
+            [(1430, 525), (2000, 555), (2000, 610), (1430, 585)],
+            # Toilet, tank and brush.
+            [(1590, 740), (2000, 740), (2000, 1200), (1590, 1200)],
+        ],
+        note="three walls at two slanted corners; planes traced but label withheld — "
+        "the corners are not photometrically findable and the splitter prefers object edges "
+        "(decision 50)",
+    ),
 ]
 
 

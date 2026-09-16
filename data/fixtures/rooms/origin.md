@@ -45,8 +45,24 @@ These were added on 2026-09-14 at the repository owner's explicit instruction, o
 a shortcut past this" rule stated above for the first time. They were sourced and used to check
 whether #31's over-claim bug (semantic pass calling a door/curtain/mirror `wall`) generalises beyond
 the three consented fixtures — it did not reproduce on any of the three; see the commit/PR that
-added them for the measurement. They carry no hand-drawn `.wall.png` or `.planes.png` labels, so the
-accuracy tests in `tests/api/test_walls.py` skip them exactly as they would an unlabelled fixture;
-they exist here as a reference set, not as graded fixtures. Given the rule above, treat this row as
-the exception rather than the precedent: a future photograph of nobody's room still needs the same
-explicit, on-the-record instruction to land here, not just "it looked useful."
+added them for the measurement. Given the rule above, treat this row as the exception rather than
+the precedent: a future photograph of nobody's room still needs the same explicit, on-the-record
+instruction to land here, not just "it looked useful."
+
+On 2026-09-16 (issue #33), two of the three gained hand-drawn labels — polygons kept in
+`tools/fixtures/label_rooms.py`, which regenerates the PNGs — so they now run in the accuracy tests
+as graded fixtures:
+
+| File | Failure mode it covers | Wall Planes |
+|---|---|---|
+| `patterned-wallpaper-with-curtain.jpg` | A wall with a strong pattern: every column carries texture, so the flat-wall case at its hardest for the energy cue. | 1 |
+| `dim-room-with-mirror.jpg` | Three walls at two slanted corners (a rolled camera), tiled wainscot in deep shadow, a mirror bridging one corner — the three-wall and shadow modes in one frame. | not labelled — see below |
+
+`dim-room-with-mirror.jpg` has **no Wall Plane label**, deliberately, and it is the measured answer
+issue #33's raise-the-cap question needed. Three planes are plainly visible to a person, but the
+boundaries are not photometrically findable: the left corner is faint (paint against paint in
+shadow) and the right corner is cream wall against cream wall with both sides lit — no edge exists
+at all. The corner columns (x≈996 and x≈1747, measured from the tile lines) sit far from where any
+cue peaks, so labelling planes would assert a split the pipeline cannot produce and the seam/purity
+tests would rightly fail it. Its **wall** label stands; the plane tests skip it, exactly as
+`windows-with-curtains.jpg`'s do, and decision 50 records the measurement.

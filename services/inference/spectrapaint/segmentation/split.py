@@ -16,13 +16,24 @@ in a photograph of a corner is three things that coincide:
   so the horizontal luminance gradient changes sign there)
 
 Two of those three are implemented as cues of their own. **Vanishing-line
-geometry is not**, and saying so here is the point: what stands in for it is
-that every cue is a per-column statistic, which inherently answers to structure
-running down the photograph and ignores structure running across it. That is
-weaker than fitting the room's vanishing lines and knowing where a corner must
-be — a skirting board's shadow and a corner are equally vertical-ish to this
-code. The ticket names the cue, this module approximates it, and a photograph
-where the approximation fails is the thing to add to data/fixtures/rooms.
+geometry is not**, and issue #33 closed that half deliberately rather than
+leaving it open. The photograph where the approximation fails now exists —
+`dim-room-with-mirror` in data/fixtures/rooms, whose corners sit at x≈996 and
+x≈1747 and which per-column cues cannot find: the left corner is faint (paint
+against paint in shadow), the right corner has literally no photometric edge
+(cream wall against cream wall, both lit), and with the seam cap lifted the
+agreeing groups land on the sink's shadow edge and the paper-towel dispenser
+instead. Fitting the tile lines' vanishing point *would* find those corners —
+that is how the measured corner columns were obtained — so the decision is
+genuinely close, and it went to **not yet**, for two measured reasons. First,
+geometry is not what fails on that photograph today: the matte claims the sink
+shadow and the dispenser as wall (#31), and seams placed perfectly on corners
+the matte does not contain would partition a wall that is not there. Second, a
+line fitter is a second geometry engine, and tuning it against one ungraded
+three-wall photograph is the tune-against-two-photos trap decision 34 names.
+Revisit when #31 has stopped the matte claiming object edges and a second
+three-wall fixture exists to fit against — the corner columns this photograph
+gives (and how the tile lines determine them) are recorded in decision 50.
 
 "Coincide" is the operative word, and it is what the implementation checks.
 Each cue is computed as a signal over columns of the eroded wall interior:
@@ -94,12 +105,14 @@ _VALLEY_RADIUS_FRACTION = 0.15
 # to be considered, or it is mostly window/furniture gap.
 _MIN_COLUMN_COVERAGE = 0.08
 
-# How many seams may be emitted. One, for now, which is two Wall Planes — the
-# common room. Rooms with three visible walls exist and this is the number to
-# raise, but not before there are fixtures with three labelled planes to raise
-# it against: on the three rooms in data/fixtures/rooms a second seam is always
-# a curtain fold or a stretch of wall the matte wrongly claimed (#31), never a
-# third wall, so allowing two would split a two-wall room into three.
+# How many seams may be emitted. One, measured against the grown fixture set (decision 50):
+# with the cap lifted, a second agreeing group appears on every photograph in data/fixtures/rooms
+# and is a wall crack, a curtain edge, a door frame or an object edge — never a third wall. The
+# one genuine three-wall photograph (dim-room-with-mirror) cannot be served by a second seam yet:
+# its corners sit where no cue peaks, because one is photometrically faint and the other has no
+# photometric edge at all. Raise this only when the plane label on that fixture can pass the seam
+# and purity tests — which needs vanishing-line geometry (see the module docstring) or a cue that
+# survives a corner with no edge.
 _MAX_SEAMS = 1
 
 # How close two cues must land to count as the same corner, as a fraction of
@@ -121,8 +134,13 @@ _SLOPE_WINDOW_FRACTION = 0.03
 
 # Cue floors, below which a peak is not evidence of anything. A flat wall's
 # signals are all zero, and these are what keep it one plane. Measured on the
-# fixtures: at a real corner energy was 0.0065-0.0085 and reversal 0.0024-0.0085,
-# against 0.0003 and below for texture ripples on the same walls.
+# two original fixtures (decision 34): at a real corner energy was 0.0065-0.0085
+# and reversal 0.0024-0.0085, against 0.0003 and below for texture ripples.
+# Re-measured on the grown set (decision 50): every real corner still clears all
+# three floors comfortably, and the patterned wall shows the floors are not what
+# holds a flat wall single — its texture exceeds the energy and valley floors,
+# and only cue agreement (three distinct cues never coincide on texture) and the
+# sliver merge keep it one plane. No constant moved.
 _ENERGY_FLOOR = 0.004
 _VALLEY_DEPTH_FLOOR = 0.030
 _REVERSAL_FLOOR = 0.001

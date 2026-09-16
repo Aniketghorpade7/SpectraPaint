@@ -17,15 +17,30 @@
 #
 # Measured on: 2026-08-21, Linux, CPU, the checkpoints pinned in models/manifest.toml.
 # Re-measured: 2026-09-15, after the wall-confidence floor in matte.py (#31, candidate direction 1).
+# Re-measured: 2026-09-16, adding dim-room-with-mirror and patterned-wallpaper-with-curtain to the
+#               labelled set (issue #33). The shadowed-wall recall floor joined this ratchet then
+#               too: dim-room's chair shadow is its first real failure — a shadow fan the matte
+#               drops wholesale, for the reason no threshold edit fixes (#31).
 # Regenerate after a pipeline change with the reasoning in the commit message:
 #     cd services/inference && uv run pytest -m models -q     # the failure message prints the new value
 
 # Only the metrics that fall short are recorded. A metric that already meets its target has no
 # entry, and the lane fails if one appears — see the ratchet in tests/api/test_walls.py. Wall IoU is
-# absent for two rooms because they clear it (0.944 and 0.771); the shadowed-wall recall of all three
-# clears its own target too, so it appears nowhere here — but `windows-with-curtains` now clears it
-# by 0.001 (0.801 against 0.80, from 0.910 before the floor), which is the floor's real cost and the
-# number to watch.
+# absent for two rooms because they clear it (0.944 and 0.771); the shadowed-wall recall of the
+# three original rooms clears its own target too (windows-with-curtains by only 0.001 — 0.801
+# against 0.80, from 0.910 before the floor, which is the floor's real cost and the number to
+# watch), so it appeared nowhere here until dim-room-with-mirror arrived and became its first
+# recorded failure.
+
+[dim-room-with-mirror]
+# The chair's shadow fan across the tiled wainscot: SAM 2 cuts at the shadow's edge and drops
+# 26% of the darkest quarter of the wall (0.737 against the 0.80 target), mostly the left wall's
+# tile between y~600 and the baseboard. This is the failure the shadow criterion exists to catch,
+# on the first photograph strong enough to trigger it — the semantic pass's override recovers the
+# curtain-side shadows but not a shadow this deep. Containing it needs #31's direction: the
+# shadow's edge must reach SAM 2 as a negative prompt, not look like an object edge. Wall IoU and
+# non-wall leakage both clear their targets on this photo (0.682 and 0.186) and have no entries.
+shadowed_wall_recall = 0.737
 
 [corner-with-clothesline]
 # The matte paints the clothes hanging across the corner. The confidence floor cuts 0.348 to 0.338:
