@@ -39,7 +39,7 @@
 # on the first photograph strong enough to trigger it — the semantic pass's override recovers the
 # curtain-side shadows but not a shadow this deep. Containing it needs #31's direction: the
 # shadow's edge must reach SAM 2 as a negative prompt, not look like an object edge. Wall IoU and
-# non-wall leakage both clear their targets on this photo (0.682 and 0.186) and have no entries.
+# non-wall leakage both clear their targets on this photo (0.823 and 0.069) and have no entries.
 shadowed_wall_recall = 0.737
 
 [corner-with-clothesline]

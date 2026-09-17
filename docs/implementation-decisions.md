@@ -1576,7 +1576,7 @@ number was recorded. `origin.md`'s exception section now covers labelling as wel
 **The graded results, on the pinned checkpoints.** `patterned-wallpaper-with-curtain` clears every
 target outright: wall IoU, non-wall leakage, shadowed-wall recall, plane count 1 == 1, purity and
 partition — the strong-pattern wall stays a single plane, which is the negative control working.
-`dim-room-with-mirror` clears wall IoU (0.682 against 0.60) and leakage (0.186 against 0.20) with
+`dim-room-with-mirror` clears wall IoU (0.823 against 0.60) and leakage (0.069 against 0.20) with
 no baseline needed, and fails only the shadow criterion.
 
 **The shadow floor joined the ratchet, and dim-room is its first recorded failure.** The chair in
