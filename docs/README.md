@@ -55,6 +55,7 @@ Written up so they can be picked up cold.
 |---|---|---|
 | Objective 2 — calibration-aware colour accuracy | **Parked.** Deferred during design; V1 excludes shade reading, but it remains the end goal | [handoff/objective-2-colour-accuracy.md](./handoff/objective-2-colour-accuracy.md) |
 | Custom wall segmentation model | **Planned, not started.** Required before commercial deployment — the SegFormer weights used in development are non-commercial | [handoff/custom-wall-segmentation-model.md](./handoff/custom-wall-segmentation-model.md) |
+| Dealer-testing bugs, September 2026 | **Diagnosed, decisions taken.** 9 reported bugs traced to 3 shared root causes; 6 proposed issues | [bugs/README.md](./bugs/README.md) |
 
 ## What this project is
 
