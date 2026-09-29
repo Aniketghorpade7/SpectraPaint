@@ -7,7 +7,7 @@
 | **Confidence** | Confirmed: synthetic probe on the pure render functions |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 1, item 2 |
 | **Root cause** | [C: the Light Map carries everything that is not the Base Colour](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour) |
-| **Proposed issue** | Issue 5, "Render: stains and sunlight" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52) (Render: stains and sunlight) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

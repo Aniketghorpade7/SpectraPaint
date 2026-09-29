@@ -1,7 +1,7 @@
 # Bugs: Dealer testing, September 2026
 
-**Status:** Diagnosed. Product decisions taken 2026-09-29 (grilling session). Not yet filed as GitHub
-issues; the [proposed issues](#proposed-issues) below are written so they can be pasted in as they are.
+**Status:** Diagnosed. Product decisions taken 2026-09-29 (grilling session). Filed as GitHub issues
+[#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48)–[#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) on 2026-09-29; see [the issue list](#proposed-issues) below.
 
 **Source report:** [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), "Spectrapaint Remaining Issues", 9 items
 across 7 pages.
@@ -27,15 +27,15 @@ section are at that commit.
 
 | # | Symptom (as reported) | PDF page | Root cause | Document | Issue |
 |---|---|---|---|---|---|
-| 1 | Images get zoomed after uploading | 1 | CSS frame taller than the stage; EXIF not applied | [01](./01-photo-zoomed-after-upload.md) | 2 |
-| 2 | Stains remain after painting | 1 | [C](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour): per-channel Light Map | [02](./02-stains-survive-repaint.md) | 5 |
-| 3 | Wall colour faint when selected / at edges | 1 | White selection wash; armed tool over render; soft plane-edge coverage | [03](./03-colour-faint-when-selected.md) | 2, 4 |
-| 4 | Tiled room can't be painted | 1 | Tiles labelled `floor` (hard exclusion); no tile class; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [04](./04-tiled-bathroom-not-painted.md) | 6 |
-| 5 | Could not paint left wall | 2 | Wall behind shelving labelled `wardrobe`; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [05](./05-left-wall-not-painted.md) | 6, 4 |
-| 6 | Edit menu buttons don't work | 3 | Electron default menu; no undo history | [06](./06-edit-menu-does-nothing.md) | 3 |
-| 7 | Not painting well with sunlight on the wall | 4 | [B](./root-causes.md#b-the-31-confidence-floor-deletes-sunlit-wall) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) + [C](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour) | [07](./07-sunlit-wall-paints-badly.md) | 1, 4, 5 |
-| 8 | Could not identify the tiles | 5 | Tiles labelled `refrigerator`/`cabinet`; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [08](./08-kitchen-tiles-not-identified.md) | 6 |
-| 9 | Again not painting well with sunlight | 6, 7 | Same as 7 | [07](./07-sunlit-wall-paints-badly.md) | 1, 4, 5 |
+| 1 | Images get zoomed after uploading | 1 | CSS frame taller than the stage; EXIF not applied | [01](./01-photo-zoomed-after-upload.md) | [#49](https://github.com/Aniketghorpade7/SpectraPaint/issues/49) |
+| 2 | Stains remain after painting | 1 | [C](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour): per-channel Light Map | [02](./02-stains-survive-repaint.md) | [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52) |
+| 3 | Wall colour faint when selected / at edges | 1 | White selection wash; armed tool over render; soft plane-edge coverage | [03](./03-colour-faint-when-selected.md) | [#49](https://github.com/Aniketghorpade7/SpectraPaint/issues/49), [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51) |
+| 4 | Tiled room can't be painted | 1 | Tiles labelled `floor` (hard exclusion); no tile class; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [04](./04-tiled-bathroom-not-painted.md) | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) |
+| 5 | Could not paint left wall | 2 | Wall behind shelving labelled `wardrobe`; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [05](./05-left-wall-not-painted.md) | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53), [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51) |
+| 6 | Edit menu buttons don't work | 3 | Electron default menu; no undo history | [06](./06-edit-menu-does-nothing.md) | [#50](https://github.com/Aniketghorpade7/SpectraPaint/issues/50) |
+| 7 | Not painting well with sunlight on the wall | 4 | [B](./root-causes.md#b-the-31-confidence-floor-deletes-sunlit-wall) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) + [C](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour) | [07](./07-sunlit-wall-paints-badly.md) | [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48), [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51), [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52) |
+| 8 | Could not identify the tiles | 5 | Tiles labelled `refrigerator`/`cabinet`; [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) | [08](./08-kitchen-tiles-not-identified.md) | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) |
+| 9 | Again not painting well with sunlight | 6, 7 | Same as 7 | [07](./07-sunlit-wall-paints-badly.md) | [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48), [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51), [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52) |
 
 **Three shared root causes** account for most of the list. See [root-causes.md](./root-causes.md):
 
@@ -60,10 +60,11 @@ section are at that commit.
 
 ## Proposed issues
 
-Six issues, ordered so each one can be reviewed and measured on its own. Suggested labels: `bug` plus
-the area.
+Six issues, filed 2026-09-29 and ordered so each one can be reviewed and measured on its own. Each
+issue carries the full requirement checklist and testing plan, and links back to the documents here.
+The summaries below are the index.
 
-### Issue 1: Exempt `mirror` from the #31 wall-confidence floor, and measure sunlit-wall recall
+### [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48): Exempt `mirror` from the #31 wall-confidence floor, and measure sunlit-wall recall
 
 - **Labels:** `bug`, `segmentation`
 - **Covers:** bugs 7, 9 (part)
@@ -77,7 +78,7 @@ the area.
   ≤ 0.20; `measured.toml` updated with the reasoning in the commit.
 - **Depends on:** nothing.
 
-### Issue 2: UI: fit the photo to the stage, upright photos, and no washed-out walls
+### [#49](https://github.com/Aniketghorpade7/SpectraPaint/issues/49): UI: fit the photo to the stage, upright photos, and no washed-out walls
 
 - **Labels:** `bug`, `ui`, `desktop`
 - **Covers:** bug 1, bug 3 (paths 1–2)
@@ -90,7 +91,7 @@ the area.
   [03](./03-colour-faint-when-selected.md#acceptance-criteria) (UI items).
 - **Depends on:** nothing. Includes a small REST addition (the prepared photo before the first render).
 
-### Issue 3: Replace Electron's default menu, and add Undo/Redo for Shades
+### [#50](https://github.com/Aniketghorpade7/SpectraPaint/issues/50): Replace Electron's default menu, and add Undo/Redo for Shades
 
 - **Labels:** `bug`, `desktop`, `ui`
 - **Covers:** bug 6
@@ -101,7 +102,7 @@ the area.
 - **Acceptance:** [06 → acceptance criteria](./06-edit-menu-does-nothing.md#acceptance-criteria).
 - **Depends on:** nothing.
 
-### Issue 4: Soft Alpha Matte: stop the 128-grid staircase and square holes
+### [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51): Soft Alpha Matte: stop the 128-grid staircase and square holes
 
 - **Labels:** `bug`, `segmentation`
 - **Covers:** root cause A; bugs 3 (path 3), 5, 7, 8, 9 (part)
@@ -113,9 +114,9 @@ the area.
   [03 → path 3](./03-colour-faint-when-selected.md#path-3-full-coverage-where-planes-meet-service).
 - **Acceptance:** `edge_on_grid_fraction` ≤ 0.10 on every fixture; no excluded-argmax pixel with alpha
   > 0; boundary coverage ≥ 0.99; no `measured.toml` regression.
-- **Depends on:** Issue 1 (so re-measuring happens once, against the new floor).
+- **Depends on:** [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48) (so re-measuring happens once, against the new floor).
 
-### Issue 5: Render: cover stains, and paint sunlit walls in the Shade's own hue
+### [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52): Render: cover stains, and paint sunlit walls in the Shade's own hue
 
 - **Labels:** `bug`, `render`
 - **Covers:** root cause C; bugs 2, 7, 9 (part)
@@ -126,9 +127,9 @@ the area.
   [07 → part 2](./07-sunlit-wall-paints-badly.md#part-2-paint-it-the-right-colour-renderenginepy-pure).
 - **Acceptance:** stain ΔE00 < 3 (20.6 today); unlit wall next to sun ΔE00 < 3 (8.6 today); sunlit patch
   b* stays on the Shade's side; no channel clipped in the matte; outside the matte bit-identical.
-- **Depends on:** nothing (pure `render/`). Tune against the Issue 1 fixtures once they exist.
+- **Depends on:** nothing (pure `render/`). Tune against the [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48) fixtures once they exist.
 
-### Issue 6: Add tap good enough for tiles and walls behind furniture
+### [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53): Add tap good enough for tiles and walls behind furniture
 
 - **Labels:** `bug`, `segmentation`, `ui`
 - **Covers:** bugs 4, 5, 8
@@ -139,7 +140,7 @@ the area.
   [05](./05-left-wall-not-painted.md#method-of-fixing), [08](./08-kitchen-tiles-not-identified.md#method-of-fixing).
 - **Acceptance:** one tap covers ≥ 80% of a tiled band on the tiled fixtures; three taps in shelf gaps
   extend one plane; the hidden-wall note appears on the shelf-room fixture.
-- **Depends on:** Issue 4 (added planes share `soften_boundary`). Needs original photos of a tiled
+- **Depends on:** [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51) (added planes share `soften_boundary`). Needs original photos of a tiled
   bathroom and a tiled kitchen from the Dealer.
 
 ## Open items

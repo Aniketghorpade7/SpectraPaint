@@ -6,7 +6,7 @@
 | **Severity** | Medium: dead controls, and the same default menu ships Reload, which wipes the live Consultation |
 | **Confidence** | Confirmed |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 3, item 6 |
-| **Proposed issue** | Issue 3, "App menu and Shade undo" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#50](https://github.com/Aniketghorpade7/SpectraPaint/issues/50) (App menu and Shade undo) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

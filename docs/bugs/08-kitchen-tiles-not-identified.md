@@ -7,7 +7,7 @@
 | **Confidence** | Confirmed: the pipeline was run on the page-5 image |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 5, item 8 |
 | **Root cause** | Local (tiles labelled `refrigerator`/`cabinet`) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) |
-| **Proposed issue** | Issue 6, "Add-tap quality: tiles and hidden walls" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) (Add-tap quality: tiles and hidden walls) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

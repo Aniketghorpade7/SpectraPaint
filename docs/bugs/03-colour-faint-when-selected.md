@@ -7,7 +7,7 @@
 | **Confidence** | Confirmed: all three code paths below produce a faint wall |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 1, item 3 ("When edge selected wall colour get faint and observation looks improper") |
 | **Root cause** | Local (UI wash, armed tool) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) (edge coverage) |
-| **Proposed issues** | Issue 2, "UI fixes" (paths 1-2); Issue 4, "Soft matte" (path 3) ([README](./README.md#proposed-issues)) |
+| **Issues** | [#49](https://github.com/Aniketghorpade7/SpectraPaint/issues/49) (UI fixes, paths 1-2); [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51) (Soft matte, path 3) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

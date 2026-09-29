@@ -7,7 +7,7 @@
 | **Confidence** | Confirmed: pipeline run on the page-4 and page-6 originals; render confirmed on synthetic input |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 4 (item 7), page 6 (item 9), page 7 ("Sunlight") |
 | **Root causes** | [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid), [B](./root-causes.md#b-the-31-confidence-floor-deletes-sunlit-wall), [C](./root-causes.md#c-the-light-map-carries-everything-that-is-not-the-base-colour) |
-| **Proposed issues** | Issue 1, "#31 floor mirror exemption"; Issue 4, "Soft matte"; Issue 5, "Render: stains and sunlight" ([README](./README.md#proposed-issues)) |
+| **Issues** | [#48](https://github.com/Aniketghorpade7/SpectraPaint/issues/48) (#31 floor mirror exemption); [#51](https://github.com/Aniketghorpade7/SpectraPaint/issues/51) (Soft matte); [#52](https://github.com/Aniketghorpade7/SpectraPaint/issues/52) (Render: stains and sunlight) · [all issues](./README.md#proposed-issues) |
 
 Item 9 and the "Sunlight" page are the same defect as item 7, so this one document covers all three.
 

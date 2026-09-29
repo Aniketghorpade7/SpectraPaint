@@ -7,7 +7,7 @@
 | **Confidence** | Confirmed on the page-4 original (same room); page 2 is a painted screenshot |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 2, item 5 |
 | **Root cause** | Local (wall labelled `wardrobe`) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) |
-| **Proposed issue** | Issue 6, "Add-tap quality: tiles and hidden walls" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) (Add-tap quality: tiles and hidden walls) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

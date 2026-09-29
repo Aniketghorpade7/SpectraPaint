@@ -6,7 +6,7 @@
 | **Severity** | High: the Customer judges a cropped room, and wall chips and taps can land off-photo |
 | **Confidence** | Confirmed: layout measured in headless Chrome at 1280×720 |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 1, item 1 |
-| **Proposed issue** | Issue 2, "UI fixes" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#49](https://github.com/Aniketghorpade7/SpectraPaint/issues/49) (UI fixes) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 

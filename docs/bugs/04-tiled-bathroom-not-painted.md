@@ -7,7 +7,7 @@
 | **Confidence** | Likely: measured on the page-1 screenshot, which already carries paint |
 | **Source** | [SpectrapaintBugs.pdf](./SpectrapaintBugs.pdf), page 1, item 4 ("Still not able to [paint] some tiles type room") |
 | **Root cause** | Local (no tile class; tiles labelled `floor`) + [A](./root-causes.md#a-the-alpha-matte-is-shaped-by-a-128128-grid) |
-| **Proposed issue** | Issue 6, "Add-tap quality: tiles and hidden walls" ([README](./README.md#proposed-issues)) |
+| **Issue** | [#53](https://github.com/Aniketghorpade7/SpectraPaint/issues/53) (Add-tap quality: tiles and hidden walls) · [all issues](./README.md#proposed-issues) |
 
 ## What it is
 
