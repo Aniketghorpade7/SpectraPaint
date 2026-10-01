@@ -104,7 +104,7 @@ The engine's composite itself is correct: linear-light blend, no opacity factor
 
    ```python
    contested = (alpha > 0) & (existing_claim > 0)
-   union = np.minimum(1.0, alpha + existing_claim)   # the pixel's total wall coverage
+   union = np.minimum(1.0, alpha + existing_claim)  # the pixel's total wall coverage
    resolved_new = np.where(new_wins, np.where(contested, union, alpha), 0.0)
    # and the symmetric update for the existing plane that wins
    ```

@@ -44,11 +44,15 @@ links here rather than repeating the mechanism. Line numbers are at `31-wall-mat
 
    ```python
    confident_wall = regions.wall & (regions.wall_confidence >= SEMANTIC_OVERRULE_CONFIDENCE)
-   alpha = np.where(confident_wall & ~regions.excluded, 1.0, alpha)      # :245-246  restore → grid squares of 1.0
-   alpha = np.where(regions.excluded, 0.0, alpha)                         # :250      exclusion → grid squares of 0
-   alpha = np.where(_unvouched(regions, confident_wall), 0.0, alpha)      # :256      #31 floor, bounded by ~regions.wall (grid)
-   alpha = soften_boundary(photo_u8, alpha)                               # :258
-   alpha = np.where(regions.excluded, 0.0, alpha)                         # :263      re-imposed AFTER softening
+   alpha = np.where(
+       confident_wall & ~regions.excluded, 1.0, alpha
+   )  # :245-246  restore → grid squares of 1.0
+   alpha = np.where(regions.excluded, 0.0, alpha)  # :250      exclusion → grid squares of 0
+   alpha = np.where(
+       _unvouched(regions, confident_wall), 0.0, alpha
+   )  # :256      #31 floor, bounded by ~regions.wall (grid)
+   alpha = soften_boundary(photo_u8, alpha)  # :258
+   alpha = np.where(regions.excluded, 0.0, alpha)  # :263      re-imposed AFTER softening
    ```
 
    The last line is the worst one. Whatever softening `soften_boundary` did at a floor, door,
@@ -102,10 +106,10 @@ Done in this order. Each step is measurable on its own against `data/fixtures/ro
    re-imposition at `:263` with a feather that lies entirely on the wall side of the boundary:
 
    ```python
-   excluded = regions.excluded                           # photo-resolution argmax, from step 1
-   spread   = blur(excluded.astype(float32), r=round(min(shape) * EXCLUSION_FEATHER_FRACTION))
-   ramp     = np.clip(1.0 - 2.0 * spread, 0.0, 1.0)      # 0 at the boundary, 1 at r px into the wall
-   alpha    = np.where(excluded, 0.0, alpha * ramp)
+   excluded = regions.excluded  # photo-resolution argmax, from step 1
+   spread = blur(excluded.astype(float32), r=round(min(shape) * EXCLUSION_FEATHER_FRACTION))
+   ramp = np.clip(1.0 - 2.0 * spread, 0.0, 1.0)  # 0 at the boundary, 1 at r px into the wall
+   alpha = np.where(excluded, 0.0, alpha * ramp)
    ```
 
    with a new named constant `EXCLUSION_FEATHER_FRACTION = 0.004` (about 4 px at 960 px short side)

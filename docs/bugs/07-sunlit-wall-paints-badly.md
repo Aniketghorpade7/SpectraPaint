@@ -97,13 +97,13 @@ Measure the base only from pixels whose **hue agrees with the wall as a whole**,
 pixels can't enter the percentile band:
 
 ```python
-pixels       = linear_photo[interior]
-tints        = pixels / luma(pixels)[:, None]               # brightness removed (as _tint_of)
-typical_tint = np.median(tints, axis=0)                     # the wall's hue; robust while sun < 50%
-agrees       = norm(tints - typical_tint, axis=1) < _BASE_TINT_TOLERANCE
-candidates   = pixels[agrees] if agrees.sum() >= _BASE_MIN_AGREEING else pixels
-band         = in_luminance_band(candidates, _BASE_PERCENTILE, _BASE_PERCENTILE_BAND)   # today's rule
-base_colour  = max(band.mean(axis=0), _BASE_COLOUR_FLOOR)                              # today's rule
+pixels = linear_photo[interior]
+tints = pixels / luma(pixels)[:, None]  # brightness removed (as _tint_of)
+typical_tint = np.median(tints, axis=0)  # the wall's hue; robust while sun < 50%
+agrees = norm(tints - typical_tint, axis=1) < _BASE_TINT_TOLERANCE
+candidates = pixels[agrees] if agrees.sum() >= _BASE_MIN_AGREEING else pixels
+band = in_luminance_band(candidates, _BASE_PERCENTILE, _BASE_PERCENTILE_BAND)  # today's rule
+base_colour = max(band.mean(axis=0), _BASE_COLOUR_FLOOR)  # today's rule
 ```
 
 - `_BASE_TINT_TOLERANCE = 0.06` is in the same tint space as `_GROUP_TINT_THRESHOLD = 0.08`
@@ -121,9 +121,9 @@ base_colour  = max(band.mean(axis=0), _BASE_COLOUR_FLOOR)                       
 **Step 2: cap the sun's tint in highlights** (`light_map_of`).
 
 ```python
-highlight   = smoothstep(_HIGHLIGHT_START, _HIGHLIGHT_FULL, shading)     # 0 in normal light, 1 in sun
-keep        = lerp(1.0, _SUN_TINT_KEEP, highlight)
-chroma_out  = 1.0 + (chroma_out - 1.0) * keep[..., None]
+highlight = smoothstep(_HIGHLIGHT_START, _HIGHLIGHT_FULL, shading)  # 0 in normal light, 1 in sun
+keep = lerp(1.0, _SUN_TINT_KEEP, highlight)
+chroma_out = 1.0 + (chroma_out - 1.0) * keep[..., None]
 ```
 
 `_HIGHLIGHT_START = 1.15`, `_HIGHLIGHT_FULL = 1.5` (shading relative to the Base Colour's luma) and
@@ -136,9 +136,11 @@ find that still reads too warm or too cold, `_SUN_TINT_KEEP` is the one number t
 **Step 3: hue-preserving highlight roll-off before encode** (`render` / `render_many`, not `luts.py`).
 
 ```python
-peak   = composite.max(axis=-1, keepdims=True)
-over   = peak > _HIGHLIGHT_KNEE
-scaled = _HIGHLIGHT_KNEE + (1 - _HIGHLIGHT_KNEE) * (1 - exp(-(peak - _HIGHLIGHT_KNEE) / (1 - _HIGHLIGHT_KNEE)))
+peak = composite.max(axis=-1, keepdims=True)
+over = peak > _HIGHLIGHT_KNEE
+scaled = _HIGHLIGHT_KNEE + (1 - _HIGHLIGHT_KNEE) * (
+    1 - exp(-(peak - _HIGHLIGHT_KNEE) / (1 - _HIGHLIGHT_KNEE))
+)
 composite = np.where(over, composite * (scaled / peak), composite)
 ```
 
