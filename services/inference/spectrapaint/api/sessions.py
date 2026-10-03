@@ -285,12 +285,12 @@ async def session_photo(request: Request, session_id: str) -> Response:
     displayed, so for an oriented phone photo the upload and the prepared photo are different
     rectangles.
 
-    This route exists because the stored copy at ``GET /consultations/{id}/photo/png`` only appears
-    once ``persist_preparation`` has run, which the render gate drives — on a first load, before any
-    repaint, there is nothing stored to serve. This one waits for preparation through the same gate
-    (``require_photo``) and serves the in-memory photo, so it answers as soon as preparation is done.
-    Reading it also persists the preparation, which moves issue #11's auto-save to preparation-done —
-    strictly earlier than the first render it previously waited for.
+    This route exists because the stored copy at ``GET /consultations/{id}/photo/png`` only
+    appears once ``persist_preparation`` has run, which the render gate drives — so on a first
+    load, before any repaint, there is nothing stored to serve. This one waits for preparation
+    through the same gate (``require_photo``) and serves the in-memory photo, so it answers as
+    soon as preparation is done. Reading it also persists the preparation, which moves issue
+    #11's auto-save to preparation-done — strictly earlier than the first render it waited for.
     """
 
     photo = await require_photo(request, session_id)
