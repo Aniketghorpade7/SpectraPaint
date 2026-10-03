@@ -63,8 +63,12 @@
 }
 
 /* The photo plus its status line: the repaint indicator and a failed render's message sit under
-   the image, in grey, so they never sit on top of the paint being judged. */
+   the image, in grey, so they never sit on top of the paint being judged. Both dimensions are
+   definite, taken from the stage (issue #49): without a definite height the frame's own
+   percentage heights resolved against nothing, and the photo's box grew past the stage. */
 .consultation__picture {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -73,28 +77,52 @@
   min-height: 0;
 }
 
+/* The stage's free space, and nothing else: the frame sizes itself against this box, the status
+   line and notes live outside it. A size container, so the frame can be sized against *both* of
+   its axes (cqw/cqh) rather than only the width — that is the whole fix for issue #49: the old
+   frame took the slot's full width and derived its height from the photo's aspect ratio, which
+   on any photo taller than the stage meant a frame taller than the stage, clipped by the stage's
+   `overflow: hidden`. */
+.consultation__frame-slot {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Wraps only the image itself — never the caption text below it — and sets the exact box the
-   wall overlay, the wall-chip buttons and the correction tap-layer all align to.
+   wall overlay, the wall outline, the wall-chip buttons and the correction tap-layer all align
+   to. The rule: the slot is the stage's free space; the frame is the largest box of the photo's
+   own ratio that fits it. Letterboxing on grey is the slot's job, not the image's.
 
-   Both rules here are load-bearing, not decoration, and both were found by screenshotting the
-   actual rendered layout while verifying ticket #10's tap-layer, not by reading the CSS:
+   Three rules here are load-bearing, not decoration:
 
-   `position: relative` — the three children above are all `position: absolute; inset: 0`, and
-   without a positioned ancestor that resolves against the *viewport* (the initial containing
-   block) instead of the photo. Before this, the wash covered the whole window and the wall-chip
+   `position: relative` — the children above are all `position: absolute; inset: 0`, and without a
+   positioned ancestor that resolves against the *viewport* (the initial containing block) instead
+   of the photo. Before difficulty #23's fix, the wash covered the whole window and the wall-chip
    buttons were never actually aligned with the wall they claimed to sit over.
 
-   `aspect-ratio`, set inline from the displayed image's own natural size once it loads — an
-   `object-fit: contain` image can legitimately render narrower or shorter than the box around
-   it (letterboxing), and `inset: 0` on a sibling only ever matches *that box*, never the
-   letterboxed image inside it. Matching the frame's aspect ratio to the photo's own is what
-   closes that gap without measuring pixels on every resize. */
+   `aspect-ratio`, set inline from the displayed image's own natural size once it loads, alongside
+   the same ratio as the `--photo-ratio` custom property — the width rule below needs it as a
+   number, and an `object-fit: contain` image can legitimately render narrower or shorter than the
+   box around it (letterboxing), while `inset: 0` on a sibling only ever matches *that box*, never
+   the letterboxed image inside it. Matching the frame's ratio to the photo's own is what closes
+   that gap without measuring pixels on every resize.
+
+   `width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)))` — the photo's ratio is w/h, so
+   `100cqh * ratio` is the widest that ratio can be at the slot's height; whichever of that and the
+   slot's full width is smaller is the frame's width, and `height: auto` derives the height. The
+   frame therefore always fits the slot on both axes, at every ratio, with no clipped photo — and
+   because it stays exactly the image's box, the overlay, outline, chips and tap layer (all
+   `inset: 0`) stay aligned with it. Technical difficulty #23's invariant, which holds at every
+   ratio now rather than only the ones that happened to fit. */
 .consultation__frame {
   position: relative;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
+  width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)));
+  height: auto;
 }
 
 .consultation__photo {
@@ -136,19 +164,24 @@
   pointer-events: none;
 }
 
+/* The chosen wall's outline, drawn by WallOutlineCanvas along its matte's own edge (issue #49).
+   The canvas is the frame's exact box — its backing store is sized in draw() — and is neutral grey
+   from the token set: a selection mark may not touch the wall's colour, and ui-guidelines.md now
+   says outright that selection is an outline or a chip, never a wash on the wall being judged. */
+.consultation__wall-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 /* A note, not an error: a photo whose walls could not be outlined is still repaintable. */
 .consultation__wall-note {
   margin: 0;
   color: var(--grey-5);
   font-size: 0.875rem;
   text-align: center;
-}
-
-/* The chosen wall's wash is a little stronger, so which wall the next Shade will land on is visible
-   without reading the caption. Still white and still weak: ui-guidelines.md forbids anything
-   saturated near a colour the Customer is judging, and that holds for the selection too. */
-.consultation__wall-overlay--chosen {
-  background: rgb(255 255 255 / 45%);
 }
 
 /* Choosing a wall. A chip over the middle of that wall rather than the whole wash, because a mask

@@ -19,6 +19,7 @@ export const EXPORT_CHANNEL = 'spectrapaint:export';
 export const WALLS_CHANNEL = 'spectrapaint:walls';
 export const CORRECTIONS_CHANNEL = 'spectrapaint:corrections';
 export const STORED_IMAGE_CHANNEL = 'spectrapaint:stored-image';
+export const PREPARED_PHOTO_CHANNEL = 'spectrapaint:prepared-photo';
 export const STORAGE_CHANNEL = 'spectrapaint:storage';
 export const DISK_CHANNEL = 'spectrapaint:disk';
 export const EXECUTION_PROFILE_GET_CHANNEL = 'spectrapaint:execution-profile:get';

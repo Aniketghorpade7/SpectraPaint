@@ -45,7 +45,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from spectrapaint.quality import assess_quality
 from spectrapaint.render.luts import linearise_u8
@@ -450,9 +450,17 @@ def decode_photo(contents: bytes) -> DecodedPhoto:
     This is the once-per-photo work the render path never repeats. Downscaling happens before
     linearisation so the LUT input is the actual working pixel data, exactly as the preview-sized
     render will consume it.
+
+    The EXIF orientation is applied first (issue #49), so the photo's stored pixel rows become the
+    upright picture the Dealer sees: a phone camera stores sensor-order rows with an Orientation tag
+    saying how to turn them, and Chromium honours that tag when the raw upload is displayed. Every
+    pixel space downstream — the photo the Dealer is shown, the mattes, the render, the correction
+    taps — must be that same upright space, and this is where it is made. Harmless when there is no
+    tag (the technical call recorded in docs/bugs/README.md's decision log).
     """
 
     with Image.open(io.BytesIO(contents)) as image:
+        image = ImageOps.exif_transpose(image)
         rgb = image.convert("RGB")
         if max(rgb.size) > MAX_PREPARED_DIMENSION:
             scale = MAX_PREPARED_DIMENSION / max(rgb.size)

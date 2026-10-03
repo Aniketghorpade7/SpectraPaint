@@ -1624,3 +1624,78 @@ holds one recorded shadow baseline, and every assertion about "what the pipeline
 `split.py`'s comments is backed by a photograph in the directory. The remaining routes are #31's
 (negative prompts from the shadow's edge) and the custom-model handoff — the cap raise and the
 vanishing-line fitter are now specified as conditions on those, not open questions.
+
+---
+
+## 51. The Consultation shows the prepared photo, EXIF orientation is applied at decode, the chosen wall is outlined rather than washed, and tapping a Shade disarms the tool (issue #49)
+
+Issue #49 was three visible symptoms and turned out to be five decisions, two of which are about
+*which pixels the Dealer is looking at* rather than about layout at all.
+
+**One set of pixels: EXIF orientation applied at `decode_photo`.** A phone camera stores
+sensor-order rows plus an Orientation tag saying how to turn them, and Chromium honours that tag
+when it displays the raw upload — so before this the UI showed the photo rotated while the mattes
+and the render were built on the unrotated array, and every overlay and correction tap landed in the
+wrong place. `ImageOps.exif_transpose` is now applied in `decode_photo` before `.convert("RGB")`,
+and in `exports.py:_full_targets` for the same reason: the full-resolution export upscales the
+mattes, so without it the export disagreed with the preview the Dealer approved. Applied at decode
+rather than at display because *every* downstream pixel space — photo, mattes, render, taps — must
+be the upright one, and decode is the only point all of them pass through. A no-op when there is no
+tag.
+
+**The Consultation now shows the prepared photo, not the raw upload.** Even with EXIF fixed, the
+raw upload and the prepared photo are different rectangles (the prepared one is capped at 1280),
+and the mattes describe the prepared pixels. The UI swaps `state.imageDataUrl` for the prepared
+photo once preparation reaches `done`, before the walls are fetched, so the overlay's pixel space
+is the one on screen. The raw upload stays as a placeholder only while preparation runs.
+
+This needed a route that did not exist. `GET /consultations/{id}/photo/png` serves the *stored*
+copy, but `persist_preparation` is called from `require_photo` — the render gate — so on a first
+load there is nothing stored to serve. The bug doc's preferred option was taken:
+`GET /sessions/{session_id}/photo/png` waits for preparation through the same gate and serves the
+in-memory `srgb`. A useful side effect: reading it *is* what persists the preparation, which moves
+#11's auto-save from first-render to preparation-done — strictly earlier than before. Because the
+service waits rather than answering "not ready", the UI makes one request with nothing to poll.
+
+**Layout: the slot is the stage's free space, the frame is the largest box of the photo's ratio
+that fits it.** `.consultation__frame-slot` is a size container (`container-type: size`) and the
+frame is `width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)))`, height derived. The old frame
+took the slot's full width and derived its height, which on any photo taller than the free space
+produced a frame taller than the stage and clipped by it. Sizing against *both* axes is the whole
+fix; the photo is letterboxed on grey, and the status line and notes stay outside the slot.
+
+**Selection is an outline, never a wash.** `.consultation__wall-overlay--chosen` is deleted. A 45%
+white wash on the chosen wall made the one wall the Customer was about to judge *paler than the
+others* — the selection mark was corrupting the thing being selected. It is replaced by a 2 px
+`--grey-6` line with a 1 px `--grey-0` halo along the matte's own edge, so it reads on both light
+and dark walls, plus the chip's existing inverted style. The line is neutral grey for the same
+reason the wash was white: nothing saturated may sit beside a colour being judged. Because the line
+is 2 px *on screen* while the matte arrives at the photo's own scale, `WallOutlineCanvas` draws the
+matte into a backing store the size of the frame and computes the ring there, re-measured by a
+`ResizeObserver`; the geometry itself is the pure `matteOutline` in `walls.ts`, unit-tested without
+a DOM.
+
+**The outline reads the matte's grey level, not its alpha — the bug the layout check caught.** The
+first implementation thresholded the alpha byte. The Alpha Matte is served as an 8-bit mode-L
+greyscale PNG (`planes.py:_encode_matte`), so it decodes with coverage in R, G and B and **alpha
+opaque on every pixel**; thresholding alpha saw one wall covering the whole photograph and outlined
+the photo's frame — a rectangle around the room — instead of the wall's edge. It would have drawn
+something, it would have been perfectly aligned, and it would have been completely wrong. The
+threshold is now 128, the halfway point of the coverage range the service encodes, matching the
+`mask-mode: luminance` the wash has always used on the very same bytes. Difficulty 11 records the
+same hazard arriving from the other direction, so the two are worth reading together.
+
+**Tapping a Shade disarms any armed correction tool.** Choosing a Shade is the Dealer moving on
+from correcting walls to judging paint. A tool left armed held the correction surface over the
+arriving repaint — and the tool buttons are hidden while a render shows, so the Dealer could not
+even disarm it except by tapping the photo. `beginShadeTap` computes the tap's whole meaning
+(disarmed, assignments updated, render marked) before the request goes out, so the request and the
+state it records cannot disagree, mirroring `applyProgressEvent`.
+
+`overlayVisible(state, showingRender, armedTool)` is now the single rule for the overlay, and it
+refuses to draw over a repaint *first* — not for the Dealer's show/hide choice, and not for an
+armed tool. The armed-tool override stays, because correcting walls that are not visible is not a
+thing a Dealer can do (#10), but only while the photo rather than the render is what is on screen.
+The tap layer is gated on the same value, so neither the wash nor the tap layer can sit over a
+repaint. Belt and braces, deliberately: the state rule and the screen rule agree, so neither a
+future caller that forgets one nor a stale state can put a wash over a colour being judged.
