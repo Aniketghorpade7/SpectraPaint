@@ -64,6 +64,27 @@ whether it works.
   be undone
 - **Never a dead end.** Every error state offers an action
 
+### What Undo covers, and what it does not (issue #50)
+
+**Act, and let it be undone** needs an actual Undo. In V1 it is the application menu's Edit →
+Undo/Redo, and it covers exactly two things: **Shade changes and wall-choice changes**, within one
+open Consultation. Undoing restores the previous wall choice and Shades together and re-renders;
+undoing everything painted returns to the original photo. Undo/Redo are disabled when there is
+nothing to undo or redo.
+
+**What it does not cover:**
+
+- **Wall corrections (Add/Split/Merge).** They are not undoable in V1 — undoing one honestly would
+  need a plane-history stack on the service and a REST contract change, because a correction can
+  retire the plane id a snapshot names. The Dealer simply re-runs a correction. Any correction also
+  clears the paint history, so no snapshot is replayed onto a wall that no longer exists.
+- **Across saves.** A reopened Consultation starts with no history: what the Customer saw last time
+  is what reopening shows, not an editable past.
+
+If the shop PC turns out to be a touchscreen (still open — see `design-decisions.md` §12), the menu
+is not reachable by touch and **an on-screen Undo affordance will be needed** alongside it; the
+Toast pattern from `useLibrary.ts` is the candidate.
+
 ## Semantics
 
 Use real elements — `<button>` for actions, `<h1>`–`<h3>` for headings in order, `<label>` bound to

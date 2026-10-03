@@ -5,6 +5,8 @@ import type {
   CorrectionTool,
   CreateConsultationResult,
   ExportResult,
+  MenuCommand,
+  MenuState,
   ProgressStreamEvent,
   RenderResult,
   ServiceRequest,
@@ -24,6 +26,8 @@ import {
   EXECUTION_PROFILE_GET_CHANNEL,
   EXECUTION_PROFILE_SET_CHANNEL,
   EXPORT_CHANNEL,
+  MENU_COMMAND_CHANNEL,
+  MENU_STATE_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
   PROGRESS_STREAM_STOP_CHANNEL,
@@ -72,6 +76,18 @@ const bridge: SpectraPaintBridge = {
       ipcRenderer.off(PROGRESS_EVENT_CHANNEL, handler);
       void ipcRenderer.invoke(PROGRESS_STREAM_STOP_CHANNEL, sessionId);
     };
+  },
+
+  onMenuCommand(listener: (command: MenuCommand) => void): () => void {
+    const handler = (_event: IpcRendererEvent, command: MenuCommand) => listener(command);
+    ipcRenderer.on(MENU_COMMAND_CHANNEL, handler);
+    return () => {
+      ipcRenderer.off(MENU_COMMAND_CHANNEL, handler);
+    };
+  },
+
+  setMenuState(state: MenuState): void {
+    ipcRenderer.send(MENU_STATE_CHANNEL, state);
   },
 
   onBootStatus(listener: (status: BootStatus) => void): () => void {

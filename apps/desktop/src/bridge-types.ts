@@ -54,6 +54,14 @@ export type CreateConsultationResult =
  * naming a wall the photo does not have — is a result carrying the service's own message, so the UI
  * can show it as-is rather than inventing one.
  */
+/** A command the application menu sends into the renderer (issue #50). */
+export type MenuCommand = 'undo' | 'redo';
+
+/** What the renderer tells the menu about Undo/Redo availability, so the items enable honestly. */
+export interface MenuState {
+  canUndo: boolean;
+  canRedo: boolean;
+}
 /**
  * One Wall Plane, in the form the renderer can draw: its id, how much of the photo it covers, the
  * box it occupies, and its Alpha Matte as a PNG data URL.
@@ -140,6 +148,20 @@ export interface SpectraPaintBridge {
    * then exactly one terminal `done` or `failed` event. Returns an unsubscribe function.
    */
   onProgress(sessionId: string, listener: (event: ProgressStreamEvent) => void): () => void;
+
+  /**
+   * Subscribe to application-menu commands (issue #50). A menu click or its accelerator lands here;
+   * the renderer decides whether the command is paint — undo/redo a Shade snapshot — or text
+   * editing in the focused field, which the browser already handles. Returns an unsubscribe
+   * function, the same shape as `onBootStatus`.
+   */
+  onMenuCommand(listener: (command: MenuCommand) => void): () => void;
+
+  /**
+   * Report whether Undo/Redo have anything to act on, so the menu items enable and disable
+   * with the Consultation's history rather than sitting grey forever.
+   */
+  setMenuState(state: MenuState): void;
 
   /**
    * Subscribe to boot progress. Returns an unsubscribe function.

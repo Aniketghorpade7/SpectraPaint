@@ -679,3 +679,33 @@ enough to be **evidence**, not merely not reliable enough to be **rules**. An ap
 them to SAM 2 needs a reason to believe they are right about *where* the object is, not only about
 *what* it is. The same classes used for outright removal, with prompts untouched, are worth 0.005 —
 measured, and rejected on cost in implementation decision 49.
+
+---
+
+## 27. Issue #50 wanted hook-level tests, and the repo has no DOM/React-testing packages
+
+**Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-02 · **Status:** resolved by factoring, not by new dependencies
+
+**What happened:** the issue's testing plan asks for **hook-level** coverage — "apply Shade A then
+Shade B, then undo; `assignments` equal the post-A snapshot and exactly one render request is made; a
+split clears the history." The repo's vitest suite runs in the `node` environment and contains no
+`jsdom`/`happy-dom`, no `@testing-library/*`, and no `react-test-renderer`; the `react-hooks` ESLint
+plugin is the only React-aware tooling. Rendering `useConsultation` in a test would have required
+adding devDependencies and touching `package-lock.json`.
+
+**Why it was hard:** `package-lock.json` carries a peer's uncommitted change on this branch, so any
+lockfile churn (even a devDependency-only install) would have mixed someone else's work into this
+ticket's diff — exactly what isolated fresh contexts are not supposed to do to each other. And
+`docs/conventions.md` §6 restricts the vitest suite to *pure functions* anyway; a hook test needs a
+DOM, which the conventions file explicitly routes to seam 1.
+
+**Where it stands:** resolved the way `applyRenderEvent` and `applyProgressEvent` were resolved
+before it: every decision the hook makes during undo/redo was factored into pure functions —
+`history.ts` (`record`/`undo`/`redo`, the cap, the future-clearing), `shadeCodeOf` (what a restored
+repaint pins its reply to) and `restoresOriginalPhoto` (undo-to-start drops the render state rather
+than requesting a `422` empty repaint) — and `useConsultation.test.ts` states the issue's exact
+scenarios against those. The sequences themselves (the state updates between steps) are the thin
+glue the existing suites also leave untested; what a silent regression would corrupt — snapshot
+correctness, the cap, empty-snapshot handling, one-repaint-per-undo — is covered. A future ticket
+that introduces `@testing-library/react` for the whole app can restate these as true hook tests
+without changing the pure layer.

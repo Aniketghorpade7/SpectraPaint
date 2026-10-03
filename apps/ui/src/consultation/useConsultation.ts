@@ -2,11 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
   ExportResult,
+  MenuCommand,
   ProgressStreamEvent,
   RenderResult,
   WallsResult,
 } from '../../../desktop/src/bridge-types';
 import { applyExportEvent, INITIAL_EXPORT_STATE, type ExportState } from './export';
+import {
+  type PaintHistory,
+  type PaintSnapshot,
+  INITIAL_PAINT_HISTORY,
+  redo,
+  record,
+  undo,
+} from './history';
 import { applyRenderEvent, INITIAL_RENDER_STATE, type RenderState } from './render';
 import {
   ALL_WALLS,
@@ -89,6 +98,16 @@ export interface Consultation {
   /** Perform the armed tool's correction at a tapped point, then disarm. A no-op with nothing
    * armed or the photo not ready — safe to call from a click handler unconditionally. */
   correctWallsAt: (point: TapPoint) => void;
+  /** Undo the last paint change — a Shade or a wall choice — within this open Consultation
+   * (issue #50). Undoing to the Consultation's start returns the original photo to the screen.
+   * A no-op when there is nothing to undo. Wall corrections are deliberately not undoable. */
+  undoPaint: () => void;
+  /** Redo the last undone paint change (issue #50). A no-op when there is nothing to redo. */
+  redoPaint: () => void;
+  /** Whether undo has a paint change to restore (issue #50) — what the menu items report. */
+  canUndo: boolean;
+  /** Whether redo has an undone paint change to restore (issue #50). */
+  canRedo: boolean;
   /** The service's own message when the last correction tap was refused, safe to show as-is.
    * Cleared on the next tool armed or the next successful correction. The existing walls are
    * never touched by a refusal — this is a note beside them, never a dead end. */
@@ -149,6 +168,30 @@ export function applyProgressEvent(
   }
 }
 
+/**
+ * The Shade Code a restored snapshot repaints in.
+ *
+ * Undo and redo restore *state* — target and assignments — and then repaint through the normal
+ * path. The render reducer pins its replies to the Shade Code of the request, and undo/redo are
+ * not Shade taps, so the snapshot's own most recent code stands in: it is the Shade the restored
+ * paint actually carries, and it keeps a stale reply from a superseded request from overwriting
+ * the restored state (issue #50). An empty snapshot repaints nothing, so its code is never asked
+ * for — the fallback only keeps the type honest.
+ */
+export function shadeCodeOf(snapshot: PaintSnapshot): string {
+  const codes = Object.values(snapshot.assignments);
+  return codes[codes.length - 1] ?? 'repaint';
+}
+
+/**
+ * Whether a snapshot restores the original photo rather than a repaint, and the render state
+ * should therefore be dropped instead of a (necessarily failing, `422 malformed_request`) empty
+ * repaint requested (issue #50).
+ */
+export function restoresOriginalPhoto(snapshot: PaintSnapshot): boolean {
+  return Object.keys(snapshot.assignments).length === 0;
+}
+
 export function useConsultation(): Consultation {
   const [state, setState] = useState<ConsultationState>({ phase: 'idle' });
   const [render, setRender] = useState<RenderState>(INITIAL_RENDER_STATE);
@@ -160,6 +203,9 @@ export function useConsultation(): Consultation {
   // time, and the second tap has to know what the first one did (ticket #7).
   const [target, setTarget] = useState<PaintTarget>(ALL_WALLS);
   const [assignments, setAssignments] = useState<Assignments>({});
+  // The paint history (issue #50): what target+assignments were before each Shade or wall choice.
+  // Held as state rather than a ref so canUndo/canRedo re-derive — and reach the menu — on change.
+  const [history, setHistory] = useState<PaintHistory>(INITIAL_PAINT_HISTORY);
   // What the Dealer explicitly armed, if anything — corrections.effectiveArmedTool is what turns
   // this into what is actually armed, so auto-arming Add on a zero-plane photo can never drift
   // out of sync with whether a plane exists (ticket #10, implementation-decisions.md #39).
@@ -234,6 +280,7 @@ export function useConsultation(): Consultation {
     setRender(INITIAL_RENDER_STATE);
     setWalls(INITIAL_WALLS_STATE);
     setExportState(INITIAL_EXPORT_STATE);
+    setHistory(INITIAL_PAINT_HISTORY);
     setState({ phase: 'uploading', progressMessage: LOADING_MESSAGE });
 
     try {
@@ -293,6 +340,7 @@ export function useConsultation(): Consultation {
     setExportState(INITIAL_EXPORT_STATE);
     setTarget(ALL_WALLS);
     setAssignments({});
+    setHistory(INITIAL_PAINT_HISTORY);
     setRenderMode('realistic');
     setExplicitTool(null);
     setCorrectionMessage(undefined);
@@ -304,9 +352,12 @@ export function useConsultation(): Consultation {
     (sessionId: string, imageDataUrl: string) => {
       // A reopened Consultation arrives already prepared on the service: no stream to follow, no
       // waiting. The walls are asked for once, exactly as a freshly prepared photo would (issue #11).
+      // History starts empty too (issue #50): what the Customer saw last time is what reopening
+      // shows — an editable past is not something a saved Consultation carries.
       setRender(INITIAL_RENDER_STATE);
       setWalls(INITIAL_WALLS_STATE);
       setExportState(INITIAL_EXPORT_STATE);
+      setHistory(INITIAL_PAINT_HISTORY);
       setTarget(ALL_WALLS);
       setAssignments({});
       setState({ phase: 'ready', sessionId, imageDataUrl });
@@ -315,21 +366,26 @@ export function useConsultation(): Consultation {
     [loadWalls],
   );
 
-  const applyShade = useCallback(
-    async (shadeCode: string) => {
+  /**
+   * Ask the service to repaint the walls carrying `assignments`, and run the reply through the
+   * render reducer (issue #50). One helper, three callers — applyShade, the render-mode switch and
+   * undo/redo — so the request/reply/failed path cannot drift between them. `shadeCode` is what the
+   * render reducer pins the reply to: the last requested Shade wins, so a stale reply cannot
+   * overwrite a newer one (issue #3).
+   */
+  const repaint = useCallback(
+    // `mode` is explicit because toggleRenderMode repaints in the mode it is *switching to* — state
+    // has not caught up within the same event, so the caller must say which mode it means.
+    async (nextAssignments: Assignments, shadeCode: string, mode: RenderMode = renderMode) => {
       if (state.phase !== 'ready' || !state.sessionId) return;
+      const sessionId = state.sessionId;
       setRender((previous) => applyRenderEvent(previous, { type: 'requested', shadeCode }));
 
-      // What this tap means depends on whether a wall is selected: every wall, or that one, with the
-      // others keeping the Shades they already have. Computed before the await so the request and
-      // the state it records cannot disagree.
-      const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
-      setAssignments(updated);
-      const payload = renderPayload(updated, walls.planes);
+      const payload = renderPayload(nextAssignments, walls.planes);
 
       let result: RenderResult;
       try {
-        result = await window.spectrapaint.render(state.sessionId, payload, renderMode);
+        result = await window.spectrapaint.render(sessionId, payload, mode);
       } catch (error) {
         // The bridge rejected without a result (not a service refusal). Never dead-end: the Dealer
         // must not sit on "Repainting…" with no way out.
@@ -367,7 +423,25 @@ export function useConsultation(): Consultation {
         );
       }
     },
-    [state.phase, state.sessionId, assignments, target, walls.planes, renderMode],
+    [state.phase, state.sessionId, walls.planes, renderMode],
+  );
+
+  const applyShade = useCallback(
+    (shadeCode: string) => {
+      if (state.phase !== 'ready' || !state.sessionId) return;
+
+      // Record what the paint was *before* this tap, so undo can restore it (issue #50). The
+      // snapshot pairs the wall choice with the assignments: undoing a targeted Shade has to give
+      // back the wall that was chosen too, or the next tap would land somewhere else.
+      setHistory((previous) => record(previous, { target, assignments }));
+
+      // What this tap means depends on whether a wall is selected: every wall, or that one, with the
+      // others keeping the Shades they already have.
+      const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
+      setAssignments(updated);
+      void repaint(updated, shadeCode);
+    },
+    [state.phase, state.sessionId, assignments, target, walls.planes, repaint],
   );
 
   const toggleBeforeAfter = useCallback(() => {
@@ -382,57 +456,67 @@ export function useConsultation(): Consultation {
     setWalls((previous) => applyWallsEvent(previous, { type: 'toggle' }));
   }, []);
 
-  const selectWall = useCallback((planeId: string) => {
-    setTarget((previous) => toggleTarget(previous, planeId));
-  }, []);
+  const selectWall = useCallback(
+    (planeId: string) => {
+      // The wall choice is undoable too (issue #50): the snapshot pairs it with the assignments so
+      // undo hands back both, and the next undo step after a Shade reaches the choice that made it.
+      setHistory((previous) => record(previous, { target, assignments }));
+      setTarget((previous) => toggleTarget(previous, planeId));
+    },
+    [target, assignments],
+  );
+
+  /**
+   * Undo the last paint change — a Shade or a wall choice — within this open Consultation
+   * (issue #50). Restoring a snapshot with empty `assignments` is the Consultation's own start:
+   * nothing painted yet, so the render state is dropped and the original photo returns to the
+   * screen rather than an empty repaint being requested. The restored state is *asked for* as a
+   * normal repaint, exactly as the same paint would be reached by tapping — never replayed from a
+   * stored image, which is how a snapshot naming a live plane stays honest.
+   */
+  const undoPaint = useCallback(() => {
+    if (state.phase !== 'ready' || !state.sessionId) return;
+    const now: PaintSnapshot = { target, assignments };
+    const step = undo(history, now);
+    if (!step) return;
+
+    setHistory(step.history);
+    setTarget(step.restore.target);
+    setAssignments(step.restore.assignments);
+    if (restoresOriginalPhoto(step.restore)) {
+      // Nothing painted: back to the photo the Customer's room was judged against.
+      setRender(INITIAL_RENDER_STATE);
+    } else {
+      void repaint(step.restore.assignments, shadeCodeOf(step.restore));
+    }
+  }, [state.phase, state.sessionId, target, assignments, history, repaint]);
+
+  /** Redo the last undone paint change (issue #50) — the mirror of undoPaint. */
+  const redoPaint = useCallback(() => {
+    if (state.phase !== 'ready' || !state.sessionId) return;
+    const now: PaintSnapshot = { target, assignments };
+    const step = redo(history, now);
+    if (!step) return;
+
+    setHistory(step.history);
+    setTarget(step.restore.target);
+    setAssignments(step.restore.assignments);
+    // A snapshot in `future` always has assignments — only undoing back to the very start can
+    // produce an empty one, and redo from there is a no-op (nothing was ever in future).
+    void repaint(step.restore.assignments, shadeCodeOf(step.restore));
+  }, [state.phase, state.sessionId, target, assignments, history, repaint]);
 
   const toggleRenderMode = useCallback(() => {
     const next: RenderMode = renderMode === 'realistic' ? 'true_colour' : 'realistic';
     setRenderMode(next);
     // If a Shade is already on screen, repaint it in the new mode so the Dealer sees the
-    // difference without tapping again (CONTEXT.md: Realistic vs True Colour).
+    // difference without tapping again (CONTEXT.md: Realistic vs True Colour). The same repaint
+    // path applyShade uses — only the mode differs, so the reply handling cannot drift.
     if (state.phase === 'ready' && state.sessionId && Object.keys(assignments).length > 0) {
-      const payload = renderPayload(assignments, walls.planes);
       const shadeForState = Object.values(assignments)[0] ?? 'repaint';
-      setRender((previous) =>
-        applyRenderEvent(previous, { type: 'requested', shadeCode: shadeForState }),
-      );
-      void window.spectrapaint
-        .render(state.sessionId, payload, next)
-        .then((result: RenderResult) => {
-          if (result.status === 'ready') {
-            setRender((previous) =>
-              applyRenderEvent(previous, {
-                type: 'ready',
-                shadeCode: shadeForState,
-                imageDataUrl: result.imageDataUrl,
-              }),
-            );
-          } else {
-            setRender((previous) =>
-              applyRenderEvent(previous, {
-                type: 'failed',
-                shadeCode: shadeForState,
-                code: result.code,
-                message:
-                  result.code === 'session_not_found' ? MESSAGE_SESSION_LOST : result.message,
-              }),
-            );
-          }
-        })
-        .catch((error: unknown) => {
-          console.error('[consultation] could not switch render mode:', error);
-          setRender((previous) =>
-            applyRenderEvent(previous, {
-              type: 'failed',
-              shadeCode: shadeForState,
-              code: 'render_failed',
-              message: RENDER_FAILED_MESSAGE,
-            }),
-          );
-        });
+      void repaint(assignments, shadeForState, next);
     }
-  }, [renderMode, state.phase, state.sessionId, assignments, walls.planes]);
+  }, [renderMode, state.phase, state.sessionId, assignments, repaint]);
 
   const armTool = useCallback((tool: CorrectionTool) => {
     setExplicitTool((previous) => toggleArmedTool(previous, tool));
@@ -476,7 +560,10 @@ export function useConsultation(): Consultation {
           );
           // A split or merge can retire a plane id the Dealer had targeted or already assigned a
           // Shade to; fall back to painting every wall and drop the stale assignment rather than
-          // reference a plane that no longer exists (implementation-decisions.md #40).
+          // reference a plane that no longer exists (implementation-decisions.md #40). The paint
+          // history goes with them (issue #50): a snapshot naming a retired plane cannot be
+          // replayed honestly, so no correction is undoable — the Dealer simply re-runs one.
+          setHistory(INITIAL_PAINT_HISTORY);
           const ids = new Set(result.planes.map((plane) => plane.planeId));
           setTarget((previous) =>
             previous.kind === 'plane' && !ids.has(previous.planeId) ? ALL_WALLS : previous,
@@ -544,6 +631,31 @@ export function useConsultation(): Consultation {
     setExportState((previous) => applyExportEvent(previous, { type: 'dismiss' }));
   }, []);
 
+  // The menu items enable and disable with the Consultation's history (issue #50) — published
+  // whenever it changes, so Undo/Redo never grey-lie about what they would do.
+  const canUndo = history.past.length > 0;
+  const canRedo = history.future.length > 0;
+  useEffect(() => {
+    window.spectrapaint.setMenuState({ canUndo, canRedo });
+  }, [canUndo, canRedo]);
+
+  // Menu commands arrive here (issue #50). Undo/Redo are paint commands — unless the Dealer is
+  // editing text, when the browser's own undo for the focused field is what Ctrl+Z must do. A menu
+  // accelerator fires before the page sees the key, so without this branch typing in the Catalogue
+  // search box would undo a Shade instead of a letter.
+  useEffect(() => {
+    return window.spectrapaint.onMenuCommand((command: MenuCommand) => {
+      const element = document.activeElement;
+      const editing = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+      if (editing) {
+        document.execCommand(command);
+        return;
+      }
+      if (command === 'undo') undoPaint();
+      else redoPaint();
+    });
+  }, [undoPaint, redoPaint]);
+
   return {
     state,
     start,
@@ -564,6 +676,10 @@ export function useConsultation(): Consultation {
     correctWallsAt,
     correctionMessage,
     correctionCode,
+    undoPaint,
+    redoPaint,
+    canUndo,
+    canRedo,
     exportState,
     exportRender,
     dismissExport,
