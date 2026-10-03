@@ -67,9 +67,9 @@ the extra filtering is paid once, not per Shade tap.
 Inside `light_map_of`, after the existing division and saturation blend:
 
 ```python
-luma_base  = dot(LUMA, base_colour)
-shading    = luma(linear_photo) / luma_base                  # HxW   — brightness only
-chroma     = light_map / max(shading[..., None], eps)       # HxWx3 — ≈ (1,1,1) on clean wall
+luma_base = dot(LUMA, base_colour)
+shading = luma(linear_photo) / luma_base  # HxW   — brightness only
+chroma = light_map / max(shading[..., None], eps)  # HxWx3 — ≈ (1,1,1) on clean wall
 ```
 
 `shading × chroma` reproduces today's Light Map exactly, so a later step that changes neither returns
@@ -78,8 +78,10 @@ today's output. That keeps `test_correctness` / `test_engine` exactness cases in
 ### Step 2: suppress chroma deviations (removes the stain's hue)
 
 ```python
-room_chroma = box_blur3(chroma, r = _STAIN_ILLUMINATION_RADIUS)   # large-scale colour: bounce light, window cast
-chroma_out  = lerp(chroma, room_chroma, _STAIN_CHROMA_SUPPRESSION)
+room_chroma = box_blur3(
+    chroma, r=_STAIN_ILLUMINATION_RADIUS
+)  # large-scale colour: bounce light, window cast
+chroma_out = lerp(chroma, room_chroma, _STAIN_CHROMA_SUPPRESSION)
 ```
 
 `box_blur3` = three passes of `imaging.box_mean` (a Gaussian approximation, O(1) per pixel whatever
@@ -92,14 +94,16 @@ survives. A 20-cm stain's hue doesn't.
 Split `shading` into three bands, in log space so ratios compose:
 
 ```python
-log_s        = log(max(shading, eps))
-illumination = blur(log_s, _STAIN_ILLUMINATION_RADIUS)   # room light, gradients, corner falloff — KEPT
-fine         = log_s - blur(log_s, _STAIN_TEXTURE_RADIUS) # roller texture, grain           — KEPT
-blotch       = log_s - illumination - fine                # stains, patches, soft contact shadows
+log_s = log(max(shading, eps))
+illumination = blur(
+    log_s, _STAIN_ILLUMINATION_RADIUS
+)  # room light, gradients, corner falloff — KEPT
+fine = log_s - blur(log_s, _STAIN_TEXTURE_RADIUS)  # roller texture, grain           — KEPT
+blotch = log_s - illumination - fine  # stains, patches, soft contact shadows
 
-protect      = edge_protection(alpha)                      # 1 near the matte boundary, 0 in the interior
-strength     = _STAIN_SUPPRESSION * (1 - protect)
-shading_out  = exp(illumination + fine + (1 - strength) * blotch)
+protect = edge_protection(alpha)  # 1 near the matte boundary, 0 in the interior
+strength = _STAIN_SUPPRESSION * (1 - protect)
+shading_out = exp(illumination + fine + (1 - strength) * blotch)
 ```
 
 - `edge_protection` ramps from 1 at the matte's edge to 0 at `_STAIN_EDGE_PROTECT_RADIUS` inside it.
