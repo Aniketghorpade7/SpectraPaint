@@ -1719,3 +1719,52 @@ deferred:
   original bytes and is the one place preview and export could disagree again.
 - **The layout check is kept, inside `npm run check`**, with Chromium fetched by `npm run browsers`
   — see design-decisions.md §9d for why this is the one DOM-needing test the project allows.
+
+## 52. The application menu is a pure template, Undo/Redo restore state and repaint — never replay pixels, and every correction clears the history
+
+**Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-10-02
+
+**Decided:** Electron's default menu is replaced by one built from a pure `appMenuTemplate`
+(`apps/desktop/src/app-menu.ts`), tested without Electron the way `boot-messages.ts` is. Edit carries
+Undo (`CmdOrCtrl+Z`) and Redo (`Ctrl+Y` on Windows, plus a hidden `Ctrl+Shift+Z` item) as
+*SpectraPaint commands* — clicks travel to the renderer on `MENU_COMMAND_CHANNEL` — followed by
+cut/copy/paste/select-all roles for the Catalogue search box, and **no Delete**. The View menu has
+`reload`, `forceReload` and `toggleDevTools` only when `!app.isPackaged`; a packaged build gets
+`togglefullscreen` alone. The renderer reports `canUndo`/`canRedo` over `MENU_STATE_CHANNEL`, so the
+items enable and disable with the Consultation's history.
+
+The history itself (`apps/ui/src/consultation/history.ts`, pure, capped at 50) holds snapshots of
+`{target, assignments}` — the wall choice travels with the Shades, so undoing a targeted Shade hands
+back the wall that was chosen. `applyShade` and the wall-choice path record before changing state;
+undo/redo restore a snapshot and then **repaint through the normal render request**, not from stored
+pixels: the snapshot's state is only ever *asked for* as the same repaint a tap would produce, which
+is what keeps a snapshot honest against the live plane list. A restored snapshot with empty
+`assignments` drops the render state instead of requesting a (necessarily `422`) empty repaint, so
+undoing to the start returns the original photo.
+
+**Why corrections clear the history rather than being recorded:** a split or merge can retire a
+plane id, and a snapshot naming a retired plane cannot be replayed honestly — the same reasoning as
+implementation-decision 40's stale-assignment drop, applied one level up. Recording anyway would
+sell an Undo that crashes or paints the wrong wall on the first use after a correction; clearing
+drops the whole stack but never lies. Across saves is out for the same family of reasons: a reopened
+Consultation shows what the Customer saw, and an editable past is not something a saved Consultation
+carries.
+
+**Why Reload/DevTools are dev-only:** Reload wipes the live Consultation's renderer state
+mid-counter-session — with a Customer standing there, the reset is invisible until it has happened —
+and DevTools is not a Dealer feature. Both remain in development, where they are used daily; the
+template's `isPackaged` flag is the only switch, and the packaged-shape guarantee is pinned by
+`app-menu.test.ts` walking the whole template at any depth.
+
+**Why the command routing lives in the renderer:** a menu accelerator fires before the page sees the
+key, so without a branch there Ctrl+Z in the Catalogue search box would undo a Shade instead of a
+letter. The renderer routes to `document.execCommand` when the focused element is an
+`input`/`textarea` — the browser's own text undo — and to the paint undo/redo otherwise.
+
+**Consequence:** Undo is only as good as the render request it re-issues — undoing shows a *fresh*
+render of the old state, not the exact pixels the Dealer saw, and a session lost to a sidecar
+restart cannot be repainted at all (the same limit the repaint itself has, issue #15's handling).
+Wall corrections remain undoable-not (grilling decision 6), so the menu is the whole undo surface
+until a plane-history stack on the service changes that. If the shop PC is a touchscreen, the menu
+is unreachable and an on-screen affordance is needed (noted in ui-guidelines and the spec's open
+question).
