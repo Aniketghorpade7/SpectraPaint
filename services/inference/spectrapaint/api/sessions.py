@@ -1,5 +1,5 @@
-"""Session lifecycle: ``POST /sessions``, ``GET /sessions/{id}/events`` and
-``DELETE /sessions/{id}``.
+"""Session lifecycle: ``POST /sessions``, ``GET /sessions/{id}/events``,
+``GET /sessions/{id}/photo/png`` (issue #49) and ``DELETE /sessions/{id}``.
 
 A photo enters the system only here, and the lifecycle is what every later endpoint hangs off.
 Uploading records the session and starts its preparation in the background — the bytes are
@@ -22,7 +22,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import numpy as np
-from fastapi import APIRouter, File, Request, UploadFile, status
+from fastapi import APIRouter, File, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 
@@ -272,6 +272,32 @@ async def stream_events(request: Request, session_id: str) -> StreamingResponse:
         _sse_stream(job.stream()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/sessions/{session_id}/photo/png")
+async def session_photo(request: Request, session_id: str) -> Response:
+    """The session's prepared photo, as a PNG (issue #49).
+
+    The Consultation shows the Dealer the pixels that were actually segmented — the same ``srgb``
+    every matte, render and correction tap is built on — not the raw upload. The two can differ:
+    the EXIF orientation applied at ``decode_photo`` is honoured by Chromium when the raw upload is
+    displayed, so for an oriented phone photo the upload and the prepared photo are different
+    rectangles.
+
+    This route exists because the stored copy at ``GET /consultations/{id}/photo/png`` only
+    appears once ``persist_preparation`` has run, which the render gate drives — so on a first
+    load, before any repaint, there is nothing stored to serve. This one waits for preparation
+    through the same gate (``require_photo``) and serves the in-memory photo, so it answers as
+    soon as preparation is done. Reading it also persists the preparation, which moves issue
+    #11's auto-save to preparation-done — strictly earlier than the first render it waited for.
+    """
+
+    photo = await require_photo(request, session_id)
+    return Response(
+        content=_encode_photo(photo.srgb),
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
     )
 
 

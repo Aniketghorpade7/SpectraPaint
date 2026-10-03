@@ -200,6 +200,16 @@ export interface SpectraPaintBridge {
   storedImage(consultationId: string, target: 'photo' | string): Promise<StoredImageResult>;
 
   /**
+   * The live session's prepared photo, as soon as preparation has finished (issue #49).
+   *
+   * The pixels every matte, render and correction tap is built on — the raw upload is only ever a
+   * placeholder, because an oriented phone photo is displayed rotated by Chromium while the
+   * prepared pixels already carry the EXIF orientation. Main fetches the PNG with the secret in
+   * its header, exactly like `storedImage`, and returns a data URL.
+   */
+  preparedPhoto(sessionId: string): Promise<StoredImageResult>;
+
+  /**
    * Export the current repaint at full resolution as a JPEG and hand it to
    * the OS share sheet (issue #12). The stored PNG archive is never handed
    * out directly; a fresh JPEG is rendered and saved via the native dialog.

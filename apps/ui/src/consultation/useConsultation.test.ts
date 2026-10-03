@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ProgressStreamEvent } from '../../../desktop/src/bridge-types';
-import { applyProgressEvent, type ConsultationState } from './useConsultation';
+import type {
+  CorrectionTool,
+  ProgressStreamEvent,
+  WallPlaneOverlay,
+} from '../../../desktop/src/bridge-types';
+import { ALL_WALLS, type Assignments, type PaintTarget } from './accent';
+import { INITIAL_RENDER_STATE, type RenderState } from './render';
+import { applyProgressEvent, beginShadeTap, type ConsultationState } from './useConsultation';
 
 const uploading: ConsultationState = {
   phase: 'uploading',
@@ -61,5 +67,66 @@ describe('applyProgressEvent', () => {
 
     expect(final.phase).toBe('ready');
     expect(final.imageDataUrl).toBe(uploading.imageDataUrl);
+  });
+});
+
+describe('beginShadeTap', () => {
+  const plane: WallPlaneOverlay = {
+    planeId: 'wall_plane_1',
+    surface: 'wall',
+    coverage: 0.4,
+    photoWidth: 640,
+    photoHeight: 480,
+    bounds: { left: 0, top: 0, right: 640, bottom: 480 },
+    matteDataUrl: 'data:image/png;base64,AAAA',
+  };
+  const otherPlane: WallPlaneOverlay = {
+    ...plane,
+    planeId: 'wall_plane_2',
+    bounds: { left: 320, top: 0, right: 640, bottom: 480 },
+  };
+  const planes = [plane, otherPlane];
+
+  function tap(
+    explicitTool: CorrectionTool | null,
+    render: RenderState = INITIAL_RENDER_STATE,
+    assignments: Assignments = {},
+    target: PaintTarget = ALL_WALLS,
+  ) {
+    return beginShadeTap(explicitTool, render, assignments, target, planes, 'BLU001');
+  }
+
+  it('disarms every armed correction tool — tapping a Shade ends correcting (issue #49)', () => {
+    for (const tool of ['add', 'add-ceiling', 'split', 'merge'] as const) {
+      expect(tap(tool).explicitTool).toBeNull();
+    }
+    expect(tap(null).explicitTool).toBeNull();
+  });
+
+  it('marks the render requested for the tapped Shade', () => {
+    const next = tap(null);
+
+    expect(next.render.phase).toBe('rendering');
+    expect(next.render.shadeCode).toBe('BLU001');
+  });
+
+  it('paints every wall with the tapped Shade when no wall is selected', () => {
+    const next = tap(null);
+
+    expect(next.assignments).toEqual({ wall_plane_1: 'BLU001', wall_plane_2: 'BLU001' });
+  });
+
+  it('keeps the other walls’ Shades when one wall is selected', () => {
+    const next = tap(
+      null,
+      INITIAL_RENDER_STATE,
+      { wall_plane_2: 'RED002' },
+      {
+        kind: 'plane',
+        planeId: 'wall_plane_1',
+      },
+    );
+
+    expect(next.assignments).toEqual({ wall_plane_2: 'RED002', wall_plane_1: 'BLU001' });
   });
 });

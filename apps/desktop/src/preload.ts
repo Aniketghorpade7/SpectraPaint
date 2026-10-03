@@ -24,6 +24,7 @@ import {
   EXECUTION_PROFILE_GET_CHANNEL,
   EXECUTION_PROFILE_SET_CHANNEL,
   EXPORT_CHANNEL,
+  PREPARED_PHOTO_CHANNEL,
   PROGRESS_EVENT_CHANNEL,
   PROGRESS_STREAM_START_CHANNEL,
   PROGRESS_STREAM_STOP_CHANNEL,
@@ -117,6 +118,10 @@ const bridge: SpectraPaintBridge = {
       consultationId,
       target,
     ) as Promise<StoredImageResult>;
+  },
+
+  preparedPhoto(sessionId: string): Promise<StoredImageResult> {
+    return ipcRenderer.invoke(PREPARED_PHOTO_CHANNEL, sessionId) as Promise<StoredImageResult>;
   },
 
   export(
