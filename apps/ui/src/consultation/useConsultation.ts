@@ -50,6 +50,12 @@ export interface ConsultationState {
   message?: string;
   /** The latest preparation message, shown while the phase is 'uploading'. */
   progressMessage?: string;
+  /**
+   * Plain language, set when the prepared photo could not be fetched (issue #49) and the raw upload
+   * is still what is on screen. Never an error screen: the photo is still usable, and the note says
+   * what to try.
+   */
+  photoNotice?: string;
 }
 
 export type RenderMode = 'realistic' | 'true_colour';
@@ -103,6 +109,9 @@ export interface Consultation {
   dismissExport: () => void;
 }
 
+const PREPARED_PHOTO_FAILED_MESSAGE =
+  'This photo could not be shown the way SpectraPaint prepared it, so the walls found may look out of place. Try loading the photo again.';
+
 /** The fallback shown before the stream's first message arrives. */
 const LOADING_MESSAGE = 'Loading your photo…';
 
@@ -148,6 +157,27 @@ export function applyProgressEvent(
     default:
       return state;
   }
+}
+
+/**
+ * What the prepared photo's arrival does to the state, as a pure function so it is testable without
+ * a DOM (docs/design-decisions.md §9d).
+ *
+ * Success swaps the raw upload for the prepared pixels. Failure keeps the placeholder but says so
+ * (``photoNotice``) — logging alone left an oriented photo misaligned with nothing on screen to
+ * tell the Dealer why. Either way only the session that asked is touched: a discard, or another
+ * photo chosen while the fetch was in flight, must not be resurrected or annotated.
+ */
+export function applyPreparedPhoto(
+  previous: ConsultationState,
+  sessionId: string,
+  prepared: string | null,
+): ConsultationState {
+  if (previous.phase !== 'ready' || previous.sessionId !== sessionId) return previous;
+  if (prepared === null) return { ...previous, photoNotice: PREPARED_PHOTO_FAILED_MESSAGE };
+  const next: ConsultationState = { ...previous, imageDataUrl: prepared };
+  delete next.photoNotice;
+  return next;
 }
 
 /** What tapping a Shade records, before the request goes out. */
@@ -273,8 +303,8 @@ export function useConsultation(): Consultation {
   // upload is only ever a placeholder, because an oriented phone photo is displayed rotated by
   // Chromium — its EXIF tag honoured — while the prepared pixels already carry the orientation.
   // Showing the raw upload after `done` would put the mattes and the repaint on a different
-  // rectangle than the one the Dealer sees. If the fetch fails, the placeholder simply stays, and
-  // the fault is logged rather than swallowed (docs/conventions.md §5).
+  // rectangle than the one the Dealer sees. If the fetch fails, the placeholder stays, the
+  // fault is logged rather than swallowed (docs/conventions.md §5), and the Dealer is told on screen.
   const showPreparedPhoto = useCallback(
     async (sessionId: string) => {
       let prepared: string | null = null;
@@ -289,15 +319,7 @@ export function useConsultation(): Consultation {
         console.error('[consultation] could not fetch the prepared photo:', error);
       }
 
-      if (prepared !== null) {
-        // Guarded on this exact session still being the one on screen: a discard, or another photo
-        // chosen while the fetch was in flight, must not resurrect the old image.
-        setState((previous) =>
-          previous.phase === 'ready' && previous.sessionId === sessionId
-            ? { ...previous, imageDataUrl: prepared }
-            : previous,
-        );
-      }
+      setState((previous) => applyPreparedPhoto(previous, sessionId, prepared));
 
       // The walls are fetched after the swap, so the overlay's pixel space (the mattes') is the one
       // on screen — not the raw upload's. One request either way: the service waits for preparation

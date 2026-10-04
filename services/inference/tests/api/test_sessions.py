@@ -196,6 +196,31 @@ def test_the_prepared_photo_is_served_before_any_render(prepared_client: TestCli
     assert Image.open(io.BytesIO(response.content)).size == (2, 2)
 
 
+def test_the_prepared_photo_is_encoded_once_per_session(
+    prepared_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking for the photo again costs nothing: the PNG is encoded once and reused (issue #49)."""
+
+    from spectrapaint.api import sessions
+
+    encodes: list[int] = []
+    real_encode = sessions._encode_photo
+
+    def counting_encode(srgb):  # noqa: ANN001, ANN202
+        encodes.append(1)
+        return real_encode(srgb)
+
+    monkeypatch.setattr(sessions, "_encode_photo", counting_encode)
+    session_id = upload(prepared_client, PNG_BYTES).json()["session_id"]
+
+    first = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+    second = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert len(encodes) == 1
+
+
 def test_the_photo_route_fails_cleanly_for_an_unknown_session(client: TestClient) -> None:
     response = client.get("/sessions/does-not-exist/photo/png", headers=auth())
 

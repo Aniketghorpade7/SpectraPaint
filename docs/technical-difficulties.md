@@ -731,9 +731,15 @@ landscape ratios width-limited (821×461 at ratio 1.78), nothing clipped at any 
 now thresholds the **grey level** at 128, the halfway point of the coverage range the service
 encodes, matching the `mask-mode: luminance` the wash has always used on the same bytes.
 
-The harness was deleted after the run, as intended. What is kept is the four `walls.test.ts` cases
-that fail against the alpha-thresholding version — confirmed by re-introducing it — plus the
-measurements above. Note the harness also had its own bug of the same family, worth recording
+The harness was first run once and deleted. Review then asked for the layout check to stay, so it is
+now `apps/ui/src/consultation/layout.test.ts` with `layoutHarness.tsx`: the same real components over
+a scripted bridge, in headless Chromium, part of `npm run check` (the one named exception in
+design-decisions.md §9d). It was confirmed to fail against the old width-only frame rule (7 of 12
+cases), and a second case — an EXIF-rotated photo whose placeholder is landscape and whose prepared
+photo is portrait — confirmed to fail without the guard that keeps the walls off the screen until the
+frame has the new image's ratio. Also kept: the four `walls.test.ts` cases that fail against the
+alpha-thresholding version — confirmed by re-introducing it — plus the measurements above. Note the
+original harness also had its own bug of the same family, worth recording
 because it is easy to repeat: it read `window.__consultation` into a local before each click, and
 `useConsultation` returns a fresh object every render, so every assertion after a click was reading
 the answer to the previous question. **A snapshot taken before a state change reports the old state,

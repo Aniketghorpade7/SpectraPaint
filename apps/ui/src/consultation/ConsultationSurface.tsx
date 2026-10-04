@@ -70,12 +70,20 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
   // one ratio, but the prepared photo (issue #49) need not share the raw upload's — an oriented
   // phone photo swaps from a landscape placeholder to a portrait prepared photo, and the frame
   // follows the pixels that are actually on screen.
-  const [photoAspectRatio, setPhotoAspectRatio] = useState<number | null>(null);
+  //
+  // Remembered with the image it was read from: the frame may keep the previous ratio for the
+  // instant a new image is decoding, but nothing that has to align with the pixels (overlay,
+  // outline, chips, tap layer) may be drawn until the ratio belongs to the image on screen.
+  const [photoFrame, setPhotoFrame] = useState<{ src: string; ratio: number } | null>(null);
+  const photoAspectRatio = photoFrame?.ratio ?? null;
 
   function handlePhotoLoad(event: SyntheticEvent<HTMLImageElement>) {
     const image = event.currentTarget;
     if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-      setPhotoAspectRatio(image.naturalWidth / image.naturalHeight);
+      setPhotoFrame({
+        src: image.currentSrc || image.src,
+        ratio: image.naturalWidth / image.naturalHeight,
+      });
     }
   }
 
@@ -90,7 +98,11 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     // the overlay up regardless of the Dealer's earlier hide/show choice, because correcting walls
     // that are not visible is not a thing a Dealer can do (ticket #10) — but only while the photo,
     // not the render, is what is on screen.
-    const showWalls = overlayVisible(walls, render.showingRender, armedTool);
+    // And never before the frame has taken the ratio of the image now on screen: right after the
+    // prepared photo replaces the upload, the frame still has the placeholder's ratio for a moment,
+    // and an oriented photo's mattes would sit on the wrong rectangle (issue #49).
+    const frameMatchesImage = photoFrame !== null && photoFrame.src === visibleImage;
+    const showWalls = overlayVisible(walls, render.showingRender, armedTool) && frameMatchesImage;
     // Wall-only counts (issue #39): the ceiling is its own surface and never takes a wall's
     // positional name, so neither the chips' totals nor "found N walls" may count it.
     const wallPlanes = walls.planes.filter((plane) => plane.surface !== 'ceiling');
@@ -268,6 +280,9 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                           walls.planes,
                         )}`}
                 </p>
+              ) : null}
+              {state.photoNotice ? (
+                <p className="consultation__wall-note">{state.photoNotice}</p>
               ) : null}
               {walls.message ? <p className="consultation__wall-note">{walls.message}</p> : null}
               {walls.qualityNote ? (

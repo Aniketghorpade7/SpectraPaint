@@ -86,6 +86,10 @@ class SessionRegistry:
         # (issue #12). Preview preparation downscales; export re-renders from the
         # original without re-running the model.
         self._originals: dict[str, bytes] = {}
+        # The prepared photo as PNG, per live session, encoded the first time it is asked for
+        # (issue #49). The pixels never change after preparation — corrections only replace Wall
+        # Planes — so the one encode serves the photo route and the auto-save alike.
+        self._photo_pngs: dict[str, bytes] = {}
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
@@ -122,6 +126,14 @@ class SessionRegistry:
         """The original upload bytes for this live session, if held in memory."""
         return self._originals.get(session_id)
 
+    def photo_png(self, session_id: str, photo: PreparedPhoto) -> bytes:
+        """The session's prepared photo as PNG, encoded once and then reused."""
+        encoded = self._photo_pngs.get(session_id)
+        if encoded is None:
+            encoded = _encode_photo(photo.srgb)
+            self._photo_pngs[session_id] = encoded
+        return encoded
+
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
         """Store what preparation produced, once per consultation.
 
@@ -143,7 +155,7 @@ class SessionRegistry:
         mattes = [
             (plane.plane_id, _encode_matte(plane.alpha), plane.surface) for plane in photo.planes
         ]
-        self._store.save_preparation(consultation_id, _encode_photo(photo.srgb), mattes)
+        self._store.save_preparation(consultation_id, self.photo_png(session_id, photo), mattes)
         self._persisted.add(consultation_id)
 
     def job(self, session_id: str) -> PreparationJob | None:
@@ -160,6 +172,7 @@ class SessionRegistry:
         # _consultations dict grows for the life of the process.
         self._consultations.pop(session_id, None)
         self._originals.pop(session_id, None)
+        self._photo_pngs.pop(session_id, None)
         return True
 
 
@@ -289,13 +302,14 @@ async def session_photo(request: Request, session_id: str) -> Response:
     appears once ``persist_preparation`` has run, which the render gate drives — so on a first
     load, before any repaint, there is nothing stored to serve. This one waits for preparation
     through the same gate (``require_photo``) and serves the in-memory photo, so it answers as
-    soon as preparation is done. Reading it also persists the preparation, which moves issue
-    #11's auto-save to preparation-done — strictly earlier than the first render it waited for.
+    soon as preparation is done. The PNG is encoded once per session and reused, so asking again
+    costs nothing. Reading it also persists the preparation, which moves issue #11's auto-save to
+    preparation-done — strictly earlier than the first render it waited for.
     """
 
     photo = await require_photo(request, session_id)
     return Response(
-        content=_encode_photo(photo.srgb),
+        content=_registry(request).photo_png(session_id, photo),
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
     )

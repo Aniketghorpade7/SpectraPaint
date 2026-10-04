@@ -1699,3 +1699,23 @@ thing a Dealer can do (#10), but only while the photo rather than the render is 
 The tap layer is gated on the same value, so neither the wash nor the tap layer can sit over a
 repaint. Belt and braces, deliberately: the state rule and the screen rule agree, so neither a
 future caller that forgets one nor a stale state can put a wash over a colour being judged.
+
+**Review follow-ups to #51.** Four things changed after review, and one was kept rather than
+deferred:
+
+- **The walls are never drawn until the frame has the ratio of the image on screen.** The frame took
+  its ratio from the image's `onLoad`, so right after the prepared photo replaced the upload the
+  frame still had the placeholder's ratio while the walls had already arrived — for an EXIF-rotated
+  photo, mattes on the wrong rectangle for a moment. The surface now remembers which image its ratio
+  was read from and draws overlay, outline, chips and tap layer only once that is the image shown.
+  Watching the DOM for exactly this window is part of `layout.test.ts`.
+- **A prepared photo that cannot be fetched is said on screen** (`photoNotice`, from the pure
+  `applyPreparedPhoto`), not only logged: the raw upload stays, and an oriented one would otherwise
+  sit misaligned with nothing to explain it.
+- **The prepared photo's PNG is encoded once per session** (`SessionRegistry.photo_png`), shared by
+  the photo route and the auto-save. The pixels never change after preparation; corrections only
+  replace Wall Planes.
+- **The full-resolution export of an oriented photo has its own test**, since that path re-reads the
+  original bytes and is the one place preview and export could disagree again.
+- **The layout check is kept, inside `npm run check`**, with Chromium fetched by `npm run browsers`
+  — see design-decisions.md §9d for why this is the one DOM-needing test the project allows.
