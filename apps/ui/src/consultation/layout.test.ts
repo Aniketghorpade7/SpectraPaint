@@ -22,6 +22,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const TOLERANCE_PX = 1.5;
+// Layout is deterministic, but a loaded CI runner is not: a cold browser can stall a single step.
+// Two retries absorb that without hiding a real failure, which fails every attempt.
+const RETRIES = 2;
 
 const VIEWPORTS = [
   { width: 1280, height: 720 },
@@ -83,6 +86,9 @@ async function open(
   search: Record<string, string>,
 ): Promise<Page> {
   const page = await browser.newPage({ viewport });
+  // A step that cannot proceed fails in seconds and says which step, rather than sitting until the
+  // test's own timeout (a Windows runner once hung a click for the full 30 s).
+  page.setDefaultTimeout(10_000);
   const problems: string[] = [];
   page.on('pageerror', (error) => problems.push(error.message));
   page.on('console', (message) => {
@@ -178,7 +184,7 @@ function expectSameBox(actual: Box | null, expected: Box | null, what: string): 
   }
 }
 
-describe('the Room Photo fits the stage', () => {
+describe('the Room Photo fits the stage', { retry: RETRIES }, () => {
   for (const viewport of VIEWPORTS) {
     for (const ratio of RATIOS) {
       it(`${viewport.width}×${viewport.height}, photo ratio ${ratio}: whole photo visible, everything aligned`, async () => {
@@ -231,12 +237,12 @@ describe('the Room Photo fits the stage', () => {
         } finally {
           await page.close();
         }
-      }, 30_000);
+      }, 60_000);
     }
   }
 });
 
-describe('chips', () => {
+describe('chips', { retry: RETRIES }, () => {
   it('sit inside the frame at every ratio', async () => {
     for (const ratio of RATIOS) {
       const page = await open(VIEWPORTS[0], { ratio: String(ratio) });
@@ -258,7 +264,7 @@ describe('chips', () => {
   }, 60_000);
 });
 
-describe('an oriented phone photo', () => {
+describe('an oriented phone photo', { retry: RETRIES }, () => {
   it('re-fits the frame to the prepared photo and never draws the walls on the placeholder', async () => {
     // The raw upload is landscape, the prepared photo portrait — an EXIF Orientation 6 photo.
     const page = await open(VIEWPORTS[0], { ratio: '0.75', placeholder: '1.33' });
@@ -314,7 +320,7 @@ describe('an oriented phone photo', () => {
     } finally {
       await page.close();
     }
-  }, 30_000);
+  }, 60_000);
 
   it('says so on screen when the prepared photo cannot be fetched', async () => {
     const page = await open(VIEWPORTS[0], {
@@ -338,10 +344,10 @@ describe('an oriented phone photo', () => {
     } finally {
       await page.close();
     }
-  }, 30_000);
+  }, 60_000);
 });
 
-describe('a repaint', () => {
+describe('a repaint', { retry: RETRIES }, () => {
   it('shows with no wash, no outline and no tap layer, even after a tool was armed', async () => {
     const page = await open(VIEWPORTS[0], { ratio: '1.33' });
     try {
@@ -365,5 +371,5 @@ describe('a repaint', () => {
     } finally {
       await page.close();
     }
-  }, 30_000);
+  }, 60_000);
 });
