@@ -679,3 +679,69 @@ enough to be **evidence**, not merely not reliable enough to be **rules**. An ap
 them to SAM 2 needs a reason to believe they are right about *where* the object is, not only about
 *what* it is. The same classes used for outright removal, with prompts untouched, are worth 0.005 —
 measured, and rejected on cost in implementation decision 49.
+
+---
+
+## 27. The frame fitted the tap layer but not the stage, and a greyscale matte has no alpha to read
+
+**Ticket:** #49 · **Contributor:** Prasad K (hit by an agent) · **Date:** 2026-10-03 · **Status:**
+resolved
+
+Follow-up to [difficulty 23](#23-the-wall-overlay-never-actually-aligned-with-the-photo--consultationpicture-had-no-positioning-context).
+
+**What happened:** two defects that only a browser could see, both of which the whole test suite
+called green.
+
+The first is a direct consequence of fixing #23. The frame was given an inline `aspect-ratio` from
+the photo's own dimensions and `height: auto`, inside a flex column stage — and nothing bounded its
+*width*. A photo taller than the free space therefore made the frame grow past the stage, which
+clips it: a 3:4 portrait lost roughly half itself, a 4:3 lost its top and bottom. Nothing about
+#23's check could catch this, because #23's check measured the frame against the tap layer, and both
+were wrong together — they agreed perfectly on a box that was simply too tall. An alignment check
+proves two elements match; it says nothing about whether the thing they agree on fits.
+
+The second was in the replacement for the wash (see decision #51): the chosen wall is now marked by
+an outline, and `matteOutline` decided which pixels belonged to the wall by thresholding the
+**alpha** byte of the matte's `ImageData`. The Alpha Matte is served as an 8-bit mode-L greyscale
+PNG (`planes.py` `_encode_matte`), so a decoded matte carries coverage in R, G and B and is **alpha
+opaque on every pixel**. Thresholding alpha read 255 everywhere, saw a single wall covering the
+entire photograph, and outlined the photo's frame — a rectangle around the room — instead of the
+wall's edge. The outline would have drawn something, it would have been perfectly aligned, and it
+would have been completely wrong.
+
+**Why it was hard:** the first defect is invisible to any test that compares elements to each other,
+and the unit tests for `matteOutline` passed because their synthetic matte was built to match the
+implementation's assumption rather than the service's actual output. Difficulty 11 records the same
+class of bug arriving from the other direction — a CSS mask on a greyscale PNG failing *open* and
+brightening the whole photo. A greyscale PNG is the recurring hazard in this codebase: two features
+have now read the wrong channel off one, and each looked correct in isolation.
+
+Neither bug is reachable by seam 1 or seam 2 (conventions.md §6) — this is browser layout and image
+decoding. So the check had to be built rather than found: a temporary harness mounting the real
+`ConsultationSurface` and `useConsultation` against a scripted `window.spectrapaint`, driving the
+whole Dealer flow in-page and asserting real `getBoundingClientRect()` geometry, run across
+1280×720 and 1920×1080 × photo ratios 0.5, 0.75, 1.33 and 1.78.
+
+**Where it stands:** resolved. The stage's free space is now a size container
+(`.consultation__frame-slot`) and the frame is the largest box of the photo's ratio that fits it —
+`width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)))`, height derived — so it is bounded on both
+axes and #23's invariant still holds. All 8 cells measured the frame inside the slot with overlays,
+chips and tap layer pixel-identical to it: portrait ratios height-limited (272×544 at ratio 0.5),
+landscape ratios width-limited (821×461 at ratio 1.78), nothing clipped at any size. `matteOutline`
+now thresholds the **grey level** at 128, the halfway point of the coverage range the service
+encodes, matching the `mask-mode: luminance` the wash has always used on the same bytes.
+
+The harness was first run once and deleted. Review then asked for the layout check to stay, so it is
+now `apps/ui/src/consultation/layout.test.ts` with `layoutHarness.tsx`: the same real components over
+a scripted bridge, in headless Chromium, part of `npm run check` (the one named exception in
+design-decisions.md §9d). It was confirmed to fail against the old width-only frame rule (7 of 12
+cases), and a second case — an EXIF-rotated photo whose placeholder is landscape and whose prepared
+photo is portrait — confirmed to fail without the guard that keeps the walls off the screen until the
+frame has the new image's ratio. Also kept: the four `walls.test.ts` cases that fail against the
+alpha-thresholding version — confirmed by re-introducing it — plus the measurements above. Note the
+original harness also had its own bug of the same family, worth recording
+because it is easy to repeat: it read `window.__consultation` into a local before each click, and
+`useConsultation` returns a fresh object every render, so every assertion after a click was reading
+the answer to the previous question. **A snapshot taken before a state change reports the old state,
+however carefully it was captured.**
+

@@ -40,6 +40,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Fetch Chromium for the layout check
+        # The Room Photo's layout test drives a real browser (design-decisions.md §9d). --with-deps
+        # adds the system libraries on Linux and does nothing on Windows.
+        run: npx playwright-core install --with-deps chromium
+
       - name: Lint, typecheck, format and shell tests
         run: npm run check
 

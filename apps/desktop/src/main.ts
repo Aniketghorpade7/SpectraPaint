@@ -21,6 +21,7 @@ import {
   setOnProfileChange,
   setQualityTier,
 } from './execution-profile';
+import { registerPreparedPhotoBridge } from './prepared-photo-bridge';
 import { registerProgressStreamBridge } from './progress-stream';
 import { registerRenderBridge } from './render-bridge';
 import { registerServiceBridge } from './service-bridge';
@@ -134,6 +135,7 @@ void app.whenReady().then(async () => {
   registerWallsBridge(() => sidecar, isTrustedSender);
   registerCorrectionsBridge(() => sidecar, isTrustedSender);
   registerStoredImageBridge(() => sidecar, isTrustedSender);
+  registerPreparedPhotoBridge(() => sidecar, isTrustedSender);
   registerStorageBridge(() => sidecar, isTrustedSender);
   registerDiskBridge(isTrustedSender);
   registerCreateConsultationBridge(

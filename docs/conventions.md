@@ -88,7 +88,9 @@ Two seams, and both are described fully in
 
 Plus a **small `vitest` suite for shell logic neither seam can reach** — pure functions only, and
 only where a silent regression would be expensive and invisible (`design-decisions.md` §9d). If a
-test there needs a DOM, a mock or a running Electron, it belongs in seam 1 instead.
+test there needs a DOM, a mock or a running Electron, it belongs in seam 1 instead — with the one
+named exception in §9d, the Room Photo's layout check, which needs a real browser because its
+subject is CSS.
 
 **Test external behaviour, never implementation.** A test must survive swapping the semantic model,
 retuning the smoothing curve, or restructuring internals. The light map, base colour grouping and

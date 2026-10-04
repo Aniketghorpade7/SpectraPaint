@@ -6,12 +6,15 @@ registry or swapping the validation library.
 """
 
 import base64
+import io
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import spectrapaint.api.sessions as sessions
 from spectrapaint.api.app import create_app
+from tests.api.conftest import stub_preparation_stages
 
 SECRET = "test-secret-not-a-real-one"
 
@@ -37,6 +40,33 @@ def upload(client: TestClient, contents: bytes, name: str = "room.png") -> objec
         headers=auth(),
         files={"photo": (name, contents, "image/png")},
     )
+
+
+@pytest.fixture
+def prepared_client() -> TestClient:
+    """Preparation that decodes for real and attaches a known matte.
+
+    The EXIF tests below are about what ``decode_photo`` — the decode production runs — does to an
+    oriented photo, so the decode is genuine and only the model stages stand in (tests/api/conftest
+    explains why that is not mocking).
+    """
+
+    return TestClient(create_app(SECRET, preparation_stages=stub_preparation_stages))
+
+
+def landscape_jpeg_with_orientation(orientation: int) -> bytes:
+    """Landscape pixels (8×6) carrying an EXIF Orientation tag, as a phone camera stores them.
+
+    Orientation 6 says the stored rows are the visual right-hand side — the picture is portrait
+    once the tag is honoured, which is what the Dealer sees in any viewer that applies it.
+    """
+
+    buffer = io.BytesIO()
+    image = Image.new("RGB", (8, 6), (140, 60, 60))
+    exif = image.getexif()
+    exif[0x0112] = orientation
+    image.save(buffer, format="JPEG", exif=exif)
+    return buffer.getvalue()
 
 
 def test_a_photo_upload_creates_a_session_and_returns_its_id(client: TestClient) -> None:
@@ -149,6 +179,107 @@ def test_session_creation_requires_the_secret(client: TestClient) -> None:
     assert response.json()["code"] == "unauthorised"
 
 
+def test_the_prepared_photo_is_served_before_any_render(prepared_client: TestClient) -> None:
+    """The photo route answers from the in-memory session (issue #49).
+
+    The stored copy at ``/consultations/{id}/photo/png`` only exists after the first render's gate
+    persists the preparation; the Consultation needs the prepared pixels the moment preparation is
+    done, so it can show them instead of the raw upload.
+    """
+
+    session_id = upload(prepared_client, PNG_BYTES).json()["session_id"]
+
+    response = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert Image.open(io.BytesIO(response.content)).size == (2, 2)
+
+
+def test_the_prepared_photo_is_encoded_once_per_session(
+    prepared_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking for the photo again costs nothing: the PNG is encoded once and reused (issue #49)."""
+
+    from spectrapaint.api import sessions
+
+    encodes: list[int] = []
+    real_encode = sessions._encode_photo
+
+    def counting_encode(srgb):  # noqa: ANN001, ANN202
+        encodes.append(1)
+        return real_encode(srgb)
+
+    monkeypatch.setattr(sessions, "_encode_photo", counting_encode)
+    session_id = upload(prepared_client, PNG_BYTES).json()["session_id"]
+
+    first = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+    second = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
+    assert len(encodes) == 1
+
+
+def test_the_photo_route_fails_cleanly_for_an_unknown_session(client: TestClient) -> None:
+    response = client.get("/sessions/does-not-exist/photo/png", headers=auth())
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "session_not_found"
+    assert response.json()["message"]
+
+
+def test_an_exif_orientation_is_applied_to_the_prepared_photo_and_its_mattes(
+    prepared_client: TestClient,
+) -> None:
+    """A photo stored landscape with EXIF Orientation=6 is portrait once prepared (issue #49).
+
+    The photo the Dealer is shown, the mattes and every later render are built on the prepared
+    pixels, so the orientation must be applied once, here — not left for the browser to apply to
+    the raw upload while everything downstream works on unrotated pixels.
+    """
+
+    response = prepared_client.post(
+        "/sessions",
+        headers=auth(),
+        files={"photo": ("room.jpg", landscape_jpeg_with_orientation(6), "image/jpeg")},
+    )
+    session_id = response.json()["session_id"]
+
+    photo = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+
+    assert photo.status_code == 200
+    prepared = Image.open(io.BytesIO(photo.content))
+    assert prepared.size == (6, 8)  # portrait: the stored rows were turned upright
+
+    planes = prepared_client.get(f"/sessions/{session_id}/planes", headers=auth()).json()
+    assert planes["photo_width"] == 6
+    assert planes["photo_height"] == 8
+    assert planes["planes"]
+    for plane in planes["planes"]:
+        matte = prepared_client.get(
+            f"/sessions/{session_id}/planes/{plane['plane_id']}/matte", headers=auth()
+        )
+        assert matte.status_code == 200
+        assert Image.open(io.BytesIO(matte.content)).size == (6, 8)
+
+
+def test_a_photo_without_an_exif_orientation_is_unchanged(prepared_client: TestClient) -> None:
+    """The transpose is harmless when there is no tag — the technical call in the bug doc."""
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 6), (140, 60, 60)).save(buffer, format="JPEG")
+
+    response = prepared_client.post(
+        "/sessions", headers=auth(), files={"photo": ("room.jpg", buffer.getvalue(), "image/jpeg")}
+    )
+    session_id = response.json()["session_id"]
+
+    photo = prepared_client.get(f"/sessions/{session_id}/photo/png", headers=auth())
+
+    assert Image.open(io.BytesIO(photo.content)).size == (8, 6)
+
+
 def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> None:
     """Encode-once is enforced structurally, by omission.
 
@@ -167,6 +298,10 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
         ("/sessions", frozenset({"POST"})),
         ("/sessions/{session_id}", frozenset({"DELETE"})),
         ("/sessions/{session_id}/events", frozenset({"GET"})),
+        # Issue #49. The prepared photo before any render exists, so the Consultation can show the
+        # pixels that were segmented instead of the raw upload. GET, never taking an image:
+        # encode-once still holds.
+        ("/sessions/{session_id}/photo/png", frozenset({"GET"})),
         # Issue #3. One per Shade change; the photo stays in the session (encode-once).
         ("/sessions/{session_id}/renders", frozenset({"POST"})),
         # Issue #12. Full-resolution JPEG for the OS share sheet; same assignments as renders.

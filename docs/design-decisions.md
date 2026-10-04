@@ -846,6 +846,15 @@ Anything that needs a real service is a seam-1 test.
 or a running Electron, it belongs in seam 1 instead — or it is testing implementation, which
 conventions §6 already forbids.
 
+**The one exception: the Room Photo's layout (issue #49).** `layout.test.ts` drives the real
+`ConsultationSurface` and `useConsultation` in headless Chromium and asserts real
+`getBoundingClientRect()` geometry. It is the exception rather than the rule because the thing under
+test is CSS — the frame fitting the stage at every photo ratio — which no pure function can reach,
+and because a layout that is *internally* consistent (overlay agreeing with frame) while being too
+tall for the stage passed every earlier check. It is deliberately one file and one scenario: the
+stage and the frame. It needs Chromium, fetched once with `npm run browsers` (CI does the same before
+`npm run check`). It does not license component tests in general.
+
 Run with `npm test` at the repository root.
 
 ---
