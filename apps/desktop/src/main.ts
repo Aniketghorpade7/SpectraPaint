@@ -1,12 +1,20 @@
-import { app, BrowserWindow, type WebContents, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, type WebContents, ipcMain } from 'electron';
 import path from 'node:path';
 
+import {
+  MENU_REDO_ITEM_ID,
+  MENU_REDO_SHIFT_ITEM_ID,
+  MENU_UNDO_ITEM_ID,
+  appMenuTemplate,
+} from './app-menu';
 import { bootStatusFor } from './boot-messages';
 import { BootStatusHub, registerBootStatusBridge } from './boot-status';
 import { registerCorrectionsBridge } from './corrections-bridge';
 import {
   EXECUTION_PROFILE_GET_CHANNEL,
   EXECUTION_PROFILE_SET_CHANNEL,
+  MENU_COMMAND_CHANNEL,
+  MENU_STATE_CHANNEL,
   QUALITY_TIER_GET_CHANNEL,
   QUALITY_TIER_SET_CHANNEL,
 } from './channels';
@@ -99,6 +107,40 @@ function isTrustedSender(sender: WebContents): boolean {
   return mainWindow !== null && !mainWindow.isDestroyed() && sender === mainWindow.webContents;
 }
 
+/**
+ * The custom application menu (issue #50). Electron's default menu would ship text-editing roles
+ * that do nothing on the Consultation, plus Reload and DevTools in packaged builds. The template is
+ * built by the pure `appMenuTemplate`, so only this wiring touches Electron. Menu clicks travel to
+ * the renderer on `MENU_COMMAND_CHANNEL` — Undo/Redo are the Consultation's commands there, and the
+ * renderer routes each one to paint or to text editing.
+ */
+function installApplicationMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      appMenuTemplate({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        send: (command) => mainWindow?.webContents.send(MENU_COMMAND_CHANNEL, command),
+      }),
+    ),
+  );
+
+  // The Consultation reports what Undo/Redo have to act on; the menu items follow it, so they are
+  // never grey lies (or live lies) about what the command would do. The hidden Windows-only
+  // Redo sibling follows the same state — a disabled item's accelerator never fires, so leaving
+  // it disabled would silently drop Ctrl+Shift+Z (issue #50).
+  ipcMain.on(MENU_STATE_CHANNEL, (event, state: { canUndo: boolean; canRedo: boolean }) => {
+    if (!isTrustedSender(event.sender)) return;
+    const menu = Menu.getApplicationMenu();
+    const undo = menu?.getMenuItemById(MENU_UNDO_ITEM_ID);
+    const redo = menu?.getMenuItemById(MENU_REDO_ITEM_ID);
+    const redoShift = menu?.getMenuItemById(MENU_REDO_SHIFT_ITEM_ID);
+    if (undo) undo.enabled = state.canUndo;
+    if (redo) redo.enabled = state.canRedo;
+    if (redoShift) redoShift.enabled = state.canRedo;
+  });
+}
+
 async function startService(): Promise<void> {
   if (sidecar) return;
 
@@ -124,6 +166,7 @@ void app.whenReady().then(async () => {
   // The persisted tier is in place before the sidecar starts, so the service is launched with
   // the tier the Dealer actually chose rather than the default (issue #14 AC3).
   restoreQualityTier();
+  installApplicationMenu();
   registerServiceBridge(() => sidecar, isTrustedSender);
   registerProgressStreamBridge(() => sidecar, isTrustedSender);
   registerRenderBridge(() => sidecar, isTrustedSender);

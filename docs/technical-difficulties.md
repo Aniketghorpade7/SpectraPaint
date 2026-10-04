@@ -745,3 +745,38 @@ because it is easy to repeat: it read `window.__consultation` into a local befor
 the answer to the previous question. **A snapshot taken before a state change reports the old state,
 however carefully it was captured.**
 
+## 28. Issue #50 wanted hook-level tests, and the repo has no DOM/React-testing packages
+
+**Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-02 · **Status:** resolved by factoring, then by the browser harness
+
+**What happened:** the issue's testing plan asks for **hook-level** coverage — "apply Shade A then
+Shade B, then undo; `assignments` equal the post-A snapshot and exactly one render request is made; a
+split clears the history." The repo's vitest suite runs in the `node` environment and contains no
+`jsdom`/`happy-dom`, no `@testing-library/*`, and no `react-test-renderer`; the `react-hooks` ESLint
+plugin is the only React-aware tooling. Rendering `useConsultation` in a test would have required
+adding devDependencies and touching `package-lock.json`.
+
+**Why it was hard:** `package-lock.json` carries a peer's uncommitted change on this branch, so any
+lockfile churn (even a devDependency-only install) would have mixed someone else's work into this
+ticket's diff — exactly what isolated fresh contexts are not supposed to do to each other. And
+`docs/conventions.md` §6 restricts the vitest suite to *pure functions* anyway; a hook test needs a
+DOM, which the conventions file explicitly routes to seam 1.
+
+**Where it stands:** resolved twice over. First the way `applyRenderEvent` and `applyProgressEvent`
+were resolved before it: every decision the hook makes during undo/redo was factored into pure
+functions — `history.ts` (`record`/`undo`/`redo`, the cap, the future-clearing), `shadeCodeOf` (what
+a restored repaint pins its reply to) and `restorePlan` (original photo, repaint, or keep what is on
+screen) — and `useConsultation.test.ts` states the scenarios against those.
+
+That left the sequences themselves untested, and review found a bug in exactly that glue: choosing a
+wall before any Shade, then Undo, then Redo, asked the service to paint nothing and showed a failed
+repaint — `redoPaint` lacked the empty-snapshot guard `undoPaint` had, and the pure layer could not
+see it. By then the repo had a real-browser harness (design-decisions.md §9d, technical difficulty
+#27), and it renders the real `useConsultation`. So `undo.test.ts` runs the issue's scenarios as true
+hook tests: two Shades then Undo leaves the post-A paint with exactly one more render request; a
+split clears the history; Undo in the Catalogue search box acts on the text; and the wall-choice
+round trip makes no request at all. The scripted bridge answers an empty paint the way the service
+does (`malformed_request`), so that bug fails the test rather than hiding behind a lenient mock.
+Confirmed by reintroducing it: two cases fail. One trap worth recording: a test that fires a menu
+command straight after a state change races React's commit and hits the previous render's handler —
+tests wait for the published `canUndo` first, which is what a real menu click is ordered after.

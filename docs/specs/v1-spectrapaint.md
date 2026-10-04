@@ -268,7 +268,9 @@ tool whose design goal is that the Dealer never looks incompetent, these are the
 whether it succeeds.
 
 **Open:** whether the shop PC is touchscreen. Tap targets, hover affordances and the correction
-interaction all change if it is. Pair this with the Amol Kulkarni conversation.
+interaction all change if it is. Pair this with the Amol Kulkarni conversation. Note that Undo
+(issue #50) currently lives in the application menu's Edit items, which a touchscreen cannot reach —
+an on-screen Undo affordance would be needed if the answer is yes.
 
 ### The render engine
 
