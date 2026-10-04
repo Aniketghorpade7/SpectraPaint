@@ -1,10 +1,7 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import react from '@vitejs/plugin-react';
-import { chromium, type Browser, type Page } from 'playwright-core';
-import { createServer, type ViteDevServer } from 'vite';
+import type { Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { startBrowserHarness, type BrowserHarness } from './browserHarness';
 
 /**
  * The Room Photo's layout, measured in a real browser (issue #49).
@@ -20,7 +17,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * the app's: `npm run browsers` fetches it once (CI does the same before `npm run check`).
  */
 
-const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const TOLERANCE_PX = 1.5;
 // Layout is deterministic, but a loaded CI runner is not: a cold browser can stall a single step.
 // Two retries absorb that without hiding a real failure, which fails every attempt.
@@ -33,41 +29,17 @@ const VIEWPORTS = [
 // Portrait 1:2 and 3:4, landscape 4:3 and 16:9.
 const RATIOS = [0.5, 0.75, 1.33, 1.78] as const;
 
-let server: ViteDevServer;
-let browser: Browser;
-let baseUrl: string;
+let harness: BrowserHarness;
 
 beforeAll(async () => {
-  server = await createServer({
-    configFile: false,
-    root: UI_ROOT,
-    plugins: [react()],
-    logLevel: 'silent',
-    // Port 0: any free port, so a dev server already running on this machine is no obstacle.
-    server: { host: '127.0.0.1', port: 0, hmr: false },
-  });
-  await server.listen();
-  const address = server.httpServer?.address();
-  if (address === null || address === undefined || typeof address === 'string') {
-    throw new Error('the layout test server did not bind to a port');
-  }
-  baseUrl = `http://127.0.0.1:${address.port}`;
-
-  try {
-    browser = await chromium.launch();
-  } catch (error) {
-    await server.close();
-    throw new Error(
-      `The layout test needs Chromium and could not start it. Run \`npm run browsers\` once.`,
-      { cause: error },
-    );
-  }
+  harness = await startBrowserHarness();
 }, 60_000);
 
 afterAll(async () => {
-  await browser?.close();
-  await server?.close();
+  await harness?.close();
 });
+
+const open: BrowserHarness['open'] = (...args) => harness.open(...args);
 
 interface Box {
   left: number;
@@ -78,30 +50,7 @@ interface Box {
   height: number;
 }
 
-// Page errors and console errors, per page: a layout that "passes" with the app throwing is not one.
-const pageProblems = new WeakMap<Page, string[]>();
-
-async function open(
-  viewport: { width: number; height: number },
-  search: Record<string, string>,
-): Promise<Page> {
-  const page = await browser.newPage({ viewport });
-  // A step that cannot proceed fails in seconds and says which step, rather than sitting until the
-  // test's own timeout (a Windows runner once hung a click for the full 30 s).
-  page.setDefaultTimeout(10_000);
-  const problems: string[] = [];
-  page.on('pageerror', (error) => problems.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') problems.push(message.text());
-  });
-  pageProblems.set(page, problems);
-  await page.goto(`${baseUrl}/layout-harness.html?${new URLSearchParams(search)}`);
-  return page;
-}
-
-function problemsOn(page: Page): string[] {
-  return pageProblems.get(page) ?? [];
-}
+const problemsOn = (page: Page) => harness.problemsOn(page);
 
 /** A Dealer's flow up to the walls being on screen: choose a photo, wait for the prepared one. */
 async function loadRoomPhoto(page: Page, ratio: number): Promise<void> {

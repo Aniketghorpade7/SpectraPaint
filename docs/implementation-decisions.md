@@ -1740,7 +1740,11 @@ undo/redo restore a snapshot and then **repaint through the normal render reques
 pixels: the snapshot's state is only ever *asked for* as the same repaint a tap would produce, which
 is what keeps a snapshot honest against the live plane list. A restored snapshot with empty
 `assignments` drops the render state instead of requesting a (necessarily `422`) empty repaint, so
-undoing to the start returns the original photo.
+undoing to the start returns the original photo — in *both* directions: redo can land on an empty
+snapshot too (a wall chosen before any Shade, undone, redone), which review found the first version
+mishandling. One pure `restorePlan` decides, for undo and redo alike, between the original photo, a
+repaint, and **keeping what is on screen** when only the wall choice differs (the Shades on the walls
+are what the render shows, so a repaint would be a request for the same picture).
 
 **Why corrections clear the history rather than being recorded:** a split or merge can retire a
 plane id, and a snapshot naming a retired plane cannot be replayed honestly — the same reasoning as

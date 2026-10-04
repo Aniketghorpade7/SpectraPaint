@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type {
+  MenuCommand,
+  MenuState,
   SpectraPaintBridge,
   WallPlaneOverlay,
   WallsResult,
@@ -33,8 +35,19 @@ import { useConsultation, type Consultation } from './useConsultation';
 declare global {
   interface Window {
     __live: Consultation;
+    /** Every render request the Consultation has made, as the payload it sent. */
+    __renderCalls: Array<string | Record<string, string>>;
+    /** The latest Undo/Redo availability the Consultation reported to the menu. */
+    __menuState: MenuState | null;
+    /** Press a menu item: what main's `webContents.send` does on a click or accelerator. */
+    __menu: (command: MenuCommand) => void;
   }
 }
+
+window.__renderCalls = [];
+window.__menuState = null;
+const menuListeners = new Set<(command: MenuCommand) => void>();
+window.__menu = (command) => menuListeners.forEach((listener) => listener(command));
 
 const SESSION_ID = 'a'.repeat(32);
 const PHOTO_HEIGHT = 400;
@@ -142,12 +155,29 @@ const bridge: Partial<SpectraPaintBridge> = {
   },
   walls: () => Promise.resolve(wallsFor(preparedRatio)),
   correctWalls: () => Promise.resolve(wallsFor(preparedRatio)),
-  render: () =>
-    Promise.resolve({
+  render: (_sessionId, payload) => {
+    window.__renderCalls.push(payload);
+    // As the service answers an empty assignment map: a repaint of nothing is a refusal.
+    if (typeof payload === 'object' && Object.keys(payload).length === 0) {
+      return Promise.resolve({
+        status: 'failed',
+        code: 'malformed_request',
+        message: 'Nothing to paint.',
+      });
+    }
+    return Promise.resolve({
       status: 'ready',
       imageDataUrl: photoOf(preparedRatio, '#5a7a5a'),
       executionProfile: 'cpu-faster',
-    }),
+    });
+  },
+  onMenuCommand: (listener) => {
+    menuListeners.add(listener);
+    return () => menuListeners.delete(listener);
+  },
+  setMenuState: (state) => {
+    window.__menuState = state;
+  },
 };
 
 window.spectrapaint = new Proxy(bridge, {
