@@ -44,6 +44,12 @@ class SemanticRegions:
     ceiling class — kept separately so the ceiling plane can be built from its own region without
     re-deriving it from ``excluded`` (which for wall purposes still contains ceiling as an
     exclusion, and must keep doing so).
+
+    ``floor_exempt`` is where the argmax is a class the matte's wall-confidence floor must not
+    delete (#48): this checkpoint labels bright, washed-out wall ``mirror``. It is the opposite of
+    an exclusion. It says nothing about whether a pixel is wall, only that low wall confidence
+    there is not evidence against it. Read from ``runtime.json``'s ``floor_exempt_classes``; a
+    ``runtime.json`` written before that key existed exempts nothing.
     """
 
     wall: np.ndarray  # HxW bool
@@ -51,6 +57,7 @@ class SemanticRegions:
     wall_confidence: np.ndarray  # HxW float32 in [0, 1]
     ceiling: np.ndarray  # HxW bool
     ceiling_confidence: np.ndarray  # HxW float32 in [0, 1]
+    floor_exempt: np.ndarray  # HxW bool
 
     @property
     def wall_fraction(self) -> float:
@@ -129,6 +136,13 @@ def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
     for name in EXCLUDED_CLASSES:
         excluded_small |= labels == classes[name]
 
+    # Kept apart from `classes` in runtime.json so nothing can mistake it for an exclusion. Absent
+    # from a runtime.json exported before #48, which then exempts nothing: the floor behaves as it
+    # did, rather than the service refusing to start.
+    floor_exempt_small = np.zeros_like(wall_small)
+    for index in graph.config.get("floor_exempt_classes", {}).values():
+        floor_exempt_small |= labels == index
+
     # Ceiling kept separately — for wall, ceiling is an exclusion (a repainted ceiling window is
     # instantly wrong); for ceiling, wall is the exclusion. The label map itself is exclusive
     # (argmax), so wall and ceiling never overlap here.
@@ -144,6 +158,7 @@ def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
     excluded = _resize_to(excluded_small.astype(np.float32), shape, nearest=True) > 0.5
     confidence = _resize_to(probabilities[wall_index], shape, nearest=False)
     ceiling = _resize_to(ceiling_small.astype(np.float32), shape, nearest=True) > 0.5
+    floor_exempt = _resize_to(floor_exempt_small.astype(np.float32), shape, nearest=True) > 0.5
     if ceiling_index is not None and ceiling_index < probabilities.shape[0]:
         ceiling_conf = _resize_to(probabilities[ceiling_index], shape, nearest=False)
     else:
@@ -155,4 +170,5 @@ def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
         wall_confidence=np.clip(confidence, 0.0, 1.0).astype(np.float32),
         ceiling=ceiling,
         ceiling_confidence=np.clip(ceiling_conf, 0.0, 1.0).astype(np.float32),
+        floor_exempt=floor_exempt,
     )
