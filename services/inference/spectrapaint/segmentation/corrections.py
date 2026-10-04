@@ -24,8 +24,14 @@ from collections.abc import Iterable
 
 import numpy as np
 
+from spectrapaint.imaging import dilate, erode
 from spectrapaint.runtime.graphs import Graphs
-from spectrapaint.segmentation.matte import RefinerFeatures, decode_alpha, soften_boundary
+from spectrapaint.segmentation.matte import (
+    _BAND_FRACTION,
+    RefinerFeatures,
+    decode_alpha,
+    soften_boundary,
+)
 from spectrapaint.segmentation.prompts import single_point_prompt
 from spectrapaint.segmentation.walls import (
     CEILING_PLANE_ID,
@@ -210,6 +216,73 @@ def order_left_to_right(planes: tuple[WallPlane, ...]) -> tuple[WallPlane, ...]:
     return tuple(sorted(planes, key=_left_edge))
 
 
+def _seam(winner: np.ndarray, loser: np.ndarray, radius: int) -> np.ndarray:
+    """Where two planes' soft claims are describing the *same* boundary rather than each other's.
+
+    Three conditions, and all three are load-bearing:
+
+    * **both claim it** — otherwise there is nothing to reconcile;
+    * **each is inside the other's boundary band** — a seam has two 0.5-contours a few pixels apart,
+      and a pixel far from either contour is simply interior to one plane and unknown to the other;
+    * **their confident interiors do not overlap** — this is what separates a seam from two planes
+      fading into the *same* exclusion. Two planes that both pull back from one window have cores
+      that coincide, and summing there would paint over the window's surround twice over, which is
+      the over-count bug 03's path 3 warns about. Where two planes genuinely face each other, one
+      plane's interior is the other plane's exterior, so this is nearly always true.
+    """
+
+    # Strictly above the level, not at or above it. A pixel reading exactly 0.5 is *on* the contour,
+    # and a contour belongs to neither side — which is what a contour is. Counting it as part of
+    # both
+    # cores makes them overlap on the seam itself, and the seam is the one pixel the union exists to
+    # fix, so the rule would have excluded exactly what it was written for. It also keeps the
+    # shared-exclusion case working: two mattes both sitting at 0.6 well inside the same hole are
+    # both core there, and are correctly told apart from a seam.
+    winner_core = winner > _CORE_LEVEL
+    loser_core = loser > _CORE_LEVEL
+    winner_band = dilate(winner_core, radius) & ~erode(winner_core, radius)
+    loser_band = dilate(loser_core, radius) & ~erode(loser_core, radius)
+    return (winner > 0.0) & (loser > 0.0) & winner_band & loser_band & ~(winner_core & loser_core)
+
+
+def resolve_exclusive(winner: np.ndarray, loser: np.ndarray, radius: int) -> np.ndarray:
+    """``winner``'s matte once the two planes' overlapping claims have been reconciled.
+
+    **On a seam the winner takes the union, not its own value** — ``min(1, a + b)`` rather than
+    ``max(a, b)``. This is the fix for bug 03 path 3. Two soft mattes meeting at a seam each read
+    about half at the join; keeping the higher leaves the pixel at half coverage, the render paints
+    half a coat over it, and the old paint shows through as a faint stripe along the shared edge —
+    the "colour is faint where selected" report. Summing them is what makes the wall whole there.
+
+    **Elsewhere it keeps ``max``**, which is the ordinary answer: one plane has the pixel and the
+    other does not, so the winner's own value already is the max. See :func:`_seam` for how the two
+    cases are told apart — the tempting simplification, summing wherever both claims are nonzero,
+    over-counts along a shared exclusion boundary.
+
+    Which of the two planes is ``winner`` is *not* decided here. It is the caller's, from the same
+    comparison it already makes, and this function only answers "given that this one won, what is it
+    worth". Deciding it here too would be the same rule written twice in two places, and the two
+    copies would not stay in step.
+    """
+
+    return np.where(
+        _seam(winner, loser, radius),
+        np.minimum(1.0, winner + loser),
+        np.maximum(winner, loser),
+    ).astype(np.float32)
+
+
+def seam_radius(shape: tuple[int, int]) -> int:
+    """How far apart two planes' boundaries may be and still count as a seam, in pixels.
+
+    The same fraction the matte's own boundary band is built from, deliberately: a seam is a pair
+    of matte boundaries, so "close enough to be the same boundary" is the same question the band
+    already answers for a matte against itself. Two constants for one idea is how they drift apart.
+    """
+
+    return max(1, round(min(shape) * _BAND_FRACTION))
+
+
 def add_plane(
     graphs: Graphs,
     photo_u8: np.ndarray,
@@ -241,7 +314,7 @@ def add_plane(
     check_addable(existing, point)
 
     prompts = single_point_prompt(graphs.refiner_decoder.config, photo_u8.shape[:2], x, y)
-    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    refined, _iou_score = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
     alpha = soften_boundary(photo_u8, refined)
 
     # Existing planes are already mutually disjoint, so at most one has a nonzero claim at any
@@ -254,7 +327,9 @@ def add_plane(
     # to zero, so no pixel is ever composited twice. Ties favour the new plane — it exists
     # because the Dealer tapped exactly there.
     new_wins = alpha >= existing_claim
-    resolved_new = np.where(new_wins, alpha, 0.0).astype(np.float32)
+    resolved_new = np.where(
+        new_wins, resolve_exclusive(alpha, existing_claim, seam_radius(alpha.shape)), 0.0
+    ).astype(np.float32)
 
     coverage = float(resolved_new.mean())
     if coverage < MINIMUM_WALL_FRACTION:
@@ -292,7 +367,7 @@ def add_ceiling_plane(
     check_addable(existing, point)
 
     prompts = single_point_prompt(graphs.refiner_decoder.config, photo_u8.shape[:2], x, y)
-    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    refined, _iou_score = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
     alpha = soften_boundary(photo_u8, refined)
 
     existing_claim = np.zeros(photo_u8.shape[:2], dtype=np.float32)
@@ -300,7 +375,9 @@ def add_ceiling_plane(
         existing_claim = np.maximum(existing_claim, plane.alpha[..., 0])
 
     new_wins = alpha >= existing_claim
-    resolved_new = np.where(new_wins, alpha, 0.0).astype(np.float32)
+    resolved_new = np.where(
+        new_wins, resolve_exclusive(alpha, existing_claim, seam_radius(alpha.shape)), 0.0
+    ).astype(np.float32)
 
     coverage = float(resolved_new.mean())
     if coverage < MINIMUM_CEILING_FRACTION:

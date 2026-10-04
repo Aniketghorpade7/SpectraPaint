@@ -638,10 +638,22 @@ def test_no_pixel_belongs_to_two_wall_planes(client: TestClient, photo: Path) ->
 
     A double-claimed pixel is not an abstract violation — it is a dark seam down the middle of a
     repainted room, because the blend runs over it once per plane.
+
+    **The ceiling is included**, and it used not to be. The wall/ceiling resolution in
+    api/preparation.py zeroed the ceiling where a confident wall won and never zeroed the wall where
+    the ceiling won, so both were composited on the same pixels — and no test here could see it,
+    because this assertion was over wall planes only, and a wall-only violation is exactly what it
+    was written to check. Issue #51 made the resolution symmetric and put the rule in one shared
+    function (`corrections.resolve_exclusive`); this now asserts the whole partition.
+
+    Every plane of every surface, in one list, because the exclusion property is a property of the
+    set and not of any one surface's share of it.
     """
 
     session_id = prepare(client, photo)
-    mattes = plane_mattes_of(client, session_id)
+    described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
+    assert described, "the photo yielded no planes at all"
+    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in described]
 
     total = np.sum(mattes, axis=0)
     # 1/255 of slack: each matte crossed the wire as an 8-bit PNG, so a matte that was exactly 1.0

@@ -780,3 +780,83 @@ does (`malformed_request`), so that bug fails the test rather than hiding behind
 Confirmed by reintroducing it: two cases fail. One trap worth recording: a test that fires a menu
 command straight after a state change races React's commit and hits the previous render's handler —
 tests wait for the published `canUndo` first, which is what a real menu click is ordered after.
+
+## 29. The matte's edges were the semantic grid's edges, and every layer above it preserved them faithfully
+
+**What it looked like.** Square, stair-stepped paint edges and square holes on pages 2, 4, 5, 6 and 7
+of the bug report's PDF, with 75–84% of razor edges sitting exactly on 128-grid lines. A Door's eye
+reads it as an artefact of image processing; what it actually was is arithmetic — a value that was
+quantised early and then carefully preserved by four layers that had no reason to suspect it.
+
+**The mechanism, in four parts.**
+
+1. SegFormer returns logits at stride 4. The pipeline argmaxed them on that 128×128 grid and
+   upsampled the resulting **labels** nearest-neighbour, so every boundary became a staircase of
+   10-px steps. `semantic.py`'s docstring called this "expected" and assigned it to SAM 2 and the
+   refinement pass.
+2. That claim was checkable and did not hold. On the photographs in the bug report, SAM 2's
+   single-mask logits are within ±2 of a constant on 77–100% of pixels and its `iou_scores` are
+   0.00–0.04 — the refiner barely shapes the matte, so the semantic grid is what actually sets its
+   edge.
+3. The grid masks were then written into the matte as hard 0/1, and the exclusion was **re-imposed
+   after softening** (`matte.py`), which overwrote every soft edge the softening had just produced.
+4. The softening added squares of its own: 3×3 rank-filter morphology, and a three-zone
+   `np.where` that put a full 1.0 step where the band met the core and a full 0.0 step where it met
+   the exterior.
+
+Each layer is individually defensible. That is the difficulty: nothing here looks like a mistake in
+isolation, and every one of them preserved the artefact faithfully enough that fixing only one
+produced no visible change.
+
+**Deciding at photo resolution instead.** The fix is to upsample the *probabilities* bilinearly and
+take the argmax at the photo's own resolution, so the boundary follows a smooth contour. An average
+of two probabilities is still a probability; an average of two class indices is a class that does not
+exist.
+
+**Where it stood:** the first attempt argmaxed the five relevant planes outright, and the models lane
+answered in the negative three times over — each time with a number rather than an opinion, which is
+what made the next attempt a different one rather than a larger one.
+
+| gate | what the lane said |
+| --- | --- |
+| flat five-way argmax | `corner-with-clothesline` leakage 0.338 → 0.391, `windows-with-curtains` shadowed-wall recall −0.034, and the Add tool could no longer grow a plane at a wall pixel the matte had missed |
+| gate on `1 − Σ relevant` | shadowed-wall recall back to 0.769 — 145 classes collectively own the softmax tail, so a shadowed wall at 0.3 is beaten 145 times over by a total of 0.7, comes back *unclaimed*, and stops being exempt from the confidence floor |
+| gate on the best *single* other class, at photo resolution | two failures, and for a reason worth keeping: it smooths the wall↔unclaimed boundary, which nothing quantises anyway, while flipping a few wall→exclusion pixels that the grid decision had called wall — and exclusion is absolute, so those become unpaintable by a correction tap |
+| coarse claim, fine winner (kept) | 38 passed, no regression |
+
+The last row is not a compromise; it is the documented behaviour from the start. A pixel of sofa is
+*unclaimed* — the module has always said so — and argmaxing five planes outright forces every pixel
+of every unlisted class onto the nearest of them, which is the first row. The residual grid-shaped
+boundary is the claimed↔unclaimed one, and it is left on the grid on purpose, because an unclaimed
+pixel is neither restored, nor zeroed, nor deleted: it keeps SAM 2's own soft value.
+
+**Two ways the obvious fix was wrong in its own turn, both caught by measuring rather than reading.**
+
+- Round morphology is meant to stop a band's square corners, and `erode_round` first shipped erasing
+  by *nothing*. Pillow's `GaussianBlur(radius)` takes the radius as the standard deviation, so a
+  half-plane blurs to exactly 0.5 on its own edge and thresholding there removes no pixels at all. It
+  was also written with the comparison inverted, and it survived a full models-lane run: on straight
+  edges — which is most of what a room photograph contains — "erodes by nearly zero" is
+  indistinguishable from "round erosion barely matters". It cost 0.031 of `windows-with-curtains`'
+  shadowed-wall recall. The threshold is now `Φ(1)`, chosen because it is the level one sigma inside a
+  straight edge, which is the only definition that makes it match `erode`.
+- A disc kernel is blind to small features in a way a square is not. Blurring with sigma 26 gives an
+  **isolated** mask pixel 10px away a weight of about 1e-4, which rounds to zero in 8-bit and
+  disappears. `soften_boundary`'s outer band is therefore bounded with square morphology — which is
+  also the honest shape, because the thing being bounded is a guided filter's square window — while
+  the core uses the round version, where the corners are what matters. Switching that one call deleted
+  the Add tool's correction on `patterned-wallpaper-with-curtain` outright.
+
+**And one place the issue's own prescription did not survive contact.** `REFINER_TRUST_FLOOR` was
+specified as 0.3, on the reasoning that SAM 2's `iou_scores` are low everywhere. They are not: they
+run from 0.043 to 0.841 across the six fixtures, so 0.3 is a line through the middle of the range
+rather than a floor, and it lands on the one fixture where the fallback is *worse*. Measured both ways
+on every labelled fixture, the fallback wins on four of five and loses on one — so the score does not
+predict which matte is better and no threshold on it separates them. What it can do is catch a
+degenerate decode, which is where 0.1 sits.
+
+**Where it stands:** resolved. The matte's boundary is decided at photo resolution from upsampled
+probabilities, the exclusion fades out instead of being re-imposed, the band blends continuously
+instead of stepping, and the seam between two planes takes the union rather than the higher claim. The
+`synthetic diagonal` unit test measures `edge_on_grid_fraction` on the matte and finds **no razor edge
+at all** along the boundary, against a nearest-neighbour control on the same input that scores 0.70.
