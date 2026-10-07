@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type MouseEvent, type SyntheticEvent } from 'react';
+import { useRef, useState, type CSSProperties, type MouseEvent, type SyntheticEvent } from 'react';
 
 import { CataloguePanel } from '../catalogue/CataloguePanel';
 import { useCatalogue } from '../catalogue/useCatalogue';
@@ -7,6 +7,8 @@ import { ErrorState } from '../components/ErrorState';
 import { ProgressMessage } from '../components/ProgressMessage';
 import { describePlane, describeTarget, isTargeted } from './accent';
 import { describeArmedTool, tapPointFromFraction } from './corrections';
+import { readoutActive } from './pixelColour';
+import { PixelTooltip, usePixelReadout } from './PixelReadout';
 import type { Consultation } from './useConsultation';
 import { overlayVisible } from './walls';
 import { WallOutlineCanvas } from './WallOutlineCanvas';
@@ -87,12 +89,24 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
     }
   }
 
-  if (state.phase === 'ready') {
-    // The repaint replaces the photo on screen; the toggle returns to the original. Before that,
-    // the Room Photo the Dealer loaded is what the wall is judged against.
-    const visibleImage =
-      render.showingRender && render.imageDataUrl ? render.imageDataUrl : state.imageDataUrl;
+  // The repaint replaces the photo on screen; the toggle returns to the original. Before that, the
+  // Room Photo the Dealer loaded is what the wall is judged against.
+  const visibleImage =
+    render.showingRender && render.imageDataUrl ? render.imageDataUrl : state.imageDataUrl;
 
+  // Inspect colour (issue #58): off for every Consultation, nothing persisted. It is dropped the
+  // moment the Consultation is no longer ready — discarded, failed, or not yet started — rather than
+  // keyed to a session id, so a Consultation reopened under the same id still starts with it off.
+  const [inspecting, setInspecting] = useState(false);
+  if (inspecting && state.phase !== 'ready') setInspecting(false);
+  const photoRef = useRef<HTMLImageElement | null>(null);
+  const pixelReadout = usePixelReadout(
+    visibleImage ?? '',
+    state.phase === 'ready' && readoutActive(inspecting, armedTool),
+    photoRef,
+  );
+
+  if (state.phase === 'ready') {
     // One rule for the whole overlay, from walls.ts: never on screen while a repaint shows — not
     // for the Dealer's show/hide choice, and not for an armed tool (issue #49). A tool armed keeps
     // the overlay up regardless of the Dealer's earlier hide/show choice, because correcting walls
@@ -161,6 +175,9 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                 {render.showingRender ? 'Show original photo' : 'Show repaint'}
               </Button>
             ) : null}
+            <Button onClick={() => setInspecting(!inspecting)} aria-pressed={inspecting}>
+              Inspect colour
+            </Button>
             <Button onClick={toggleRenderMode} aria-pressed={renderMode === 'true_colour'}>
               {renderMode === 'realistic' ? 'True Colour mode' : 'Realistic mode'}
             </Button>
@@ -182,6 +199,8 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
               <div className="consultation__frame-slot">
                 <div
                   className="consultation__frame"
+                  onPointerMove={pixelReadout.onPointerMove}
+                  onPointerLeave={pixelReadout.onPointerLeave}
                   style={
                     photoAspectRatio
                       ? ({
@@ -192,6 +211,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                   }
                 >
                   <img
+                    ref={photoRef}
                     className="consultation__photo"
                     src={visibleImage}
                     alt="The Customer's room photo"
@@ -267,6 +287,7 @@ export function ConsultationSurface({ consultation }: { consultation: Consultati
                       onClick={handlePhotoTap}
                     />
                   ) : null}
+                  {pixelReadout.reading ? <PixelTooltip reading={pixelReadout.reading} /> : null}
                 </div>
               </div>
               {showWalls ? (

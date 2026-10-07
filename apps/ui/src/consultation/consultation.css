@@ -230,3 +230,40 @@
   outline: 2px solid var(--grey-5);
   outline-offset: -2px;
 }
+
+/* The Pixel Readout (issue #58): a small tooltip following the cursor over the frame. Grey chrome
+   from the token set like everything else near the image — the swatch inside it is the only colour,
+   and it is the pixel's own. `pointer-events: none` so it can never take the hover from the pixel
+   it describes. Its size is fixed in pixelColour.ts (TOOLTIP_WIDTH/HEIGHT), which is what lets the
+   placement flip at the frame's edges without measuring. */
+.pixel-tooltip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 232px;
+  height: 64px;
+  padding: var(--space-3);
+  border: 1px solid var(--grey-3);
+  border-radius: 4px;
+  background: var(--grey-1);
+  color: var(--grey-6);
+  font-size: var(--text-small);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.pixel-tooltip__swatch {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--grey-4);
+  border-radius: 4px;
+}
+
+.pixel-tooltip__values {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
