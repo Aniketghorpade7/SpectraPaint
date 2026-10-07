@@ -120,6 +120,12 @@ The soft-edged description of which pixels belong to a wall plane, where boundar
 partially covered rather than fully in or fully out. Distinct from a hard mask; real photographic
 edges are soft, and hard edges are the clearest visual sign that an image has been altered.
 
+**Pixel Readout**
+The on-demand display of the colour of the single pixel under the cursor on the image being shown,
+as RGB and approximate CMYK. A reading of the *simulated image* — the photo or the repaint — and
+never a Shade: it says what the screen shows, not what the paint will be, which only the fandeck
+settles. The CMYK is always approximate, because the images are RGB.
+
 ---
 
 ## Objectives vocabulary
