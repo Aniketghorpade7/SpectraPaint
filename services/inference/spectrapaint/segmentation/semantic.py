@@ -30,9 +30,10 @@ stay on the grid.
 
 The old docstring's claim that a blocky staircase is "SAM 2's job and the refinement pass's job"
 does not hold on real photos: SAM 2's single-mask logits on the checked photos are within ±2 on
-77–100% of pixels and its ``iou_scores`` are 0.00–0.04, so the semantic grid — not the refiner — is
-what actually shapes the matte's edge. Fixing the shape at its source is this module's job, not a
-downstream pass's.
+77–100% of pixels and its ``iou_scores`` are 0.00–0.04 on the bug report's photographs (0.043–0.841
+across the six fixtures, see ``matte.REFINER_TRUST_FLOOR``), so the semantic grid — not the
+refiner — is what actually shapes the matte's edge. Fixing the shape at its source is this module's
+job, not a downstream pass's.
 """
 
 from __future__ import annotations
@@ -180,8 +181,9 @@ def argmax_at_photo_resolution(
 
     The old docstring's claim that a blocky staircase is "SAM 2's job and the refinement pass's job"
     does not hold on real photos: SAM 2's single-mask logits on the checked photos are within ±2 on
-    77–100% of pixels and its ``iou_scores`` are 0.00–0.04, so the semantic grid — not the refiner —
-    is what actually shapes the matte's edge.
+    77–100% of pixels and its ``iou_scores`` are 0.00–0.04 on the bug report's photographs
+    (0.043–0.841 across the six fixtures, see ``matte.REFINER_TRUST_FLOOR``), so the semantic grid —
+    not the refiner — is what actually shapes the matte's edge.
     """
 
     # One resize per relevant class; the winner comes off the same stack. Worth reusing rather than

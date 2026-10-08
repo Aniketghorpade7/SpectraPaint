@@ -27,7 +27,7 @@ import numpy as np
 from spectrapaint.imaging import dilate, erode
 from spectrapaint.runtime.graphs import Graphs
 from spectrapaint.segmentation.matte import (
-    _BAND_FRACTION,
+    BAND_FRACTION,
     RefinerFeatures,
     decode_alpha,
     soften_boundary,
@@ -280,7 +280,7 @@ def seam_radius(shape: tuple[int, int]) -> int:
     already answers for a matte against itself. Two constants for one idea is how they drift apart.
     """
 
-    return max(1, round(min(shape) * _BAND_FRACTION))
+    return max(1, round(min(shape) * BAND_FRACTION))
 
 
 def add_plane(

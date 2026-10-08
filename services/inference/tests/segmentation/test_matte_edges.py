@@ -36,53 +36,12 @@ from spectrapaint.segmentation.semantic import (
     _resize_to,
     argmax_at_photo_resolution,
 )
-
-# The grid the checkpoint's stride-4 head produces for the 512x512 input it expects.
-SEMANTIC_GRID = 128
-
-
-def _grid_lines(dimension: int) -> set[int]:
-    """Photo positions where a nearest-upsampled SEMANTIC_GRID axis changes value.
-
-    Derived from Pillow's own NEAREST mapping rather than assumed to be multiples of the grid size:
-    on a 1600px photo a source column moves every 12.5px, not every 128px, and a metric that checked
-    the wrong positions reports near-zero for a mask that is entirely staircase.
-    """
-    from PIL import Image
-
-    source = np.arange(SEMANTIC_GRID).reshape(-1, 1).astype(np.float32)
-    resized = Image.fromarray(source, mode="F").resize(
-        (1, dimension), resample=Image.Resampling.NEAREST
-    )
-    return set(np.nonzero(np.diff(np.asarray(resized, dtype=np.float32).ravel().astype(int)))[0])
-
-
-def _edge_on_grid_fraction(alpha: np.ndarray, tolerance: int = 1) -> tuple[float, int]:
-    """Fraction of *razor* edges (a jump over 0.5) sitting within ``tolerance`` px of a grid line.
-
-    Counted over edge pixels rather than over distinct rows and columns, because that is what the
-    figure in docs/bugs/root-causes.md §A means and what it took to reproduce its 75–84%: a
-    staircase
-    crosses many pixel positions per step, and counting distinct rows instead divides the answer by
-    the step length. ``tolerance`` is 1 rather than 0 because a nearest-upsampled boundary lands
-    on a
-    grid line and a bilinear one lands between two, and only the former is the defect.
-    """
-    rows = np.nonzero(np.abs(np.diff(alpha, axis=0)) > 0.5)[0]
-    cols = np.nonzero(np.abs(np.diff(alpha, axis=1)) > 0.5)[0]
-    total = len(rows) + len(cols)
-    if total == 0:
-        # No razor edge anywhere: the matte is soft along every boundary. That is the best possible
-        # answer, not a missing measurement, so it is 0.0 rather than undefined.
-        return 0.0, 0
-
-    def near(indices: np.ndarray, dimension: int) -> int:
-        lines = np.asarray(sorted(_grid_lines(dimension)))
-        distances = np.abs(indices[:, None] - lines[None, :]).min(axis=1)
-        return int((distances <= tolerance).sum())
-
-    on_grid = near(rows, alpha.shape[0]) + near(cols, alpha.shape[1])
-    return on_grid / total, total
+from tests.segmentation.grid_metric import (
+    SEMANTIC_GRID,
+    edge_on_grid,
+    edge_on_grid_fraction,
+    grid_excess,
+)
 
 
 def _regions(
@@ -129,7 +88,7 @@ class TestTheBoundaryLeavesTheGrid:
         """
 
         matte = _synthetic_matte()
-        fraction, edges = _edge_on_grid_fraction(matte)
+        fraction, edges = edge_on_grid_fraction(matte)
         assert fraction <= 0.10, f"{fraction:.3f} of razor edges sit on the {SEMANTIC_GRID}-grid"
         assert edges < 50, (
             f"the boundary still produced {edges} razor edges; the matte is meant to be soft along "
@@ -150,7 +109,7 @@ class TestTheBoundaryLeavesTheGrid:
 
         regions = _synthetic_regions((960, 1280))
         sharp = regions.wall.astype(np.float32) - regions.excluded.astype(np.float32)
-        fraction, edges = _edge_on_grid_fraction(sharp)
+        fraction, edges = edge_on_grid_fraction(sharp)
         assert edges > 100, f"only {edges} razor edges; too few to judge"
         assert fraction <= 0.45, (
             f"{fraction:.3f} of the semantic boundary is still on the grid. Note that a binary map "
@@ -171,7 +130,7 @@ class TestTheBoundaryLeavesTheGrid:
         assert coarse > 0  # the fixture really is a 128-grid upsampled to a 1280-wide photo
 
         control = _nearest_neighbour_control((960, 1280))
-        fraction, edges = _edge_on_grid_fraction(control)
+        fraction, edges = edge_on_grid_fraction(control)
         assert edges > 100
         assert fraction > 0.45, (
             f"the nearest-neighbour control only scored {fraction:.3f}, so the comparison above is "
@@ -589,3 +548,31 @@ def _nearest_neighbour_control(shape: tuple[int, int]) -> np.ndarray:
     probabilities, _ = _synthetic_probabilities()
     coarse_labels = np.argmax(probabilities, axis=0) == 0
     return _resize_to(coarse_labels.astype(np.float32), shape, nearest=True)
+
+
+class TestTheGridMetricItself:
+    """The number the models lane asserts on has to mean what it says, so it is tested here."""
+
+    def test_edges_unrelated_to_the_grid_score_their_chance_level(self) -> None:
+        """Razor edges placed at random score their own chance level, not 0.
+
+        This is why the acceptance wording "at most 0.10" cannot be met on a real photograph and the
+        models lane asserts on the *surplus* over chance instead.
+        """
+
+        rng = np.random.default_rng(0)
+        shape = (960, 1280)
+        edge_columns = rng.integers(100, 1100, size=shape[0])
+        matte = (np.arange(shape[1])[None, :] > edge_columns[:, None]).astype(np.float32)
+
+        fraction, chance, edges = edge_on_grid(matte)
+        excess, _ = grid_excess(matte)
+
+        assert edges > 500
+        assert 0.2 < chance < 0.4, f"chance level {chance:.3f}: not the ~30% a ±1px tolerance gives"
+        assert abs(excess) < 0.05, f"{fraction:.3f} against chance {chance:.3f}"
+
+    def test_the_staircase_has_a_large_surplus(self) -> None:
+        excess, edges = grid_excess(_nearest_neighbour_control((960, 1280)))
+        assert edges > 100
+        assert excess > 0.3, f"the staircase's surplus over chance was only {excess:.3f}"

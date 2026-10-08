@@ -796,8 +796,9 @@ quantised early and then carefully preserved by four layers that had no reason t
    refinement pass.
 2. That claim was checkable and did not hold. On the photographs in the bug report, SAM 2's
    single-mask logits are within ±2 of a constant on 77–100% of pixels and its `iou_scores` are
-   0.00–0.04 — the refiner barely shapes the matte, so the semantic grid is what actually sets its
-   edge.
+   0.00–0.04 (on the six labelled fixtures the score runs 0.043–0.841 — the range
+   `REFINER_TRUST_FLOOR` was measured against) — the refiner barely shapes the matte on those
+   photographs, so the semantic grid is what actually sets its edge.
 3. The grid masks were then written into the matte as hard 0/1, and the exclusion was **re-imposed
    after softening** (`matte.py`), which overwrote every soft edge the softening had just produced.
 4. The softening added squares of its own: 3×3 rank-filter morphology, and a three-zone

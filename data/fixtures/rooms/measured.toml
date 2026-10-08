@@ -21,6 +21,18 @@
 #               labelled set (issue #33). The shadowed-wall recall floor joined this ratchet then
 #               too: dim-room's chair shadow is its first real failure — a shadow fan the matte
 #               drops wholesale, for the reason no threshold edit fixes (#31).
+# Measured 2026-10-07, for #51: the surplus of razor edges on SegFormer's 128-grid lines over the
+#               chance level of a matte unrelated to the grid (tests/segmentation/grid_metric.py).
+#               Nothing is recorded below for it, because every plane is under the 0.15 target. The
+#               values, as the fraction minus chance (edges counted) per plane:
+#                 corner-with-clothesline   -0.004 (497), +0.000 (503)
+#                 dim-room-with-mirror      +0.002 (318), -0.002 (307)
+#                 empty-corner              +0.002 (798), +0.002 (798); ceiling has no razor edge
+#                 patterned-wallpaper-...   no razor edge at all
+#                 windows-with-curtains     -0.001 (506), +0.019 (423)
+#                 wood-doors-with-mirror    +0.008 (875), -0.093 (1104), ceiling -0.339 (74)
+#               Before #51 the same planes read +0.2 to +0.36 (0.50-0.66 against ~0.30 chance), on
+#               every fixture but windows-with-curtains, which was already at chance.
 # Regenerate after a pipeline change with the reasoning in the commit message:
 #     cd services/inference && uv run pytest -m models -q     # the failure message prints the new value
 

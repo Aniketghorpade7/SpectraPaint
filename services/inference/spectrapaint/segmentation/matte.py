@@ -104,12 +104,14 @@ REFINER_TRUST_FLOOR = 0.1
 
 # The boundary band, as a fraction of the photo's shorter side. Wide enough to contain the error a
 # quarter-resolution network makes once upsampled, narrow enough that the interior is left alone.
-_BAND_FRACTION = 0.02
+# Public because `corrections.seam_radius` is defined in terms of it — a seam is a pair of matte
+# boundaries, and two constants for one idea is how they drift apart.
+BAND_FRACTION = 0.02
 
 # How wide the exclusion ramp is, as a fraction of the photo's shorter side — conventions §4's
 # "explain a constant in terms of what it costs if it is wrong". Chosen so the feather is a few
 # pixels: wide enough that the matte's own edge cannot step across it, narrow enough that the wall
-# either side of a window keeps its coverage. Four times smaller than _BAND_FRACTION, because this
+# either side of a window keeps its coverage. Four times smaller than BAND_FRACTION, because this
 # one is a ramp being *seen* at the exclusion rather than a band being *refined*, and a ramp you can
 # see from across the room is a defect of its own.
 #
@@ -117,7 +119,7 @@ _BAND_FRACTION = 0.02
 # between blurred 0.5 (on the exclusion's edge) and blurred 0 (three sigma out), and Pillow's
 # GaussianBlur takes its radius as the sigma. So 0.004 of a 960px side is a 4px sigma and a feather
 # roughly 12px across — which is the number to reason about when this constant is next argued about,
-# and the reason it is a quarter of _BAND_FRACTION rather than equal to it.
+# and the reason it is a quarter of BAND_FRACTION rather than equal to it.
 EXCLUSION_FEATHER_FRACTION = 0.004
 
 # Where the matte's own edge is taken to be, for the purpose of finding that band.
@@ -360,7 +362,7 @@ def soften_boundary(photo_u8: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     planes meet at corners.
     """
 
-    radius = max(1, round(min(alpha.shape) * _BAND_FRACTION))
+    radius = max(1, round(min(alpha.shape) * BAND_FRACTION))
     guide = luminance_of(photo_u8)
     sharpened = guided_filter(guide, alpha, radius, _GUIDE_EPSILON)
 
