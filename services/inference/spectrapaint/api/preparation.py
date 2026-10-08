@@ -51,6 +51,7 @@ from spectrapaint.quality import assess_quality
 from spectrapaint.render.luts import linearise_u8
 from spectrapaint.runtime.graphs import load as load_graphs
 from spectrapaint.runtime.location import ModelsMissing
+from spectrapaint.segmentation.corrections import resolve_exclusive, seam_radius
 from spectrapaint.segmentation.matte import RefinerFeatures, encode_photo
 from spectrapaint.segmentation.semantic import SemanticRegions
 from spectrapaint.segmentation.walls import (
@@ -397,27 +398,50 @@ def build_preparation_stages(contents: bytes) -> list[Stage]:
             logger.warning("the ceiling pass failed; proceeding without a ceiling", exc_info=True)
             ceiling = None
         if ceiling is not None:
-            # Ensure wall and ceiling do not double-claim pixels where both mattes are confident.
+            # Wall and ceiling must not both cover a pixel, in either direction. The old code here
+            # zeroed only the *ceiling* where a confident wall won and left the wall standing where
+            # the ceiling won, so both were composited on the same pixels — bug 03 path 3, and a
+            # break of "every pixel belongs to exactly one plane" (design-decisions.md §6). The
+            # comparison and the reconciliation are now the shared rule in
+            # segmentation.corrections.resolve_exclusive, which the Add tool's two call sites also
+            # use, so the ceiling and a wall cannot drift apart.
             if workspace.planes:
-                wall_max = None
+                wall_max = np.zeros(workspace.planes[0].alpha.shape[:2], dtype=np.float32)
                 for plane in workspace.planes:
-                    if wall_max is None:
-                        wall_max = plane.alpha[..., 0].copy()
-                    else:
-                        wall_max = np.maximum(wall_max, plane.alpha[..., 0])
-                if wall_max is not None:
-                    wins = ceiling.alpha[..., 0] >= wall_max
-                    confident_wall = wall_max >= 0.5
-                    resolved = np.where(
-                        confident_wall & ~wins,
-                        0.0,
-                        ceiling.alpha[..., 0],
-                    ).astype(np.float32)
+                    wall_max = np.maximum(wall_max, plane.alpha[..., 0])
+
+                ceiling_claim = ceiling.alpha[..., 0]
+                radius = seam_radius(ceiling_claim.shape)
+                # Symmetric: the stronger claim wins the pixel, and at a seam the winner takes the
+                # union so the join is fully covered rather than half-painted.
+                #
+                # Each wall plane is resolved against the ceiling *on its own claim*. Resolving them
+                # against their combined maximum and writing that value back to every one of them
+                # looks equivalent and is not: the planes are a partition, so giving each the union
+                # of all of them multiplies coverage by the number of planes — the "claimed twice
+                # over" failure this block exists to prevent, reproduced in the mirror image.
+                ceiling_wins = ceiling_claim >= wall_max
+                workspace.planes = tuple(
+                    WallPlane(
+                        plane_id=plane.plane_id,
+                        alpha=np.where(
+                            ceiling_wins,
+                            0.0,
+                            resolve_exclusive(plane.alpha[..., 0], ceiling_claim, radius),
+                        )[..., None].astype(np.float32),
+                        surface=plane.surface,
+                    )
+                    for plane in workspace.planes
+                )
+                resolved = np.where(
+                    ceiling_wins, resolve_exclusive(ceiling_claim, wall_max, radius), 0.0
+                ).astype(np.float32)
+                if float(resolved.mean()) < 0.02:
+                    ceiling = None
+                else:
                     ceiling = WallPlane(
                         plane_id=ceiling.plane_id, alpha=resolved[..., None], surface="ceiling"
                     )
-                    if float(resolved.mean()) < 0.02:
-                        ceiling = None
             if ceiling is not None:
                 workspace.planes = (*workspace.planes, ceiling)
                 # If we now have at least one plane, clear a stale "no wall found" note — the photo

@@ -1772,3 +1772,101 @@ Wall corrections remain undoable-not (grilling decision 6), so the menu is the w
 until a plane-history stack on the service changes that. If the shop PC is a touchscreen, the menu
 is unreachable and an on-screen affordance is needed (noted in ui-guidelines and the spec's open
 question).
+
+## 53. The matte's shape is decided at photo resolution, and three of its own thresholds were wrong before they were right
+
+**Ticket:** #51 · **Contributor:** Prasad K (code written by an agent) · **Date:** 2026-10-05
+
+**Decided:** four changes to the Alpha Matte, and one threshold set against the issue's own proposal.
+
+**1. Upsample probabilities, then decide** (`segmentation/semantic.py`). The five relevant
+class-probability planes are upsampled bilinearly to the photo's own resolution and the argmax is
+taken there, so a wall/window boundary follows a smooth probability contour rather than a staircase of
+10-px steps. Two stages, and the split is load-bearing: *which* classes are in the running is still
+decided by the full argmax over all 150 classes on the 128×128 grid, and *which of them wins this
+pixel* is re-decided at photo resolution. The gate preserves the module's promise that a pixel of sofa
+is unclaimed. Flat five-way argmax was tried first and regressed three metrics at once (technical
+difficulty 29). `SemanticRegions` gains `floor_exempt` as an all-False plane, so #48's mirror
+exemption is a one-line activation rather than a reshape.
+
+**2. The exclusion ramp is a multiplier that is 0 on the excluded side** (`matte.py`).
+`alpha = np.where(excluded, 0.0, alpha * ramp)` where `ramp = clip(1 − 2·blur(excluded, r), 0, 1)`,
+`r = 0.004` of the photo's shorter side. It replaces a hard re-imposition *after* softening, which was
+undoing the softening one line above it. The width is about three radii rather than one — Pillow's
+`GaussianBlur` takes its radius as the sigma — so 0.004 buys a roughly 12px feather on a 1280×960
+photo, and that is the number to reason about when the constant is next argued about. The `np.where`
+is kept even though the formula already zeroes that side: `blur` round-trips through 8-bit, so the
+profile on the exclusion's own edge returns as 126/255 and the ramp as 3/255. Tiny, and harmless only
+because the `np.where` masks it. "Never paint a window" is absolute, and a constant that guarantees
+it is worth more than one that happens to hold at eight bits. `ceiling_alpha` uses the same function.
+
+**3. Round morphology** (`imaging.py`). `erode_round` is blur-and-threshold at `Φ(1)` = 0.8413, which
+is the level one sigma inside a straight edge and therefore the only threshold that makes the
+erosion distance match `erode`. Thresholding at 0.5 erodes by **nothing** — Pillow's radius is the
+sigma — which shipped, cost 0.031 of shadowed-wall recall, and passed a models-lane run first because
+straight edges are most of what a room photograph contains. The four prompt-sampling erosions in
+`segmentation/prompts.py` switched over. `dilate_round` was written and then removed: a disc kernel
+gives an isolated mask pixel 10px away a weight of ~1e-4, which vanishes in 8-bit, and that blindness
+deleted the Add tool's correction on `patterned-wallpaper-with-curtain`. `soften_boundary` therefore
+bounds its outer band with square `dilate` — which is also the honest shape, being a guided filter's
+square window — and uses `erode_round` for the core, where the corners are the point.
+
+**4. The boundary band is a blend, not a switch** (`soften_boundary`). Three zones found spatially
+from where the matte crosses its own 0.5 level, then joined by two ramps on each zone's own blurred
+field: `clip(2·blur(zone) − 1, 0, 1)` is 0 on a zone's boundary and 1 about a sigma inside, and the
+band weight is whatever the two ramps leave over. The old nested `np.where` put a full 1.0 step at the
+inner join and a full 0.0 at the outer one. The band also extends **two** radii, so the fade that
+replaces the hard outer cut sits outside the guided filter's support rather than eating into it; at one
+radius it cut the Add tool's grown matte from 0.339 to 0.040 at the tapped pixel and the correction did
+nothing. Ramping on the *zone's own* field is the part that matters: a first attempt ramped on the
+blurred `alpha ≥ 0.5` region, which never reaches 0.5 at all for a region narrower than the band — so
+every plane the Add tool grows from a single tap came out at half strength at its own tap point.
+
+**5. `REFINER_TRUST_FLOOR = 0.1`, not the proposed 0.3.** `decode_alpha` now returns
+`(alpha, iou_score)` — the graph's second output, previously named `_iou` and discarded — and below the
+floor the matte's *shape* comes from the semantic pass's probability for that surface instead of SAM
+2's logits, logged at `debug`. Everything else in `wall_alpha` is unchanged either way, so what a low
+score changes is where the edge sits and nothing about which pixels are wall. `ceiling_alpha` takes its
+own probability plane, never the wall's.
+
+The floor is 0.1 against the issue's 0.3 because the reasoning behind 0.3 — "the scores are low
+everywhere" — does not hold. They run 0.043 to 0.841 across the six fixtures, so 0.3 is a line through
+the middle of the range and falls on `windows-with-curtains` (0.227), the one fixture where the
+fallback is *worse*. Measured both ways on every labelled fixture, as shadowed-wall recall:
+
+| Photograph | score | refiner trusted | switched off |
+|---|---|---|---|
+| empty-corner | 0.043 | 0.9913 | **0.9915** |
+| dim-room-with-mirror | 0.074 | 0.7358 | **0.7513** |
+| patterned-wallpaper-with-curtain | 0.520 | 0.9997 | **1.0000** |
+| corner-with-clothesline | 0.834 | 0.9928 | **0.9935** |
+| windows-with-curtains | 0.227 | **0.8008** | 0.7725 |
+
+The fallback wins four of five and the score does not predict which, so no threshold on it separates
+them. What it can do is catch a degenerate decode, and 0.1 is where that line falls: on both fixtures
+below it the switch is an improvement, and above it the refiner is kept — including on the fixture
+where it is the better answer.
+
+**6. Full coverage at a seam** (`corrections.resolve_exclusive`). Where two planes' soft claims meet
+at a seam, the winner takes `min(1, a + b)`; elsewhere it keeps `max`. Summing everywhere would
+double-count the border of a shared exclusion, so the seam test also requires the two confident
+interiors to be disjoint, and treats a pixel reading exactly 0.5 as belonging to neither — a contour
+belongs to neither side, and that is the one pixel the union exists for. Used by `add_plane`,
+`add_ceiling_plane` and preparation's wall/ceiling resolution, replacing logic that was duplicated and
+one-directional: the wall was never zeroed where the ceiling won. Deciding *which* plane wins stays
+with the caller. The rule is recorded in design-decisions §6, which had it open.
+
+**Performance.** The issue estimated step 1's added work at about 30 ms; it is **284 ms** — the
+memory half of the estimate was right (five float planes at 1280×960 is 24.6 MB against the predicted
+25 MB) and the time half was an order of magnitude out, because Pillow's bilinear resize of a mode-`F`
+image costs roughly 57 ms per plane at that size. Immaterial against the thirty-second per-photo
+budget (measured preparation is 13.4 s median on `corner-with-clothesline`), but the estimate was
+worth checking rather than repeating. Note also that `spikes/latency`'s gate measures only the render
+loop — `linearize_u8_lut` through `encode_lut` — so no change in `segmentation/` can appear in it at
+all; there is no preparation gate to pass or fall back from (technical difficulty #20).
+
+**Measured:** fast lane 269 passed (252 existing plus 17 new); models lane 38 passed, 1 skipped; no
+regression on any `measured.toml` metric at any of the six steps. New unit tests in `tests/segmentation/` measure
+`edge_on_grid_fraction` on a synthetic diagonal — no razor edge on the matte at all, against a
+nearest-neighbour control on the same input at 0.70 — plus the exclusion invariant, band continuity,
+`erode_round`'s calibration, and `resolve_exclusive` in both its cases.
