@@ -408,8 +408,32 @@ life, and it *should* stay crisp when two planes carry different shades. Blendin
 two colours into a stripe matching neither — most visible exactly where an accent wall meets its
 neighbour.
 
-**Open:** the assignment rule for contested pixels. Genuinely rounded corners will render slightly
-harder than reality; accepted.
+**Decided:** the assignment rule for contested pixels — where two planes both claim a pixel with a
+soft value, the **stronger claim wins the pixel outright** and the loser is zeroed. At a **seam**
+between two planes, where their 0.5-contours are within one boundary band of each other, the winner
+instead takes **`min(1, a + b)`** — the union. Genuinely rounded corners still render slightly harder
+than reality; accepted.
+
+**Why the union at a seam, and only there.** Two soft mattes meeting at an architectural corner each
+read about half at the join. `max` leaves the pixel at half coverage, the render lays half a coat over
+it, and the previous paint shows through as a faint stripe along the whole seam — the "colour looks
+faint where I selected it" report (bug 03 path 3). Summing them is what makes the wall whole there.
+
+**Why not simply sum wherever both claims are nonzero.** Because two planes that both pull back from
+the *same* exclusion — one window, say — overlap along its border, and summing there paints that
+border at twice its coverage. The seam test therefore also requires the two planes' confident
+interiors to be disjoint: where two planes genuinely face each other, one plane's interior *is* the
+other's exterior. A pixel reading exactly 0.5 belongs to neither interior, since a contour belongs to
+neither side — which is what makes the seam itself, the one pixel the union exists for, eligible.
+
+The rule lives in one place, `segmentation/corrections.resolve_exclusive`, used by the Add tool, the
+Add Ceiling tool and preparation's wall/ceiling resolution alike. Deciding *which* plane wins stays
+with the caller; only the winning value is computed here.
+
+**Symmetry.** Wall and ceiling resolve the same way in both directions. The previous code zeroed
+only the ceiling where a confident wall won and left the wall standing where the ceiling won, so both
+were composited on the same pixels — a violation of exclusive assignment that no test could see,
+because the one test which asserted the partition was over wall planes only.
 
 ### Base colour — grouped by existing paint
 
@@ -924,7 +948,7 @@ Objectives 1 and 3; the hand-labelled test set must actually be built.
 | 15 | Latency ceiling at which progress messaging is no longer enough, and what we do there (§13) | UX | — | — |
 | 16 | ~~Packaging & signing~~ — **decided:** frozen PyInstaller sidecar, shipped **unsigned** (§3). Watch for antivirus quarantine reports from dealers | Shipping | — | — |
 | 17 | ~~Store vs regenerate~~ — **decided:** store full-res lossless PNG (§9). Remaining: the **sharing mechanism**, which must emit JPEG and not hand out the archive | Trust, privacy | — | — |
-| 18 | ~~Plane overlap~~ — **decided:** exclusive pixel assignment (§6). Remaining: the assignment rule for contested pixels | Render correctness | — | — |
+| 18 | ~~Plane overlap~~ — **decided:** exclusive pixel assignment, and the contested-pixel rule (§6) | Render correctness | — | — |
 | 19 | Saturation blend curve for the light map (§6) | Render quality | — | — |
 | 20 | Noise estimate and smoothing curve for the light map (§6) | Render quality | — | — |
 | 21 | ~~Switchplate/socket exclusion~~ — **decided:** accept in V1, add as classes to our own model (§5) | Render quality | — | — |

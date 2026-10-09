@@ -163,6 +163,8 @@ describe('Undo and Redo', { retry: RETRIES }, () => {
       expect(await menuState(page)).toEqual({ canUndo: true, canRedo: false });
 
       await page.evaluate(() => window.__live.armTool('split'));
+      // A tap before the commit that arms the tool is a no-op: wait for the hook to say it is armed.
+      await page.waitForFunction(() => window.__live.armedTool === 'split');
       await page.evaluate(() => window.__live.correctWallsAt({ x: 100, y: 100 }));
       await page.waitForFunction(() => window.__menuState?.canUndo === false);
 

@@ -129,15 +129,18 @@ function installApplicationMenu(): void {
   // never grey lies (or live lies) about what the command would do. The hidden Windows-only
   // Redo sibling follows the same state — a disabled item's accelerator never fires, so leaving
   // it disabled would silently drop Ctrl+Shift+Z (issue #50).
-  ipcMain.on(MENU_STATE_CHANNEL, (event, state: { canUndo: boolean; canRedo: boolean }) => {
+  ipcMain.on(MENU_STATE_CHANNEL, (event, state: unknown) => {
     if (!isTrustedSender(event.sender)) return;
+    // The sender is trusted, the shape still is not: an item's enabled flag is only ever set from a
+    // real boolean, never from whatever arrived.
+    const { canUndo, canRedo } = (state ?? {}) as { canUndo?: unknown; canRedo?: unknown };
     const menu = Menu.getApplicationMenu();
     const undo = menu?.getMenuItemById(MENU_UNDO_ITEM_ID);
     const redo = menu?.getMenuItemById(MENU_REDO_ITEM_ID);
     const redoShift = menu?.getMenuItemById(MENU_REDO_SHIFT_ITEM_ID);
-    if (undo) undo.enabled = state.canUndo;
-    if (redo) redo.enabled = state.canRedo;
-    if (redoShift) redoShift.enabled = state.canRedo;
+    if (undo) undo.enabled = canUndo === true;
+    if (redo) redo.enabled = canRedo === true;
+    if (redoShift) redoShift.enabled = canRedo === true;
   });
 }
 

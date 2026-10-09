@@ -244,10 +244,13 @@ export function beginShadeTap(
  *
  * Undo and redo restore *state* — target and assignments — and then repaint through the normal
  * path. The render reducer pins its replies to the Shade Code of the request, and undo/redo are
- * not Shade taps, so the snapshot's own most recent code stands in: it is the Shade the restored
- * paint actually carries, and it keeps a stale reply from a superseded request from overwriting
- * the restored state (issue #50). An empty snapshot repaints nothing, so its code is never asked
- * for — the fallback only keeps the type honest.
+ * not Shade taps, so a code the restored paint carries stands in. Which one barely matters: the
+ * pin only has to tell this request's reply from a superseded request's, and a stale reply is for
+ * a different Shade than the one restored — so it is dropped. The code taken is the last in the
+ * assignment map's order, which is *not* necessarily the one tapped most recently (a targeted
+ * Shade on an already-painted wall keeps that wall's position), and nothing here relies on it
+ * being. An empty snapshot repaints nothing, so its code is never asked for — the fallback only
+ * keeps the type honest.
  */
 export function shadeCodeOf(snapshot: PaintSnapshot): string {
   const codes = Object.values(snapshot.assignments);

@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from spectrapaint.api.app import create_app
+from tests.segmentation.grid_metric import grid_excess
 
 pytestmark = pytest.mark.models
 
@@ -638,10 +639,22 @@ def test_no_pixel_belongs_to_two_wall_planes(client: TestClient, photo: Path) ->
 
     A double-claimed pixel is not an abstract violation — it is a dark seam down the middle of a
     repainted room, because the blend runs over it once per plane.
+
+    **The ceiling is included**, and it used not to be. The wall/ceiling resolution in
+    api/preparation.py zeroed the ceiling where a confident wall won and never zeroed the wall where
+    the ceiling won, so both were composited on the same pixels — and no test here could see it,
+    because this assertion was over wall planes only, and a wall-only violation is exactly what it
+    was written to check. Issue #51 made the resolution symmetric and put the rule in one shared
+    function (`corrections.resolve_exclusive`); this now asserts the whole partition.
+
+    Every plane of every surface, in one list, because the exclusion property is a property of the
+    set and not of any one surface's share of it.
     """
 
     session_id = prepare(client, photo)
-    mattes = plane_mattes_of(client, session_id)
+    described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
+    assert described, "the photo yielded no planes at all"
+    mattes = [matte_of(client, session_id, plane["plane_id"]) for plane in described]
 
     total = np.sum(mattes, axis=0)
     # 1/255 of slack: each matte crossed the wire as an 8-bit PNG, so a matte that was exactly 1.0
@@ -650,3 +663,41 @@ def test_no_pixel_belongs_to_two_wall_planes(client: TestClient, photo: Path) ->
         f"a pixel in {photo.name} is claimed {float(total.max()):.3f} times over — "
         "it would be composited twice, leaving a dark seam"
     )
+
+
+# How far above the chance level of a matte unrelated to the grid a plane's razor edges may sit on
+# SegFormer's 128-grid lines. Nearest-neighbour upsampling scored a surplus of 0.2–0.36 on the
+# fixtures (0.50–0.66 against a chance level near 0.30); the fixed pipeline scores 0.00 ± 0.02. 0.15
+# is midway between, and wide enough that the sampling noise on a few hundred edges (about ±0.05)
+# never fails the lane by itself. Not the issue's literal "at most 0.10 on every fixture": see
+# tests/segmentation/grid_metric.py for why an unrelated matte already scores ~0.30.
+MAXIMUM_GRID_EXCESS = 0.15
+
+# Fewer razor edges than this and the fraction is too noisy to judge — which is also the good case:
+# a matte that is soft along almost every boundary has little left to be aligned.
+_MINIMUM_EDGES_TO_JUDGE = 100
+
+
+@pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
+@pytest.mark.parametrize("photo", labelled_rooms() or [None], ids=lambda p: p.stem if p else "none")
+def test_matte_edges_do_not_follow_the_semantic_grid(client: TestClient, photo: Path) -> None:
+    """Issue #51's acceptance criterion, on the real photographs.
+
+    The matte's edge used to be SegFormer's 128×128 grid, upsampled. Every plane of the photo —
+    walls and ceiling — is held to a surplus over chance of at most :data:`MAXIMUM_GRID_EXCESS`, so
+    a change that puts a decision back on the grid fails here and not on a Dealer's customer's wall.
+    """
+
+    session_id = prepare(client, photo)
+    described = client.get(f"/sessions/{session_id}/planes", headers=auth()).json()["planes"]
+    assert described, f"{photo.name}: the photo yielded no planes at all"
+
+    for plane in described:
+        matte = matte_of(client, session_id, plane["plane_id"])
+        excess, edges = grid_excess(matte)
+        if edges < _MINIMUM_EDGES_TO_JUDGE:
+            continue
+        assert excess <= MAXIMUM_GRID_EXCESS, (
+            f"{photo.name} {plane['plane_id']}: razor edges sit {excess:+.3f} above chance on the "
+            f"128-grid across {edges} edges, more than the {MAXIMUM_GRID_EXCESS:.2f} permitted"
+        )
