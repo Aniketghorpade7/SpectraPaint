@@ -30,15 +30,16 @@ def _linear_photo(shape=(9, 12, 3), seed=0) -> np.ndarray:
 
 
 def test_light_map_is_the_per_pixel_division() -> None:
-    """A clean photograph of a neutral wall gets exactly ``photo / base``, untouched.
+    """A clean flat photograph of a neutral wall gets exactly ``photo / base``, untouched.
 
-    The robustness refinements (#9) must degrade to the plain division when they have nothing to
-    fix: a neutral base never triggers the saturation blend, and a noise-free photo measures below
-    the noise floor, so no smoothing runs.
+    The robustness refinements (#9, #52) must degrade to the plain division when they have
+    nothing to fix: a neutral base never triggers the saturation blend, a flat wall has no
+    blotch for stain suppression to remove, and a noise-free photo measures below the noise
+    floor. Gradients are preserved within 2% (see test_issue52 illumination test), not exactly,
+    because log-space blotch scaling reshapes smooth ramps slightly.
     """
     base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
-    shading = np.linspace(0.6, 1.0, 12, dtype=np.float32)[None, :, None]
-    linear = np.broadcast_to(base[None, None, :] * shading, (9, 12, 3)).copy()
+    linear = np.broadcast_to(base, (9, 12, 3)).astype(np.float32).copy()
 
     got = light_map_of(linear, base)
 
@@ -51,7 +52,9 @@ def test_light_map_blends_to_single_brightness_as_the_base_saturates() -> None:
 
     A deep pink base has green and blue near zero; dividing those channels amplifies sensor
     noise into speckle (#9). Blending to luma-over-luma keeps the shading and discards the
-    poisoned channels, so a noise-free input comes back as exactly its own shading.
+    poisoned channels. Issue #52 stain suppression (log-space blotch scaling) slightly
+    reshapes smooth gradients (photo-border pixels stay exact via edge protection), so the
+    shading check is within 2% rather than 1e-5; single-brightness still holds exactly.
     """
     deep_pink = np.array([0.60, 0.06, 0.06], dtype=np.float32)
     shading = np.linspace(0.6, 1.0, 32, dtype=np.float32)
@@ -59,7 +62,7 @@ def test_light_map_blends_to_single_brightness_as_the_base_saturates() -> None:
 
     got = light_map_of(linear, deep_pink)
 
-    assert np.allclose(got[..., 0], shading[None, :], atol=1e-5)
+    assert np.allclose(got[..., 0], shading[None, :], rtol=0.02, atol=0.02)
     assert np.allclose(got[..., 0], got[..., 1], atol=1e-6)
     assert np.allclose(got[..., 1], got[..., 2], atol=1e-6)
 
@@ -68,11 +71,11 @@ def test_light_map_of_a_moderately_saturated_wall_lies_between_the_two_extremes(
     """The blend is a blend: strictly between pure division and pure brightness.
 
     At mid-saturation the weight is neither 0 nor 1, so the Light Map must sit between the two
-    endpoints wherever they differ, and differ from both.
+    endpoints wherever they differ, and differ from both. Flat wall (no gradient) so issue #52
+    stain suppression has no blotch to remove and the between-check stays exact.
     """
     base = np.array([0.45, 0.25, 0.22], dtype=np.float32)
-    shading = np.linspace(0.6, 1.0, 16, dtype=np.float32)[None, :, None]
-    linear = np.broadcast_to(base[None, None, :] * shading, (16, 16, 3)).copy()
+    linear = np.broadcast_to(base, (16, 16, 3)).astype(np.float32).copy()
     linear[..., 2] *= 1.15  # a smooth cast the division follows and brightness cannot
 
     got = light_map_of(linear, base)
@@ -206,8 +209,13 @@ def test_render_returns_srgb_uint8_of_the_same_shape() -> None:
 
 
 def test_alpha_1_output_is_light_map_times_shade_times_tint_encoded() -> None:
-    """With alpha=1 the composite is exactly new_wall, then one encode."""
-    linear = _linear_photo()
+    """With alpha=1 the composite is exactly new_wall, then one encode.
+
+    Kept below the issue #52 highlight knee (_HIGHLIGHT_KNEE) so the
+    hue-preserving roll-off does not engage here; bright-peak behaviour is
+    pinned separately in test_issue52.py.
+    """
+    linear = (_linear_photo() * 0.5).astype(np.float32)
     alpha = np.ones((9, 12, 1), dtype=np.float32)
     base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
     shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
@@ -431,18 +439,20 @@ def test_same_paint_two_planes_keep_relative_brightness_after_grouped_recolour()
     # Linear composites for the two interior pixels (before encode) would be
     # shading * shade; after grouped recolour they must remain 1.6× apart.
     # Check directly on linear composites to avoid encode compression.
-    # Re-derive what render_many did: same shade, grouped base ≈ 0.8*base_true
+    # Re-derive what render_many did: same shade, grouped base ≈ 0.8*base_true.
+    # Measured far from the step (cols 5/55, 25px away) so issue #52's large
+    # illumination blur (3 passes) does not reshape the edge into the probe.
     grouped_base = base_true * 0.8  # 90th percentile picks the brighter plane
     light_map = light_map_of(linear, grouped_base)
     composite = composite_linear(
         linear, np.ones((40, 60, 1), dtype=np.float32), new_wall_of(light_map, shade, tint)
     )
-    left_lin = composite[20, 15]
-    right_lin = composite[20, 45]
-    assert np.allclose(left_lin, (0.8 / 0.5) * right_lin, rtol=1e-3)
+    left_lin = composite[20, 5]
+    right_lin = composite[20, 55]
+    assert np.allclose(left_lin, (0.8 / 0.5) * right_lin, rtol=0.02)
     # And the encoded PNG must still show left brighter than right (not flattened)
-    assert int(out[20, 15, 0]) > int(out[20, 45, 0]) + 5
-    assert int(out[20, 15, 1]) > int(out[20, 45, 1]) + 5
+    assert int(out[20, 5, 0]) > int(out[20, 55, 0]) + 5
+    assert int(out[20, 5, 1]) > int(out[20, 55, 1]) + 5
 
 
 def test_accent_wall_planes_keep_separate_base_colours() -> None:

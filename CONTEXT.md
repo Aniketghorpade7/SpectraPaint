@@ -104,9 +104,10 @@ per plane, or the brightness differences between planes would be erased and the 
 
 **Light Map**
 How much light falls on each point of a wall, obtained by removing the base colour from the
-photograph. It carries shadows, texture, corner falloff and gradients. Repainting replaces the base
-colour and leaves the light map untouched — which is why shadows survive without ever being handled
-as a special case.
+photograph. It carries lighting — shadows, texture, corner falloff and gradients. Reflectance
+defects (stains, patches, touch-ups) are removed from it before repainting, so the repaint reads
+as freshly painted. Repainting replaces the base colour and leaves the light map untouched —
+which is why shadows survive without ever being handled as a special case.
 
 **Realistic Mode** / **True Colour Mode**
 The two ways a repaint can be shown. **Realistic mode** tints the shade by the colour of the light

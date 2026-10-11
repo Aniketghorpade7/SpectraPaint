@@ -709,3 +709,25 @@ glue the existing suites also leave untested; what a silent regression would cor
 correctness, the cap, empty-snapshot handling, one-repaint-per-undo — is covered. A future ticket
 that introduces `@testing-library/react` for the whole app can restate these as true hook tests
 without changing the pure layer.
+
+---
+
+## 29. Grouped Base Colour reuse turned the accent blue plane black
+
+**Ticket:** #52 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-11 ·
+**Status:** resolved
+
+**What happened:** `tests/api/test_renders.py::test_two_wall_planes_carry_different_shades_in_one_request`
+failed with right pixel `(0, 0, 0)`: the blue accent plane rendered black. `render_many` caches one
+Light Map per Base Colour group using the first plane's matte; the new matte-weighted stain blurs
+returned 0 where coverage was 0 (the other plane), and with `_STAIN_CHROMA_SUPPRESSION=1.0` the
+chroma became 0 there.
+
+**Why it was hard:** without stain suppression the Light Map was valid everywhere (plain division),
+so reuse across grouped planes was safe and nothing documented the assumption. Matte weighting
+introduced a valid-only-inside-matte Light Map silently; the failure looked like a grouping or
+Shade-decode bug, not a blur-coverage bug.
+
+**Where it stands:** resolved in `_matte_weighted_blur_3`: where blurred weight has no coverage the
+original value is kept, so a Light Map stays valid for the whole group. See implementation-decision
+53.

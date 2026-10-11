@@ -20,6 +20,7 @@ deterministic.
 import numpy as np
 
 from spectrapaint.imaging import box_mean, erode
+from spectrapaint.render.colour import srgb_to_linear
 from spectrapaint.render.luts import encode_srgb
 
 
@@ -30,8 +31,8 @@ def light_map_of(
 ) -> np.ndarray:
     """Divide the linear photo by the wall's base colour (once per photo).
 
-    The spec's division is the spine, but an uncontrolled phone photograph makes three refinements
-    necessary (issue #9); all three degrade toward the plain division as the photograph gets
+    The spec's division is the spine, but an uncontrolled phone photograph makes refinements
+    necessary (issues #9 and #52); all degrade toward the plain division as the photograph gets
     easier, so a clean synthetic input still comes back as exactly ``photo / base``:
 
     * **Saturation blend.** A saturated Base Colour has at least one channel near zero, and
@@ -39,6 +40,18 @@ def light_map_of(
       saturation rises (between ``_SATURATION_BLEND_START`` and ``_SATURATION_BLEND_END``) the
       Light Map therefore blends toward a single-brightness division — luma over luma, broadcast
       across channels — which keeps the shading but throws away the poisoned channels.
+    * **Stain suppression (issue #52, decision 1).** The Light Map is split into ``shading``
+      (HxW brightness) and ``chroma`` (HxWx3, about 1 on a clean wall). Chroma deviations are
+      pulled toward the room's large-scale chroma and mid-frequency luminance blotches are
+      scaled back in log space, with contact shadows near the matte edge protected. Lighting,
+      shadows and texture are kept; stains and patches are removed before repainting.
+    * **Capped sun tint (issue #52, decision 2).** In highlights only
+      (``_HIGHLIGHT_START``–``_HIGHLIGHT_FULL`` on shading) a bounded share ``_SUN_TINT_KEEP``
+      of the chroma deviation is kept; the rest is brightness only. Sunlit patches read as the
+      chosen Shade, brighter and at most slightly warm.
+    * **Clipped photo pixels.** Where the photo is at or above ``_CLIPPED_LEVEL`` in any
+      channel the Light Map carries no information; chroma there is the local room chroma
+      while shading is kept.
     * **A ceiling.** Even away from saturation, pixels far brighter than the full-light level are
       noise, not scene; values above ``_LIGHT_MAP_CEILING`` are clamped.
     * **Noise-proportional smoothing, where the wall is dark.** Noise is measured locally from the
@@ -47,11 +60,11 @@ def light_map_of(
       in proportion to how much noise was measured in that neighbourhood and how dark the pixel is,
       so a well-lit wall keeps its texture while an underexposed one is quieted.
 
-    ``alpha`` is the Wall Plane matte, and the noise estimate and the smoothing are the wall's,
-    not the room's: without it a curtain's fold or a window's glare decides how much the wall is
-    smoothed (review of this ticket). With no matte given the whole frame is measured, which is
-    the right fallback for a caller that genuinely means the whole frame — and what synthetic
-    tests pass.
+    ``alpha`` is the Wall Plane matte, and every blur here is the wall's, not the room's: the
+    matte folds into each blur as a normalised convolution (as :func:`_smooth_where_dark` does),
+    so a chair's colour or glare never leaks into the wall. With no matte given the whole frame
+    is measured, which is the right fallback for a caller that genuinely means the whole frame —
+    and what synthetic tests pass.
 
     A zero channel in ``base_colour`` would yield NaN (0/0) or infinity, which would travel
     through the composite into every pixel of the output. Both are mapped to 0 — an unlit result
@@ -65,13 +78,54 @@ def light_map_of(
     light_map = np.nan_to_num(light_map, posinf=0.0, neginf=0.0, nan=0.0)
 
     weight = _brightness_weight_of(base_colour)
-    if weight > 0.0:
-        luma_base = float(np.dot(_LUMA_WEIGHTS.astype(base_colour.dtype), base_colour))
-        if luma_base > 0.0:
-            luma_photo = _luma_of(linear_photo)
-            brightness_only = (luma_photo / luma_base)[..., None]
-            light_map = (1.0 - weight) * light_map + weight * brightness_only
+    luma_base = float(np.dot(_LUMA_WEIGHTS.astype(base_colour.dtype), base_colour))
+    if weight > 0.0 and luma_base > 0.0:
+        luma_photo = _luma_of(linear_photo)
+        brightness_only = (luma_photo / luma_base)[..., None]
+        light_map = (1.0 - weight) * light_map + weight * brightness_only
 
+    if luma_base <= 0.0:
+        luma_base = float(np.dot(_LUMA_WEIGHTS.astype(np.float64), np.maximum(base_colour, 1e-6)))
+
+    # --- Split into shading (brightness) and chroma (colour) (issue #52 A). ---
+    # shading × chroma reproduces the Light Map above exactly.
+    luma_photo = _luma_of(linear_photo).astype(np.float64)
+    shading = (luma_photo / max(luma_base, 1e-6)).astype(np.float64)
+    shading_safe = np.maximum(shading, 1e-6)
+    chroma = (light_map.astype(np.float64) / shading_safe[..., None]).astype(np.float64)
+
+    short_side = min(linear_photo.shape[:2])
+    illum_radius = max(1, round(short_side * _STAIN_ILLUMINATION_RADIUS_FRACTION))
+    texture_radius = max(1, round(short_side * _STAIN_TEXTURE_RADIUS_FRACTION))
+    alpha_f = _alpha_hw(alpha)
+
+    # Large-scale room chroma: bounce light and window cast survive; a stain's hue does not.
+    room_chroma = _matte_weighted_blur_3(chroma, alpha_f, illum_radius)
+    chroma_out = (
+        1.0 - _STAIN_CHROMA_SUPPRESSION
+    ) * chroma + _STAIN_CHROMA_SUPPRESSION * room_chroma
+
+    # --- Mid-frequency luminance blotch suppression in log space (issue #52 B). ---
+    log_s = np.log(np.maximum(shading, 1e-6))
+    illumination = _matte_weighted_blur_3(log_s, alpha_f, illum_radius)
+    fine = log_s - _matte_weighted_blur_3(log_s, alpha_f, texture_radius)
+    blotch = log_s - illumination - fine
+    protect = _edge_protection(alpha_f, shading.shape)
+    strength = _STAIN_SUPPRESSION * (1.0 - protect)
+    shading_out = np.exp(illumination + fine + (1.0 - strength) * blotch)
+
+    # --- Clipped photo pixels carry no chroma (issue #52 F): keep shading. ---
+    clipped_thresh = float(srgb_to_linear(np.array([_CLIPPED_LEVEL / 255.0]))[0])
+    clipped = (linear_photo >= clipped_thresh).any(axis=-1)
+    if clipped.any():
+        chroma_out[clipped] = room_chroma[clipped]
+
+    # --- Capped sun tint in highlights (issue #52 D). ---
+    highlight = _smoothstep(_HIGHLIGHT_START, _HIGHLIGHT_FULL, shading_out)
+    keep = 1.0 + (_SUN_TINT_KEEP - 1.0) * highlight
+    chroma_out = 1.0 + (chroma_out - 1.0) * keep[..., None]
+
+    light_map = (shading_out[..., None] * chroma_out).astype(np.float64)
     light_map = np.clip(light_map, 0.0, _LIGHT_MAP_CEILING)
 
     # Use global sigma for the floor gate (robust decision whether to smooth at all)
@@ -82,6 +136,91 @@ def light_map_of(
         light_map = _smooth_where_dark(light_map, sigma_map, alpha)
 
     return light_map.astype(linear_photo.dtype)
+
+
+def _alpha_hw(alpha: np.ndarray | None) -> np.ndarray | None:
+    """Wall Plane matte as HxW float32, or None when no matte was given."""
+    if alpha is None:
+        return None
+    alpha_f = np.asarray(alpha, dtype=np.float32)
+    if alpha_f.ndim == 3:
+        alpha_f = alpha_f[..., 0]
+    return alpha_f
+
+
+def _blur_3(values: np.ndarray, radius: int) -> np.ndarray:
+    """Three passes of :func:`box_mean`: a Gaussian approximation, O(1) per pixel."""
+    out = values.astype(np.float64, copy=True)
+    for _ in range(3):
+        out = box_mean(out, radius).astype(np.float64)
+    return out
+
+
+def _matte_weighted_blur_3(
+    values: np.ndarray, alpha_f: np.ndarray | None, radius: int
+) -> np.ndarray:
+    """Large blur as a normalised convolution weighted by the matte.
+
+    Each of the three :func:`box_mean` passes divides the weighted sum by the
+    blurred weight, exactly as :func:`_smooth_where_dark` does, so wall pixels
+    never borrow a chair's values. Where the blurred weight has no coverage
+    (outside the matte, e.g. the other plane sharing a grouped Base Colour),
+    the original value is kept so a Light Map computed with one plane's matte
+    stays valid for the whole group. With no matte the whole frame is blurred.
+    Accepts HxW or HxWx3; the window always spans the two spatial axes.
+    """
+    values64 = values.astype(np.float64, copy=False)
+    if alpha_f is None:
+        return _blur_3(values64, radius)
+    weight = np.asarray(alpha_f, dtype=np.float64)
+    squeeze = values64.ndim == 2
+    values_exp = values64 if not squeeze else values64[..., None]
+    weight_exp = weight[..., None]
+    out = values_exp.copy()
+    for _ in range(3):
+        num = box_mean(out * weight_exp, radius).astype(np.float64)
+        den = box_mean(weight, radius).astype(np.float64)
+        has = den > 1e-3
+        # Where coverage exists use the normalized mean, else keep previous —
+        # so pixels outside the matte keep their own values instead of 0.
+        norm = num / np.maximum(den[..., None], _SMOOTHING_COVERAGE_EPSILON)
+        out = np.where(has[..., None], norm, out)
+    return out[..., 0] if squeeze else out
+
+
+def _edge_protection(alpha_f: np.ndarray | None, shape: tuple[int, ...]) -> np.ndarray:
+    """Ramp from 1 at the matte edge to 0 inside (issue #52 B).
+
+    Contact shadows sit at occluders, which are matte boundaries, so they are
+    mostly kept while open-wall stains are suppressed. Single box blur of the
+    eroded interior gives a linear ramp over ``_STAIN_EDGE_PROTECT_RADIUS``.
+    The photo border is also protected: box blurs pad by replication, which
+    would otherwise flatten illumination gradients at the frame edge and read
+    as a false blotch.
+    """
+    height, width = shape[:2]
+    radius = max(1, round(min(height, width) * _STAIN_EDGE_PROTECT_RADIUS_FRACTION))
+    rows = np.arange(height, dtype=np.float64)[:, None]
+    cols = np.arange(width, dtype=np.float64)[None, :]
+    dist_border = np.minimum(
+        np.minimum(rows, cols), np.minimum(height - 1 - rows, width - 1 - cols)
+    )
+    border_protect = np.clip(1.0 - dist_border / float(radius), 0.0, 1.0)
+    if alpha_f is None:
+        return border_protect
+    mask = np.asarray(alpha_f) > _NOISE_MATTE_THRESHOLD
+    if not mask.any():
+        return border_protect
+    interior = erode(mask, radius)
+    blurred = box_mean(interior.astype(np.float32), radius).astype(np.float64)
+    matte_protect = np.clip(1.0 - blurred, 0.0, 1.0)
+    return np.maximum(matte_protect, border_protect)
+
+
+def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
+    """0 below edge0, 1 above edge1, smooth Hermite ramp between."""
+    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 def _luma_of(image: np.ndarray) -> np.ndarray:
@@ -202,7 +341,8 @@ def _smooth_where_dark(
     because the matte folds into the same weight, the local mean never reaches past the wall's
     edge to borrow a chair's Light Map values. Weight rises with the noise actually measured in
     each pixel's neighbourhood and falls with brightness, which is what lets a well-lit wall keep
-    its stains while an underexposed corner is quieted (issue #9).
+    its texture while an underexposed corner is quieted (issue #9). Stain suppression lives in
+    :func:`light_map_of` (issue #52); this step only quiets measured sensor grain.
     """
     # Per-pixel strength from local noise estimate
     strength = np.clip((sigma_map - _NOISE_FLOOR) / (_NOISE_SIGMA_FULL - _NOISE_FLOOR), 0.0, 1.0)
@@ -248,6 +388,30 @@ def composite_linear(
     return alpha * new_wall + (1.0 - alpha) * linear_photo
 
 
+def _highlight_rolloff(composite: np.ndarray, matte: np.ndarray) -> np.ndarray:
+    """Hue-preserving soft knee above ``_HIGHLIGHT_KNEE`` (issue #52 E).
+
+    Where the peak channel exceeds the knee, all three channels scale by one
+    factor along ``knee + (1-knee)*(1-exp(-(peak-knee)/(1-knee)))`` toward 1.0,
+    so hue is kept and no channel hard-clips to 255. Only inside the matte
+    (``matte > 0``); ``alpha == 0`` pixels are bit-identical to today.
+    """
+    matte_hw = np.asarray(matte, dtype=np.float32)
+    if matte_hw.ndim == 3:
+        matte_hw = matte_hw[..., 0]
+    inside = matte_hw > 0.0
+    if not inside.any():
+        return composite
+    peak = composite.max(axis=-1, keepdims=True)
+    over = (peak > _HIGHLIGHT_KNEE) & inside[..., None]
+    if not over.any():
+        return composite
+    knee = _HIGHLIGHT_KNEE
+    scaled = knee + (1.0 - knee) * (1.0 - np.exp(-(peak - knee) / (1.0 - knee)))
+    factor = np.where(over, scaled / np.maximum(peak, 1e-6), 1.0)
+    return composite * factor
+
+
 def render(
     linear_photo: np.ndarray,
     alpha: np.ndarray,
@@ -257,10 +421,12 @@ def render(
 ) -> np.ndarray:
     """Recolour the wall and return sRGB uint8, ready to be saved as an image.
 
-    The composite runs in linear space; encoding happens once, at the end.
+    The composite runs in linear space; a hue-preserving highlight roll-off
+    runs inside the matte before the single encode at the end.
     """
     new_wall = new_wall_of(light_map, target_shade, light_tint)
     composite = composite_linear(linear_photo, alpha, new_wall)
+    composite = _highlight_rolloff(composite, alpha)
     encoded = encode_srgb(np.ascontiguousarray(composite))
     return (encoded * 255.0 + 0.5).astype(np.uint8)
 
@@ -326,6 +492,16 @@ def render_many(
         new_wall = new_wall_of(light_map, target_shade, light_tint)
         result_linear = composite_linear(result_linear, alpha, new_wall)
 
+    if alphas:
+        union = np.clip(
+            np.sum(
+                np.stack([np.asarray(a, dtype=np.float32)[..., 0] for a in alphas], axis=0),
+                axis=0,
+            ),
+            0.0,
+            1.0,
+        )
+        result_linear = _highlight_rolloff(result_linear, union)
     encoded = encode_srgb(np.ascontiguousarray(result_linear))
     return (encoded * 255.0 + 0.5).astype(np.uint8)
 
@@ -451,6 +627,69 @@ _SMOOTHING_RADIUS_FRACTION = 0.02
 # smoothing weight cannot divide by zero (its output is not used anyway).
 _SMOOTHING_COVERAGE_EPSILON = 1e-6
 
+# --- Stain suppression and sun handling (issue #52). All of these exist to
+# --- be tuned against real photographs; none is a derived constant. The bug
+# --- docs they were tuned against live in docs/bugs/ (02-stains, 07-sunlit).
+# --- The repaint promises "your wall, freshly painted": stains are
+# --- reflectance, not light, so they are suppressed by default (decision 1).
+
+# Share of mid-frequency luminance blotch removed. 0 keeps today's behaviour;
+# 1 removes it entirely. Trades stain darkness against soft contact shadows,
+# which live in the same band and weaken somewhat. Tuned against the synthetic
+# cream-wall brown-patch probe (ΔE00 20.6 → 2.6): 0.8 left ΔE00 13.2, so full
+# removal with edge protection was needed. Soft shadows weaken; contact
+# shadows at matte edges survive via _STAIN_EDGE_PROTECT_RADIUS_FRACTION.
+_STAIN_SUPPRESSION = 1.0
+# Share of local chroma deviation removed toward the room's large-scale
+# chroma. 1 removes a stain's hue entirely, keeping only bounce light and
+# window cast. Trades stain hue against large coloured bounce (e.g. red sofa).
+_STAIN_CHROMA_SUPPRESSION = 1.0
+# Of the shorter side: structure larger than this is "lighting" (gradients,
+# corner falloff) and kept; smaller is a candidate blotch. Starting value 0.08
+# left a 40×40 stain at ΔE00 13.2; tuned to 0.20 for ΔE00 2.6 on the same probe.
+# Larger flattens illumination more, but photo-border protection keeps the frame
+# ends exact and interior gradients stay within 2%.
+_STAIN_ILLUMINATION_RADIUS_FRACTION = 0.20
+# Of the shorter side: structure smaller than this is "texture" (roller grain)
+# and kept. Smaller keeps finer grain but lets fine stains survive.
+_STAIN_TEXTURE_RADIUS_FRACTION = 0.004
+# Of the shorter side: contact shadows sit at occluders, which are matte
+# boundaries, so suppression ramps from 0 at the edge to full this far inside.
+# Wider keeps more shadow but lets edge-near stains survive.
+_STAIN_EDGE_PROTECT_RADIUS_FRACTION = 0.03
+
+# Tint-space Euclidean distance a pixel's tint (rgb/luma) may lie from the
+# wall's median tint and still vote for the Base Colour. Tighter rejects more
+# sun; looser keeps more wall on varied paint. Same space as
+# _GROUP_TINT_THRESHOLD (0.08), just tighter. Tuned against the synthetic
+# yellow-wall 20%-strip probe (ΔE00 8.6 → <3).
+_BASE_TINT_TOLERANCE = 0.06
+# Fewer agreeing pixels than this falls back to today's whole-interior band,
+# so a tiny or wildly varied wall never dead-ends with an empty vote.
+_BASE_MIN_AGREEING = 500
+
+# Shading (luma(photo)/luma(base)) below START is normal light: the sun's full
+# tint is kept. Above FULL it is sun: only _SUN_TINT_KEEP of the tint is kept,
+# the rest is brightness only. Between, a smoothstep. Trades "brighter and a
+# little warm" (decision 2) against neutral-but-flat sun.
+_HIGHLIGHT_START = 1.15
+_HIGHLIGHT_FULL = 1.5
+# Share of the sun's chroma deviation kept in highlights. 0 is neutral
+# brightness only; 1 is today's yellow blob. Tuned against the pale-blue 5%
+# warm-patch probe (b* +14.7 → ≤0).
+_SUN_TINT_KEEP = 0.30
+
+# Linear-light peak (max channel) where the soft highlight knee starts. Above
+# it all three channels scale by one factor toward 1.0, so hue is kept and no
+# channel hard-clips to 255. Lower protects more highlights but dulls bright
+# Shades; higher lets more clipped hue-shift through.
+_HIGHLIGHT_KNEE = 0.90
+
+# sRGB byte level at or above which a photo channel carries no information
+# (blown sun, specular). There the Light Map's chroma is replaced by the local
+# room chroma while shading is kept: the patch stays bright in the Shade's hue.
+_CLIPPED_LEVEL = 250
+
 
 def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     """The wall's surface colour, measured from the Wall Plane matte.
@@ -462,6 +701,12 @@ def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndar
       blend of wall and whatever is behind the wall's edge, so its colour is
       partly the ceiling's. Averaging those in tints the Base Colour toward
       everything the wall is next to.
+    * **Hue-agreeing pixels only (issue #52 C).** Each interior pixel's tint
+      (rgb/luma) is compared to the per-channel median tint; only pixels within
+      ``_BASE_TINT_TOLERANCE`` vote, falling back to all interior pixels below
+      ``_BASE_MIN_AGREEING``. Sun-coloured pixels cannot enter the percentile
+      band while sun covers less than half the wall. The median is only a
+      filter: the Base Colour is still the mean RGB of whole pixels.
     * **Ranked by luminance, and near the 90th percentile.** The Base Colour is
       the paint "as it appears under full light" (CONTEXT.md), so the estimate
       wants the brightest genuinely-wall pixels -- the ones in full light --
@@ -490,8 +735,19 @@ def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndar
     if not interior.any():
         interior = coverage >= max(coverage.max() * 0.9, np.finfo(np.float32).tiny)
 
-    pixels = linear_photo[interior]
-    luminance = pixels @ _LUMA_WEIGHTS.astype(pixels.dtype)
+    pixels = linear_photo[interior].astype(np.float64)
+    luma = pixels @ _LUMA_WEIGHTS.astype(np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tints = pixels / np.maximum(luma[:, None], 1e-6)
+    finite = np.isfinite(tints).all(axis=1) & (luma > 1e-6)
+    if finite.sum() >= _BASE_MIN_AGREEING:
+        typical = np.median(tints[finite], axis=0)
+        dist = np.linalg.norm(tints - typical, axis=1)
+        agrees = finite & (dist < _BASE_TINT_TOLERANCE)
+        candidates = pixels[agrees] if agrees.sum() >= _BASE_MIN_AGREEING else pixels
+    else:
+        candidates = pixels
+    luminance = candidates @ _LUMA_WEIGHTS.astype(np.float64)
 
     low, high = np.percentile(
         luminance, [_BASE_PERCENTILE - _BASE_PERCENTILE_BAND, _BASE_PERCENTILE]
@@ -500,7 +756,7 @@ def estimate_base_colour(linear_photo: np.ndarray, alpha: np.ndarray) -> np.ndar
     # A band can come back empty when the wall is a single flat value and every
     # percentile lands on the same number; the equality check below is what
     # keeps that case from producing a NaN mean.
-    selected = pixels[in_band] if in_band.any() else pixels
+    selected = candidates[in_band] if in_band.any() else candidates
 
     return np.maximum(selected.mean(axis=0), _BASE_COLOUR_FLOOR).astype(linear_photo.dtype)
 
