@@ -50,7 +50,7 @@ section are at that commit.
 |---|---|---|
 | 1 | What does a repaint promise? | **"Your wall, freshly painted."** Stains and patches are suppressed by default; lighting and shadows kept. The strength is a named constant; no Dealer slider in V1. Amend design-decisions §6. |
 | 2 | How should sunlit patches render? | **Warm, but capped:** keep about 30% of the sun's tint; the rest is brightness only. |
-| 3 | The #31 confidence floor vs sunlit walls | **Exempt `mirror`, then re-measure** with sunlit fixtures. Revisit if `windows-with-curtains` leakage goes back above 0.20. Real mirrors become paintable again (accepted). |
+| 3 | The #31 confidence floor vs sunlit walls | **Exempt `mirror`, then re-measure** with sunlit fixtures. Revisit if `windows-with-curtains` leakage goes back above 0.20. Real mirrors become paintable again (accepted). **Amended 2026-10-09 by the re-measurement (#48, implementation decision 54):** the outright exemption put curtains leakage at 0.264, so `mirror` with `wall` as runner-up is held to a 0.10 floor instead. Curtains 0.210 accepted; revisit above 0.230. The page-7 yellow wall is `wardrobe`, not `mirror` (#60). |
 | 4 | Are tiles in V1 scope? | **Paintable via the Add tap only**, as their own Wall Plane. No automatic tile detection in V1. |
 | 5 | What did "edge selected" mean in bug 3? | Unknown. **Fix all three** faint-colour paths. |
 | 6 | Edit menu | **Custom menu + Undo/Redo for Shade and wall choice** within an open Consultation. Corrections aren't undoable in V1. Reload/DevTools removed from packaged builds. |

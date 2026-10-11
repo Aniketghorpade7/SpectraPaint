@@ -30,7 +30,8 @@ Three graphs come out, not two, because SAM 2 is split at its natural seam:
 
 Alongside each model a `runtime.json` is written: the resize and normalisation constants read out
 of the checkpoint's own `preprocessor_config.json`, and for the semantic model the five ADE20K
-class indices read out of its `config.json`. The service reads that file instead of re-deriving
+class indices read out of its `config.json`, plus, under a separate key, the classes the
+wall-confidence floor exempts. The service reads that file instead of re-deriving
 any of it, so the numbers cannot drift from the weights they belong to and the runtime needs no
 transformers to look them up.
 
@@ -68,6 +69,12 @@ except ModuleNotFoundError as missing:
 # design-decisions.md §5. Their *indices* are never written here — they are looked up in the
 # checkpoint's own label map, so a different checkpoint cannot silently shift them.
 SEMANTIC_CLASSES = ("wall", "floor", "ceiling", "windowpane", "door")
+
+# Classes the matte's wall-confidence floor (#31) must not delete, written to `runtime.json` under
+# their own key and never inside `classes`, so nothing can read one as an exclusion. This
+# checkpoint labels bright, washed-out wall `mirror`, and the floor was removing sunlit wall
+# because of it (#48, docs/bugs/root-causes.md cause B). Indices are looked up exactly as above.
+FLOOR_EXEMPT_CLASSES = ("mirror",)
 
 # Model ids, matching models/manifest.toml.
 SEMANTIC_ID = "semantic-segformer-b0-ade20k"
@@ -154,12 +161,12 @@ def preprocessing_of(model_dir):
     }
 
 
-def semantic_class_indices(model_dir):
-    """Map our five class names to the checkpoint's own label indices.
+def semantic_class_indices(model_dir, names=SEMANTIC_CLASSES):
+    """Map class names — our five by default — to the checkpoint's own label indices.
 
     ADE20K's ordering is a property of the checkpoint, not folklore, so it is read from
     `config.json`. Upstream writes some labels as comma-separated synonyms ("windowpane, window"),
-    so only the first name is compared. A checkpoint missing one of the five is refused: a
+    so only the first name is compared. A checkpoint missing one of the names is refused: a
     pipeline that cannot find `wall` has nothing to offer, and guessing an index would produce a
     confidently wrong matte.
     """
@@ -167,13 +174,13 @@ def semantic_class_indices(model_dir):
         id2label = json.load(f)["id2label"]
 
     by_name = {label.split(",")[0].strip(): int(index) for index, label in id2label.items()}
-    missing = [name for name in SEMANTIC_CLASSES if name not in by_name]
+    missing = [name for name in names if name not in by_name]
     if missing:
         raise SystemExit(
             f"  FAIL {model_dir.name}: its label map has no {', '.join(missing)}.\n"
             "       This checkpoint does not label the classes the pipeline needs."
         )
-    return {name: by_name[name] for name in SEMANTIC_CLASSES}
+    return {name: by_name[name] for name in names}
 
 
 def write_runtime_json(model_dir, payload, name="runtime.json"):
@@ -258,6 +265,7 @@ def export_semantic(force, verify_only, fast=False):
             "input_width": FAST_SEMANTIC_SIZE,
         }
     classes = semantic_class_indices(model_dir)
+    floor_exempt_classes = semantic_class_indices(model_dir, FLOOR_EXEMPT_CLASSES)
 
     model = SegformerForSemanticSegmentation.from_pretrained(model_dir).eval()
     example = example_input(constants)
@@ -278,6 +286,7 @@ def export_semantic(force, verify_only, fast=False):
             {
                 "graph": destination.name,
                 "classes": classes,
+                "floor_exempt_classes": floor_exempt_classes,
                 # Written for the service's benefit: SegFormer's logits come back at a quarter of
                 # the input side, and the code that upsamples them should not have to learn that
                 # by having tried it.

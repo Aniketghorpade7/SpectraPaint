@@ -78,6 +78,13 @@ class SemanticRegions:
     ceiling class — kept separately so the ceiling plane can be built from its own region without
     re-deriving it from ``excluded`` (which for wall purposes still contains ceiling as an
     exclusion, and must keep doing so).
+
+    ``floor_exempt`` is where the argmax is a class the matte's wall-confidence floor holds to a
+    lower bar, and ``wall`` is the runner-up (#48): this checkpoint labels sunlit, washed-out wall
+    ``mirror``. It is the opposite of an exclusion. It says nothing about whether a pixel is wall,
+    only that low wall confidence there is weaker evidence against it. Read from
+    ``runtime.json``'s ``floor_exempt_classes``; a ``runtime.json`` written before that key existed
+    exempts nothing.
     """
 
     wall: np.ndarray  # HxW bool
@@ -85,8 +92,7 @@ class SemanticRegions:
     wall_confidence: np.ndarray  # HxW float32 in [0, 1]
     ceiling: np.ndarray  # HxW bool
     ceiling_confidence: np.ndarray  # HxW float32 in [0, 1]
-    floor_exempt: np.ndarray  # HxW bool — mirror (and any future floor-exempt class from #48);
-    # all-False until #48 lands, so _unvouched keeps its current behaviour unchanged.
+    floor_exempt: np.ndarray  # HxW bool
 
     @property
     def wall_fraction(self) -> float:
@@ -248,11 +254,25 @@ def semantic_regions(graph: Graph, photo_u8: np.ndarray) -> SemanticRegions:
     else:
         ceiling_prob = np.zeros(shape, dtype=np.float32)
 
-    # floor_exempt from #48 (mirror): the capability is here, the behaviour is not. #48 adds mirror
-    # to the exported class set and a FLOOR_EXEMPT_CLASSES tuple beside RELEVANT_CLASSES, and this
-    # becomes the upsampled mirror probability thresholded — an all-False plane today, so every
-    # consumer reads exactly the behaviour it read before #48.
-    floor_exempt = np.zeros(shape, dtype=bool)
+    # Where the coarse argmax is a floor-exempt class *and* `wall` is the runner-up (#48), carried
+    # to photo resolution by nearest neighbour. Decided on the grid, like the claimed/unclaimed
+    # gate in argmax_at_photo_resolution and for the same reason: `mirror` is not a relevant class,
+    # so its pixels are unclaimed, and that boundary stays where the network drew it.
+    #
+    # The runner-up clause is what keeps most night window glass out. This checkpoint calls both
+    # sunlit wall and dark glass `mirror`, but its second guess tends to differ: wall for the wall,
+    # something else for the glass. Measured against every alternative tried; see
+    # matte.FLOOR_EXEMPT_CONFIDENCE_FLOOR.
+    #
+    # Kept apart from `classes` in runtime.json so nothing can mistake it for an exclusion. A
+    # runtime.json exported before #48 has no such key and exempts nothing, rather than the
+    # service refusing to start.
+    exempt_indices = list(graph.config.get("floor_exempt_classes", {}).values())
+    top = np.argmax(probabilities, axis=0)
+    others = np.where(np.arange(probabilities.shape[0])[:, None, None] == top, -1.0, probabilities)
+    runner_up = np.argmax(others, axis=0)
+    coarse_exempt = np.isin(top, exempt_indices) & (runner_up == classes["wall"])
+    floor_exempt = _resize_to(coarse_exempt.astype(np.float32), shape, nearest=True) > 0.5
 
     return SemanticRegions(
         wall=labels == _WALL_SLICE,

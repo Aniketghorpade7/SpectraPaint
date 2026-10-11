@@ -66,3 +66,38 @@ at all. The corner columns (x≈996 and x≈1747, measured from the tile lines) 
 cue peaks, so labelling planes would assert a split the pipeline cannot produce and the seam/purity
 tests would rightly fail it. Its **wall** label stands; the plane tests skip it, exactly as
 `windows-with-curtains.jpg`'s do, and decision 50 records the measurement.
+
+On 2026-10-04 (issue #48) the third, `wood-doors-with-mirror.jpg`, gained a wall label too, so what
+exempting `mirror` from the wall-confidence floor costs on a real mirror is measured rather than
+assumed. Its mirror and frame are not wall, so the matte painting them counts as non-wall leakage.
+
+| File | Failure mode it covers | Wall Planes |
+|---|---|---|
+| `wood-doors-with-mirror.jpg` | One flat wall with two doors and a framed mirror: what a mirror exempt from the confidence floor costs. | not labelled — #48 asked for the wall only |
+
+## Dealer-testing photographs, added for #48
+
+| File | Whose room | Consent | Notes |
+|---|---|---|---|
+| `blue-wall-sunlit.jpg` | A private home; the owner asked not to be named | Given by the owner for this repository, received by the repository owner | Shows a loft of personal papers, a laptop and clothing |
+| `green-room-sunlit.jpg` | A private home; the owner asked not to be named | Given by the owner for this repository, received by the repository owner | Shows a bed, clothing, bags and personal belongings on shelves |
+| `yellow-wall-sunlight-band.jpg` | A private home; the owner asked not to be named | Given by the owner for this repository, received by the repository owner | Empty wall, a chair, and a glimpse of a washroom through the doorway |
+| `kitchen-tiles.jpg` | A private home; the owner asked not to be named | Given by the owner for this repository, received by the repository owner | Kitchen wall, half tiled and half bare plaster |
+
+All four came by WhatsApp, so they are **not** straight off the phone. WhatsApp recompressed them to
+720x1280 and removed their EXIF metadata. That is the same resolution as the copies in the bug
+report (`docs/bugs/SpectrapaintBugs.pdf`), so these photographs are what the Dealer's photos looked
+like when they reached the app. They were copied in byte for byte, with no further change.
+
+`blue-wall-sunlit.jpg` is the page-6 photograph itself, identical to the one embedded in the report.
+`green-room-sunlit.jpg` is **not** page 4's photograph. It shows the same room, photographed again on
+2026-10-03 from a slightly different angle, because the original was not available.
+`yellow-wall-sunlight-band.jpg` shows the wall in page 7's screenshot, whose original was not in the
+report either.
+
+| File | Failure mode it covers | Wall Planes |
+|---|---|---|
+| `blue-wall-sunlit.jpg` | A sunlit recessed wall that the semantic checkpoint labels `mirror`, which the #31 floor deleted (bug 9). | not labelled — see `tools/fixtures/label_rooms.py` |
+| `green-room-sunlit.jpg` | Daylight on a back wall and a pillar, behind shelves, clothes and a bed (bug 7). | not labelled — see `tools/fixtures/label_rooms.py` |
+| `yellow-wall-sunlight-band.jpg` | A hard vertical band of sunlight down one flat wall: the bright-end counterpart of a cast shadow (bug 9). | 1, but the label is withheld until #60 — see `tools/fixtures/label_rooms.py` |
+| `kitchen-tiles.jpg` | Wall tiles the checkpoint does not call wall (bug 8). Unlabelled for now; the ticket for that bug labels it. | not labelled |

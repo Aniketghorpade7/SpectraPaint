@@ -70,6 +70,9 @@ SEMANTIC_OVERRULE_CONFIDENCE = 0.75
 # and not a fix: a checkpoint that is confidently wrong about a door leaves no gap between "sure
 # this is wall" and "sure this isn't" for a floor to sit in, so this helps two fixtures and does
 # nothing for that one. See `_unvouched` for what it does and does not remove.
+#
+# Classes named in runtime.json's `floor_exempt_classes` (today only `mirror`) are exempt from it
+# and held to FLOOR_EXEMPT_CONFIDENCE_FLOOR instead (#48). See that constant.
 WALL_CONFIDENCE_FLOOR = 0.9
 
 # Below this, SAM 2 is not trusted with the *shape* of the matte, and the shape is taken from the
@@ -101,6 +104,27 @@ WALL_CONFIDENCE_FLOOR = 0.9
 # the better answer. That is a weaker claim than the issue's, and it is the one the photographs
 # support.
 REFINER_TRUST_FLOOR = 0.1
+
+# The floor for a floor-exempt pixel: argmax `mirror` with `wall` as the runner-up
+# (SemanticRegions.floor_exempt). This checkpoint labels sunlit, washed-out wall `mirror`, and the
+# 0.9 floor deleted it: on the page-6 photo in docs/bugs/ (fixture `blue-wall-sunlit`) the matte
+# kept 0.271 of the wall's darkest quarter, which is mostly that sunlit recessed wall.
+#
+# It also labels night window glass and lit curtains `mirror`, so every way of letting the first
+# back in lets some of the second in too. Measured on the fixtures after #51, as page-6 darker-
+# quarter recall against windows-with-curtains non-wall leakage (0.191 under the plain floor):
+#
+#     every mirror pixel, no floor          0.927   0.264
+#     every mirror pixel, floor 0.15        0.829   0.207
+#     mirror within one grid cell of wall   0.354   0.198
+#     mirror only where it is bright        0.380   0.205   (sunlit wall is mid-grey: median 0.30)
+#     runner-up wall, floor 0.10            0.906   0.210   <- this
+#
+# No rule found keeps leakage at 0.20 and brings the wall back. The runner-up rule loses the least
+# for the most, and it is semantic: the model's own second guess, not how the pixel looks. The
+# 0.010 over the 0.20 target was accepted on 2026-10-09 and is recorded in measured.toml; see
+# docs/implementation-decisions.md, decision 54.
+FLOOR_EXEMPT_CONFIDENCE_FLOOR = 0.10
 
 # The boundary band, as a fraction of the photo's shorter side. Wide enough to contain the error a
 # quarter-resolution network makes once upsampled, narrow enough that the interior is left alone.
@@ -308,8 +332,8 @@ def _refiner_shape(
 def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarray:
     """Where the semantic pass will not vouch for a pixel SAM 2 claims is wall (#31).
 
-    Two things exempt a pixel, and both were settled by measuring on the three room fixtures rather
-    than argued:
+    Two things exempt a pixel and a third lowers its floor, and all three were settled by measuring
+    on the room fixtures rather than argued:
 
     * the restore step already forced it to 1.0. The floor is a check on what SAM 2 *alone*
       believes, not a second vote against a restoration that already happened.
@@ -318,6 +342,15 @@ def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarr
       shadowed-wall recall on ``windows-with-curtains`` against a floor of 80%, where exempting it
       scores 80.1%. Doubted-but-labelled wall is the case the semantic pass exists to win (module
       docstring, step 2), so doubt alone must not remove it.
+    * SegFormer's argmax called it a floor-exempt class (today only ``mirror``) with ``wall`` as
+      its runner-up (``SemanticRegions.floor_exempt``). Such a pixel is held to
+      ``FLOOR_EXEMPT_CONFIDENCE_FLOOR`` instead of ``WALL_CONFIDENCE_FLOOR``. Sunlit wall is washed
+      out and low in texture, and this checkpoint calls it ``mirror``, so the 0.9 floor was
+      deleting exactly the wall the sun falls on (#48). The runner-up clause and the lower floor
+      keep most night window glass and curtains out, which the checkpoint calls ``mirror`` too;
+      what they let back in is measured at ``FLOOR_EXEMPT_CONFIDENCE_FLOOR``. A real mirror the
+      checkpoint is unsure of is paintable again, as it was before #31; that cost was accepted
+      (docs/bugs/README.md, decision 3).
 
     Two variants were measured and rejected. Reading the confidence through a box mean first, to
     ride across the quarter-resolution blockiness, changes no metric on any fixture to three
@@ -327,7 +360,8 @@ def _unvouched(regions: SemanticRegions, confident_wall: np.ndarray) -> np.ndarr
     77%, because that shadowed wall is labelled wall at only 0.2 to 0.35 confidence.
     """
 
-    return (regions.wall_confidence < WALL_CONFIDENCE_FLOOR) & ~confident_wall & ~regions.wall
+    floor = np.where(regions.floor_exempt, FLOOR_EXEMPT_CONFIDENCE_FLOOR, WALL_CONFIDENCE_FLOOR)
+    return (regions.wall_confidence < floor) & ~confident_wall & ~regions.wall
 
 
 def soften_boundary(photo_u8: np.ndarray, alpha: np.ndarray) -> np.ndarray:

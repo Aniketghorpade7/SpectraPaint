@@ -508,6 +508,172 @@ ROOMS: list[Room] = [
         "the corners are not photometrically findable and the splitter prefers object edges "
         "(decision 50)",
     ),
+    Room(
+        # Stock photograph (Unsplash), already in the directory for #31: one flat wall with two
+        # wood-veneer doors and a framed mirror, under an open slatted ceiling. Labelled for #48 so
+        # what the mirror exemption costs is measured: the mirror and its frame are not wall, by
+        # omission, so the matte painting them shows up as non-wall leakage.
+        #
+        # The **wall** is labelled; the **planes** are not. #48 asked only for the wall, and a
+        # one-plane label here would test the splitter against door edges, which is not this
+        # ticket's question.
+        stem="wood-doors-with-mirror",
+        label_planes=False,
+        size=(2000, 1333),
+        planes=[
+            Plane(
+                name="door wall",
+                polygons=[
+                    # Above both doors and the mirror, under the slatted ceiling.
+                    [(0, 218), (1000, 230), (2000, 240), (2000, 388), (0, 388)],
+                    # Left of the first door's frame.
+                    [(0, 388), (48, 388), (48, 1333), (0, 1333)],
+                    # Between the two door frames.
+                    [(473, 388), (610, 388), (610, 1333), (473, 1333)],
+                    # Between the second door's frame and the mirror, down to the floor strip.
+                    [(1028, 388), (1372, 388), (1372, 1300), (1028, 1300), (1028, 1333)],
+                    # Right of the mirror, and below it.
+                    [(1920, 388), (2000, 388), (2000, 1300), (1920, 1300)],
+                    [(1372, 830), (1920, 830), (1920, 1300), (1372, 1300)],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The wall-to-floor junction at the bottom right, a grey strip of skirting.
+            [(1028, 1290), (2000, 1290), (2000, 1333), (1028, 1333)],
+        ],
+        note="one flat wall, two wood doors and a framed mirror, labelled for #48",
+    ),
+    Room(
+        # The page-6 photograph from the Dealer-testing bug report (docs/bugs/, bug 9), the
+        # original rather than the screenshot: a pale blue wall under a loft slab, an open door,
+        # and a recessed wall beyond it under a wardrobe, in strong daylight. That recessed wall
+        # is the sunlit wall the #31 floor deleted, because the checkpoint calls it `mirror`.
+        #
+        # The **wall** is labelled; the **planes** are not. The recessed wall sits behind the
+        # door's plane, under the wardrobe, and whether it is a second plane or the same wall set
+        # back cannot be read off one photograph.
+        stem="blue-wall-sunlit",
+        label_planes=False,
+        size=(1280, 720),
+        planes=[
+            Plane(
+                name="left wall and recessed wall",
+                polygons=[
+                    # Above the loft slab, right of the stacked newspapers, under the ceiling.
+                    [(160, 0), (540, 0), (740, 60), (740, 105), (160, 105)],
+                    # Below the slab, down to the frame of the open door.
+                    [(0, 202), (640, 284), (640, 720), (0, 720)],
+                    # The recessed wall beyond the door, under the wardrobe, right of the
+                    # hanging clothes and above them.
+                    [(872, 345), (1180, 280), (1195, 720), (990, 720), (990, 400), (872, 400)],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The loft slab, painted like the wall: a shelf, not a wall, but nobody would be
+            # surprised to see it repainted with it.
+            [(0, 95), (160, 105), (560, 170), (820, 250), (820, 310), (0, 205)],
+            # The switch plate.
+            [(545, 360), (612, 360), (612, 450), (545, 450)],
+            # The bottle and the laptop along the bottom edge.
+            [(305, 640), (355, 640), (355, 720), (305, 720)],
+            [(530, 650), (700, 650), (700, 720), (530, 720)],
+            # Above the door frame, and the room beyond the open door.
+            [(640, 300), (870, 300), (870, 350), (640, 350)],
+            [(640, 345), (752, 345), (752, 720), (640, 720)],
+            # The underside of the wardrobe, a wedge whose join with the recessed wall is lost.
+            [(820, 300), (1165, 215), (1185, 215), (1185, 280), (870, 345)],
+        ],
+        note="sunlit recessed wall under a wardrobe (bug 9, page 6), planes withheld",
+    ),
+    Room(
+        # The room from page 4 of the Dealer-testing bug report (bug 7), photographed again on
+        # 2026-10-03 rather than the photograph in the report (see origin.md): green walls,
+        # an open shelf unit along the left wall, a bed, clothes on a hook rail, and daylight
+        # falling on the back wall and the pillar at the right edge.
+        #
+        # The **wall** is labelled; the **planes** are not. Three surfaces show — the left wall,
+        # the back wall and the pillar's face — but the left wall is almost wholly behind the
+        # shelves and the pillar is a sliver at the frame's edge, so the count is arguable.
+        stem="green-room-sunlit",
+        label_planes=False,
+        size=(720, 1280),
+        planes=[
+            Plane(
+                name="left, back and pillar",
+                polygons=[
+                    # The left wall between its cornice and the loft slab, right of the wires.
+                    [(120, 206), (395, 333), (395, 355), (335, 385), (120, 330)],
+                    # The back wall, from its cornice down to the bed.
+                    [(402, 337), (652, 299), (652, 830), (460, 830), (460, 430), (402, 410)],
+                    # The pillar's face at the right edge, down to the skirting.
+                    [(668, 240), (720, 240), (720, 985), (668, 985)],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The strip above the back wall's cornice, where wall and ceiling are not separable.
+            [(400, 265), (657, 220), (657, 300), (400, 337)],
+            # The wires coiled against the left wall.
+            [(0, 195), (125, 195), (125, 345), (0, 345)],
+            # The shelf unit, with wall showing between its boards.
+            [(0, 340), (475, 345), (475, 880), (0, 960)],
+            # The bag on the loft slab, against the corner.
+            [(330, 350), (475, 350), (475, 520), (330, 520)],
+            # The clothes on the hook rail.
+            [(455, 500), (615, 500), (615, 800), (455, 800)],
+            # The switch board, straddling the pipe at the back wall's right edge.
+            [(612, 505), (700, 505), (700, 610), (612, 610)],
+            # The pipe between the back wall and the pillar.
+            [(650, 220), (670, 220), (670, 990), (650, 990)],
+            # The hanger and wire on the pillar.
+            [(685, 400), (720, 400), (720, 570), (685, 570)],
+            # Wall behind the corner of the bed and the desk at the left.
+            [(0, 860), (110, 860), (110, 1100), (0, 1100)],
+        ],
+        note="sunlit back wall and pillar (bug 7, page 4 room, re-shot), planes withheld",
+    ),
+    Room(
+        # The yellow wall from page 7 of the Dealer-testing bug report (bug 9), photographed on
+        # 2026-10-03: one flat wall, a doorway at the left edge, and a hard vertical band of
+        # sunlight down its left side. The band is the same plaster as the rest — the skirting
+        # runs straight under it — so it is labelled wall, which is the whole point.
+        #
+        # One plane, plainly, and the polygon below says so. The **planes** label is withheld for
+        # now all the same, and not because it is arguable: the checkpoint calls 66% of this wall
+        # `wardrobe`, the confidence floor deletes it, and the 11% of the wall that survives gets
+        # split in two. The plane tests are hard asserts with no measured baseline, so there is no
+        # honest way to record that shortfall there. Turn this back on when #60 (sunlit wall
+        # labelled `wardrobe`) lands; its acceptance criteria say so.
+        stem="yellow-wall-sunlight-band",
+        label_planes=False,
+        size=(720, 1280),
+        planes=[
+            Plane(
+                name="yellow wall",
+                polygons=[
+                    [
+                        (150, 112),
+                        (720, 62),
+                        (720, 898),
+                        (250, 905),
+                        (100, 895),
+                        (100, 340),
+                        (110, 245),
+                        (150, 235),
+                    ],
+                ],
+            ),
+        ],
+        uncertain=[
+            # The lintel's side above the doorway, pale in the light and not clearly wall.
+            [(90, 90), (160, 90), (160, 250), (90, 250)],
+            # The chair's back, rising across the skirting at the bottom right.
+            [(490, 880), (720, 880), (720, 960), (490, 960)],
+        ],
+        note="one plane, a hard band of sunlight down its left side (bug 9, page 7)",
+    ),
 ]
 
 

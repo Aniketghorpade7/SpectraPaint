@@ -63,6 +63,15 @@ MINIMUM_SHADOWED_WALL_RECALL = 0.80
 # The share of the darkest labelled-wall pixels treated as "in shadow".
 SHADOW_QUANTILE = 0.25
 
+# How much of the *brightest* labelled wall must still be covered: the shadow criterion's
+# counterpart at the bright end. Sunlit wall is washed out and low in texture, the checkpoint calls
+# it `mirror`, and #31's confidence floor deleted it until #48 exempted that class.
+MINIMUM_SUNLIT_WALL_RECALL = 0.80
+
+# Labelled-wall pixels at or above this luminance quantile are treated as "in sunlight": the
+# brightest tenth.
+SUNLIT_QUANTILE = 0.90
+
 # How much coverage may land on pixels the label says are not wall. Windows, doors and furniture
 # painted over is the most visible way to be wrong.
 MAXIMUM_NON_WALL_COVERAGE = 0.20
@@ -455,6 +464,43 @@ def test_shadowed_wall_stays_wall(client: TestClient, photo: Path) -> None:
         "shadowed_wall_recall",
         recall,
         target=MINIMUM_SHADOWED_WALL_RECALL,
+        higher_is_better=True,
+    )
+
+
+@pytest.mark.skipif(not labelled_rooms(), reason=NO_LABELS)
+@pytest.mark.parametrize("photo", labelled_rooms() or [None], ids=lambda p: p.stem if p else "none")
+def test_sunlit_wall_stays_wall(client: TestClient, photo: Path) -> None:
+    """The brightest tenth of the labelled wall must still be covered (#48).
+
+    Sunlight on a wall *is* the wall, exactly as a shadow is. It fails differently, though: SAM 2
+    sees the bright band well enough, but the semantic checkpoint calls washed-out wall `mirror`,
+    and the wall-confidence floor (#31) removed whatever the semantic pass would not vouch for. The
+    Dealer saw that as a sunlit wall left unpainted (docs/bugs/, bugs 7 and 9).
+
+    The same ratchet as the shadow criterion: a fixture that falls short is held to its recorded
+    baseline in measured.toml, with the reason written there.
+    """
+
+    session_id = prepare(client, photo)
+    matte = wall_matte_of(client, session_id)
+
+    wall, _ = labels_for(photo, matte.shape)
+    if not wall.any():
+        pytest.skip(f"{photo.name} has no labelled wall")
+
+    luminance = luminance_of(photo, matte.shape)
+    threshold = float(np.quantile(luminance[wall], SUNLIT_QUANTILE))
+    sunlit = wall & (luminance >= threshold)
+    if not sunlit.any():
+        pytest.skip(f"{photo.name} has no sunlit wall to speak of")
+
+    recall = float((matte[sunlit] >= 0.5).mean())
+    _assert_no_worse(
+        photo.stem,
+        "sunlit_wall_recall",
+        recall,
+        target=MINIMUM_SUNLIT_WALL_RECALL,
         higher_is_better=True,
     )
 
