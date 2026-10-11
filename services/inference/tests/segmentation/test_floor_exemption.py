@@ -12,10 +12,12 @@ predicts.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 from spectrapaint.runtime.graphs import Graph
-from spectrapaint.segmentation.matte import _unvouched
+from spectrapaint.segmentation.matte import FLOOR_EXEMPT_CONFIDENCE_FLOOR, _unvouched
 from spectrapaint.segmentation.semantic import SemanticRegions, semantic_regions
 
 # One pixel of each kind the floor has to decide about, in a 1x4 strip.
@@ -54,6 +56,19 @@ def test_the_same_pixel_without_the_exemption_is_still_removed() -> None:
     assert unvouched[0, DOUBTED_OTHER]
 
 
+def test_a_floor_exempt_pixel_below_its_own_lower_floor_is_still_removed() -> None:
+    # Night window glass and curtains are labelled `mirror` too, at far lower wall confidence than
+    # sunlit wall is, so a floor-exempt pixel is held to a lower floor rather than to none.
+    regions = _regions(floor_exempt=[True, False, False, False])
+    doubted = regions.wall_confidence.copy()
+    doubted[0, DOUBTED_MIRROR] = FLOOR_EXEMPT_CONFIDENCE_FLOOR / 2
+    regions = replace(regions, wall_confidence=doubted)
+
+    unvouched = _unvouched(regions, confident_wall=np.zeros((1, 4), dtype=bool))
+
+    assert unvouched[0, DOUBTED_MIRROR]
+
+
 def test_argmax_wall_and_confident_pixels_stay_exempt_as_before() -> None:
     regions = _regions(floor_exempt=[True, False, False, False])
 
@@ -80,10 +95,12 @@ _CLASSES = {"wall": 0, "floor": 1, "ceiling": 2, "windowpane": 3, "door": 4}
 _MIRROR = 5
 
 
-def _graph(config_extra: dict) -> Graph:
-    # A 2x2 logit map at the network's resolution: top row mirror, bottom row wall.
+def _graph(config_extra: dict, runner_up: str = "wall") -> Graph:
+    # A 2x2 logit map at the network's resolution: top row mirror, with `runner_up` as the
+    # model's second guess there, and bottom row wall.
     logits = np.full((1, 6, 2, 2), -10.0, dtype=np.float32)
     logits[0, _MIRROR, 0, :] = 10.0
+    logits[0, _CLASSES[runner_up], 0, :] = 5.0
     logits[0, _CLASSES["wall"], 1, :] = 10.0
     config = {
         "classes": _CLASSES,
@@ -108,6 +125,16 @@ def test_floor_exempt_classes_are_mapped_at_photo_resolution() -> None:
     assert not regions.floor_exempt[2:].any()
     # An exemption is not an exclusion: the mirror half is not marked definitely-not-wall.
     assert not regions.excluded.any()
+
+
+def test_a_floor_exempt_class_whose_runner_up_is_not_wall_is_not_exempt() -> None:
+    # Night window glass: `mirror` first, but the model's second guess is not wall.
+    photo = np.zeros((4, 6, 3), dtype=np.uint8)
+    graph = _graph({"floor_exempt_classes": {"mirror": _MIRROR}}, runner_up="windowpane")
+
+    regions = semantic_regions(graph, photo)
+
+    assert not regions.floor_exempt.any()
 
 
 def test_an_older_runtime_json_without_the_key_exempts_nothing() -> None:

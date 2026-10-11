@@ -33,6 +33,21 @@
 #                 wood-doors-with-mirror    +0.008 (875), -0.093 (1104), ceiling -0.339 (74)
 #               Before #51 the same planes read +0.2 to +0.36 (0.50-0.66 against ~0.30 chance), on
 #               every fixture but windows-with-curtains, which was already at chance.
+# Re-measured: 2026-10-09, for #48: `mirror` with `wall` as runner-up is held to a 0.10 wall-
+#               confidence floor instead of 0.9, and five photographs joined the labelled set
+#               (blue-wall-sunlit, green-room-sunlit, yellow-wall-sunlight-band from the
+#               Dealer-testing report; wood-doors-with-mirror, labelled; kitchen-tiles, unlabelled).
+#               sunlit_wall_recall, the brightest tenth of the labelled wall, joined the ratchet.
+#               Page 6 of the report (blue-wall-sunlit): IoU 0.693 -> 0.855, darkest-quarter recall
+#               0.271 -> 0.906 (that quarter is mostly the sunlit recessed wall). Costs:
+#               windows-with-curtains leakage 0.191 -> 0.210 (entry below, accepted), and
+#               corner-with-clothesline leakage up 0.006 to about 0.358. That is inside the 0.02
+#               tolerance of its 0.338 entry and left untightened, but #51 had already moved it
+#               0.014, so its headroom is gone.
+#               Mirror leakage, the matte's mean over the mirror itself, measured not assumed:
+#               wood-doors-with-mirror 0.044 and dim-room-with-mirror 0.993, both unchanged by #48,
+#               because the checkpoint does not call either mirror `mirror`. dim-room's mirror was
+#               already painted before #48; it is labelled unsure, so no metric here counts it.
 # Regenerate after a pipeline change with the reasoning in the commit message:
 #     cd services/inference && uv run pytest -m models -q     # the failure message prints the new value
 
@@ -73,3 +88,20 @@ non_wall_leakage = 0.209
 # floor helps most here — leakage 0.239 to 0.185, which clears the 0.20 target, so that metric has
 # no entry any more. IoU improves 0.369 to 0.389 and is still far short.
 wall_iou = 0.389
+# Leakage is back, deliberately, and this entry is not a re-recorded baseline. #48 lowers the floor
+# for pixels the checkpoint calls `mirror` with `wall` as its runner-up, because that is how it
+# sees sunlit wall. It sees some of this photo's night window glass and lit curtains the same way,
+# so leakage went 0.191 (after #51) to 0.210. Every rule measured that brings the page-6 sunlit
+# wall back costs this photo at least 0.004 over the target. The repository owner accepted that
+# trade on 2026-10-09, and decision 54 records it. If this rises past 0.230, or a real mirror is
+# painted in a fixture, reopen decision 3 in docs/bugs/README.md.
+non_wall_leakage = 0.210
+
+[yellow-wall-sunlight-band]
+# The sunlit yellow wall from page 7 of the Dealer-testing report (bug 9), added for #48 and not
+# fixed by it: the checkpoint calls 66% of this wall `wardrobe`, not `mirror`, so the confidence
+# floor deletes it and the matte covers 11% of the frame. #60 tracks it, and its plane label is
+# withheld until then (tools/fixtures/label_rooms.py says why).
+wall_iou = 0.132
+shadowed_wall_recall = 0.150
+sunlit_wall_recall = 0.000

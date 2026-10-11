@@ -1870,3 +1870,76 @@ regression on any `measured.toml` metric at any of the six steps. New unit tests
 `edge_on_grid_fraction` on a synthetic diagonal — no razor edge on the matte at all, against a
 nearest-neighbour control on the same input at 0.70 — plus the exclusion invariant, band continuity,
 `erode_round`'s calibration, and `resolve_exclusive` in both its cases.
+
+## 54. `mirror` with `wall` as runner-up is held to a 0.10 floor, not exempt, and the curtains pay 0.010 for it
+
+**Ticket:** #48 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-10-09
+
+**Decided:** the #31 wall-confidence floor (0.9) no longer applies to a pixel whose coarse argmax is
+`mirror` and whose runner-up is `wall`. That pixel is held to `FLOOR_EXEMPT_CONFIDENCE_FLOOR = 0.10`
+instead (`segmentation/matte.py`). The exporter writes the floor-exempt classes to `runtime.json`
+under their own `floor_exempt_classes` key, never inside `classes`, so nothing can read one as an
+exclusion. `SemanticRegions.floor_exempt` (the plane #51 left all-False) is decided on the 128×128
+grid, like #51's claimed/unclaimed gate, because `mirror` is not a relevant class. A `runtime.json`
+from before this change has no key and exempts nothing. `EXCLUDED_CLASSES` is unchanged.
+
+**Why not what the ticket said.** Decision 3 in `docs/bugs/README.md` was "exempt `mirror`, then
+re-measure". Re-measuring rejected the outright exemption. This checkpoint calls sunlit wall `mirror`,
+but it also calls night window glass and lit curtains `mirror`: 48% of `windows-with-curtains`'
+labelled not-wall. Every rule that lets the first back in lets some of the second in too. All of
+these were measured after #51, as page-6 darker-quarter recall against `windows-with-curtains`
+leakage (0.271 and 0.191 under the plain floor):
+
+| Rule | Page-6 recall | Curtains leakage |
+|---|---|---|
+| every `mirror` pixel, no floor (the ticket) | 0.927 | 0.264 |
+| every `mirror` pixel, floor 0.10 / 0.15 / 0.20 | 0.927 / 0.829 / 0.723 | 0.213 / 0.207 / 0.204 |
+| `mirror` regions touching argmax-wall | 0.927 | 0.264 (every region touches) |
+| `mirror` within 1 / 2 / 4 grid cells of wall | 0.354 / 0.437 / 0.624 | 0.198 / 0.203 / 0.213 |
+| `mirror` only where bright (several thresholds) | at most 0.380 | 0.200 to 0.230 |
+| **`wall` runner-up, floor 0.10** | **0.906** | **0.210** |
+
+The brightness rule failed for a reason worth recording. The "sunlit" wall on page 6 is not bright in
+the photograph: its `mirror` cells have a median luminance of 0.30, against 0.77 for the window-lit
+wall the camera exposed for. So sunlit wall and night glass do not separate on brightness, and
+design-decisions §5 ("semantic, never photometric") needed no exception. The runner-up rule is the
+model's own second guess, so it is semantic.
+
+**Accepted cost.** No rule found keeps `windows-with-curtains` at 0.20 and brings the wall back. The
+repository owner accepted 0.210 on 2026-10-09, and `measured.toml` records it as a deliberate
+regression rather than a re-recorded baseline. `corner-with-clothesline` leakage rises about 0.006,
+inside its tolerance. Real mirrors: on both stock fixtures the checkpoint does not call the mirror
+`mirror` at all, so this change paints no more of either (0.044 and 0.993, both unchanged). The cost
+decision 3 accepted is real but has not shown up on any fixture yet.
+
+**Measured** (before → after, every labelled fixture after #51):
+
+| Fixture | Change |
+|---|---|
+| `blue-wall-sunlit` (page 6) | IoU 0.693 → 0.855; darkest-quarter recall 0.271 → 0.906; leakage 0.145 → 0.193; `sunlit_wall_recall` 0.995 both |
+| `windows-with-curtains` | leakage 0.191 → 0.210; shadowed-wall recall 0.801 → 0.886 |
+| `corner-with-clothesline` | leakage 0.352 → about 0.358 |
+| `green-room-sunlit`, `yellow-wall-sunlight-band`, both mirror fixtures, and the rest | unchanged |
+
+`sunlit_wall_recall` (the brightest tenth of the labelled wall, target 0.80) is in the ratchet as the
+ticket specified, but it does not track page 6. That photo's brightest wall is the window-lit left
+wall, which was never deleted, so it reads 0.995 before and after. Darkest-quarter recall is the
+number that moved. The metric still earns its place: the yellow wall scores 0.000 on it.
+
+**Not fixed here.** The sunlit yellow wall (page 7) is called `wardrobe` (66%), not `mirror`, so no
+variant of this rule touches it. #60 tracks it, along with its withheld plane label. The green room
+(page 4's room, photographed again) already scored 1.0 sunlit recall under the plain floor. Its bug
+is the render half, #52.
+
+**Not changed:** `models/manifest.toml`. No pinned upstream file moved, and the slow lane's cache key
+already hashes `tools/export_onnx.py`, so CI rebuilds `runtime.json` by itself.
+
+**Revisit if:** `windows-with-curtains` leakage rises past 0.230 (its entry plus the ratchet's
+tolerance, where the lane fails anyway), or a real mirror is painted in a fixture. Either reopens
+decision 3.
+
+**Measured:** fast lane 278 passed; models lane 76 passed, 1 skipped. Before `measured.toml` was
+updated, the models lane failed 6: the 4 shortfalls now recorded there, and the 2 yellow-wall plane
+tests, whose label is withheld until #60.
+
+---
