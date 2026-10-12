@@ -1943,3 +1943,37 @@ updated, the models lane failed 6: the 4 shortfalls now recorded there, and the 
 tests, whose label is withheld until #60.
 
 ---
+
+## 55. Stains suppressed and sun capped in render/ with tuned radii, border protection and grouped-matte-safe blurs
+
+**Ticket:** #52 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-10-11
+
+**Decided:** `light_map_of` splits into shading/chroma, suppresses chroma fully toward room chroma and
+removes mid-frequency luminance blotch fully in log space with matte-edge and photo-border protection;
+`estimate_base_colour` votes only hue-agreeing pixels; highlights keep 30% tint with a hue-preserving
+knee; clipped pixels take room chroma. Constants: `_STAIN_SUPPRESSION=1.0` (from 0.8),
+`_STAIN_ILLUMINATION_RADIUS_FRACTION=0.20` (from 0.08), others as specified
+(`_STAIN_CHROMA_SUPPRESSION=1.0`, texture 0.004, edge 0.03, tint tol 0.06/min 500, highlight
+1.15–1.5/keep 0.30, knee 0.90, clipped 250).
+
+**Why:** starting values left the 40×40 brown-on-cream stain at ΔE00 13.2 (need <3) and the warm patch
+at b* +1.1 (need ≤0); 0.20/1.0 gives ΔE00 2.6 and b* −8.6 with L* above the wall. Log-space box blurs
+pad by replication, flattening gradients at frame edges, so photo borders are protected (ends ratio
+2.0 exact; interior 50-vs-150 within 1.2%). Matte-weighted blurs keep originals where coverage is 0,
+so a Light Map built with one plane's matte stays valid for the whole grouped Base Colour (accent
+blue plane rendered black without this). Existing gradient-exactness tests were retargeted to flat
+walls (exact) with gradients pinned within 2% in `test_issue52.py`; the saturated-blend and grouped
+ratio probes were relaxed to 0.02 and moved far from the step edge.
+
+**Before/after (synthetic, `tests/render/test_issue52.py`):** stain ΔE00 20.6→2.6 (<3); sun-base unlit
+ΔE00 8.6→0.0 (<3); blob b* +14.7→−8.6 (≤0), L* above wall; gradient ends 2.0 within 2%; texture
+0.93× (within 20%); contact 100% depth (≥80%); 1.7× strip no 255, hue 0.1° (≤5°); alpha-0
+bit-identical; flat exact; per-tap gate 50.2/111.8ms within 68/141.6ms budgets.
+
+**Consequence:** soft mid-frequency shadows weaken (accepted); stains within the edge-protect band or
+photo-border ramp suppress less; bright-peak hues compress slightly above the knee.
+
+**Merge note:** landed after #49/#50/#51/#48, so this entry is ##55 (main already held ##51–##54);
+the fixture tests in `tests/fixtures/test_light_map_fixtures.py` were updated in the same merge to
+pin the new design (noise floor plus bounded mean change, rolloff-aware night bound, blend weight
+directly).
