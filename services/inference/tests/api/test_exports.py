@@ -149,6 +149,37 @@ def test_export_is_full_res_while_browsing_stays_preview(client: TestClient) -> 
     assert exported.headers.get("x-spectrapaint-render-mode") == "realistic"
 
 
+def test_export_of_an_oriented_photo_is_upright(client: TestClient) -> None:
+    """A landscape-stored photo with EXIF Orientation=6 exports portrait (issue #49).
+
+    The full-resolution export re-renders from the original bytes and upscales the mattes made on
+    the prepared photo. Without the same orientation applied to those original pixels the export
+    would come back landscape — sideways against the mattes and against the preview the Dealer
+    approved.
+    """
+
+    buffer = io.BytesIO()
+    image = Image.new("RGB", LARGE_ROOM_SIZE, (188, 188, 188))
+    exif = image.getexif()
+    exif[0x0112] = 6
+    image.save(buffer, format="JPEG", exif=exif)
+    session_id = upload(client, buffer.getvalue())
+
+    preview = client.post(
+        f"/sessions/{session_id}/renders",
+        headers=auth(),
+        json={"assignments": {FIRST_WALL_PLANE_ID: "PS-1001"}, "mode": "realistic"},
+    )
+    exported = export_jpeg(client, session_id)
+
+    assert preview.status_code == 201, preview.text
+    assert exported.status_code == 201, exported.text
+    width, height = to_image(exported.content).size
+    assert (width, height) == (LARGE_ROOM_SIZE[1], LARGE_ROOM_SIZE[0])
+    preview_width, preview_height = to_image(preview.content).size
+    assert preview_height > preview_width
+
+
 def test_export_is_non_blocking_for_browsing(client: TestClient) -> None:
     """Export does not block browsing — a render after an export still succeeds."""
 

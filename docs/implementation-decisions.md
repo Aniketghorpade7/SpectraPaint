@@ -1627,7 +1627,100 @@ vanishing-line fitter are now specified as conditions on those, not open questio
 
 ---
 
-## 51. The application menu is a pure template, Undo/Redo restore state and repaint — never replay pixels, and every correction clears the history
+## 51. The Consultation shows the prepared photo, EXIF orientation is applied at decode, the chosen wall is outlined rather than washed, and tapping a Shade disarms the tool (issue #49)
+
+Issue #49 was three visible symptoms and turned out to be five decisions, two of which are about
+*which pixels the Dealer is looking at* rather than about layout at all.
+
+**One set of pixels: EXIF orientation applied at `decode_photo`.** A phone camera stores
+sensor-order rows plus an Orientation tag saying how to turn them, and Chromium honours that tag
+when it displays the raw upload — so before this the UI showed the photo rotated while the mattes
+and the render were built on the unrotated array, and every overlay and correction tap landed in the
+wrong place. `ImageOps.exif_transpose` is now applied in `decode_photo` before `.convert("RGB")`,
+and in `exports.py:_full_targets` for the same reason: the full-resolution export upscales the
+mattes, so without it the export disagreed with the preview the Dealer approved. Applied at decode
+rather than at display because *every* downstream pixel space — photo, mattes, render, taps — must
+be the upright one, and decode is the only point all of them pass through. A no-op when there is no
+tag.
+
+**The Consultation now shows the prepared photo, not the raw upload.** Even with EXIF fixed, the
+raw upload and the prepared photo are different rectangles (the prepared one is capped at 1280),
+and the mattes describe the prepared pixels. The UI swaps `state.imageDataUrl` for the prepared
+photo once preparation reaches `done`, before the walls are fetched, so the overlay's pixel space
+is the one on screen. The raw upload stays as a placeholder only while preparation runs.
+
+This needed a route that did not exist. `GET /consultations/{id}/photo/png` serves the *stored*
+copy, but `persist_preparation` is called from `require_photo` — the render gate — so on a first
+load there is nothing stored to serve. The bug doc's preferred option was taken:
+`GET /sessions/{session_id}/photo/png` waits for preparation through the same gate and serves the
+in-memory `srgb`. A useful side effect: reading it *is* what persists the preparation, which moves
+#11's auto-save from first-render to preparation-done — strictly earlier than before. Because the
+service waits rather than answering "not ready", the UI makes one request with nothing to poll.
+
+**Layout: the slot is the stage's free space, the frame is the largest box of the photo's ratio
+that fits it.** `.consultation__frame-slot` is a size container (`container-type: size`) and the
+frame is `width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)))`, height derived. The old frame
+took the slot's full width and derived its height, which on any photo taller than the free space
+produced a frame taller than the stage and clipped by it. Sizing against *both* axes is the whole
+fix; the photo is letterboxed on grey, and the status line and notes stay outside the slot.
+
+**Selection is an outline, never a wash.** `.consultation__wall-overlay--chosen` is deleted. A 45%
+white wash on the chosen wall made the one wall the Customer was about to judge *paler than the
+others* — the selection mark was corrupting the thing being selected. It is replaced by a 2 px
+`--grey-6` line with a 1 px `--grey-0` halo along the matte's own edge, so it reads on both light
+and dark walls, plus the chip's existing inverted style. The line is neutral grey for the same
+reason the wash was white: nothing saturated may sit beside a colour being judged. Because the line
+is 2 px *on screen* while the matte arrives at the photo's own scale, `WallOutlineCanvas` draws the
+matte into a backing store the size of the frame and computes the ring there, re-measured by a
+`ResizeObserver`; the geometry itself is the pure `matteOutline` in `walls.ts`, unit-tested without
+a DOM.
+
+**The outline reads the matte's grey level, not its alpha — the bug the layout check caught.** The
+first implementation thresholded the alpha byte. The Alpha Matte is served as an 8-bit mode-L
+greyscale PNG (`planes.py:_encode_matte`), so it decodes with coverage in R, G and B and **alpha
+opaque on every pixel**; thresholding alpha saw one wall covering the whole photograph and outlined
+the photo's frame — a rectangle around the room — instead of the wall's edge. It would have drawn
+something, it would have been perfectly aligned, and it would have been completely wrong. The
+threshold is now 128, the halfway point of the coverage range the service encodes, matching the
+`mask-mode: luminance` the wash has always used on the very same bytes. Difficulty 11 records the
+same hazard arriving from the other direction, so the two are worth reading together.
+
+**Tapping a Shade disarms any armed correction tool.** Choosing a Shade is the Dealer moving on
+from correcting walls to judging paint. A tool left armed held the correction surface over the
+arriving repaint — and the tool buttons are hidden while a render shows, so the Dealer could not
+even disarm it except by tapping the photo. `beginShadeTap` computes the tap's whole meaning
+(disarmed, assignments updated, render marked) before the request goes out, so the request and the
+state it records cannot disagree, mirroring `applyProgressEvent`.
+
+`overlayVisible(state, showingRender, armedTool)` is now the single rule for the overlay, and it
+refuses to draw over a repaint *first* — not for the Dealer's show/hide choice, and not for an
+armed tool. The armed-tool override stays, because correcting walls that are not visible is not a
+thing a Dealer can do (#10), but only while the photo rather than the render is what is on screen.
+The tap layer is gated on the same value, so neither the wash nor the tap layer can sit over a
+repaint. Belt and braces, deliberately: the state rule and the screen rule agree, so neither a
+future caller that forgets one nor a stale state can put a wash over a colour being judged.
+
+**Review follow-ups to #51.** Four things changed after review, and one was kept rather than
+deferred:
+
+- **The walls are never drawn until the frame has the ratio of the image on screen.** The frame took
+  its ratio from the image's `onLoad`, so right after the prepared photo replaced the upload the
+  frame still had the placeholder's ratio while the walls had already arrived — for an EXIF-rotated
+  photo, mattes on the wrong rectangle for a moment. The surface now remembers which image its ratio
+  was read from and draws overlay, outline, chips and tap layer only once that is the image shown.
+  Watching the DOM for exactly this window is part of `layout.test.ts`.
+- **A prepared photo that cannot be fetched is said on screen** (`photoNotice`, from the pure
+  `applyPreparedPhoto`), not only logged: the raw upload stays, and an oriented one would otherwise
+  sit misaligned with nothing to explain it.
+- **The prepared photo's PNG is encoded once per session** (`SessionRegistry.photo_png`), shared by
+  the photo route and the auto-save. The pixels never change after preparation; corrections only
+  replace Wall Planes.
+- **The full-resolution export of an oriented photo has its own test**, since that path re-reads the
+  original bytes and is the one place preview and export could disagree again.
+- **The layout check is kept, inside `npm run check`**, with Chromium fetched by `npm run browsers`
+  — see design-decisions.md §9d for why this is the one DOM-needing test the project allows.
+
+## 52. The application menu is a pure template, Undo/Redo restore state and repaint — never replay pixels, and every correction clears the history
 
 **Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-10-02
 
@@ -1647,7 +1740,11 @@ undo/redo restore a snapshot and then **repaint through the normal render reques
 pixels: the snapshot's state is only ever *asked for* as the same repaint a tap would produce, which
 is what keeps a snapshot honest against the live plane list. A restored snapshot with empty
 `assignments` drops the render state instead of requesting a (necessarily `422`) empty repaint, so
-undoing to the start returns the original photo.
+undoing to the start returns the original photo — in *both* directions: redo can land on an empty
+snapshot too (a wall chosen before any Shade, undone, redone), which review found the first version
+mishandling. One pure `restorePlan` decides, for undo and redo alike, between the original photo, a
+repaint, and **keeping what is on screen** when only the wall choice differs (the Shades on the walls
+are what the render shows, so a repaint would be a request for the same picture).
 
 **Why corrections clear the history rather than being recorded:** a split or merge can retire a
 plane id, and a snapshot naming a retired plane cannot be replayed honestly — the same reasoning as
@@ -1676,33 +1773,173 @@ until a plane-history stack on the service changes that. If the shop PC is a tou
 is unreachable and an on-screen affordance is needed (noted in ui-guidelines and the spec's open
 question).
 
+## 53. The matte's shape is decided at photo resolution, and three of its own thresholds were wrong before they were right
+
+**Ticket:** #51 · **Contributor:** Prasad K (code written by an agent) · **Date:** 2026-10-05
+
+**Decided:** four changes to the Alpha Matte, and one threshold set against the issue's own proposal.
+
+**1. Upsample probabilities, then decide** (`segmentation/semantic.py`). The five relevant
+class-probability planes are upsampled bilinearly to the photo's own resolution and the argmax is
+taken there, so a wall/window boundary follows a smooth probability contour rather than a staircase of
+10-px steps. Two stages, and the split is load-bearing: *which* classes are in the running is still
+decided by the full argmax over all 150 classes on the 128×128 grid, and *which of them wins this
+pixel* is re-decided at photo resolution. The gate preserves the module's promise that a pixel of sofa
+is unclaimed. Flat five-way argmax was tried first and regressed three metrics at once (technical
+difficulty 29). `SemanticRegions` gains `floor_exempt` as an all-False plane, so #48's mirror
+exemption is a one-line activation rather than a reshape.
+
+**2. The exclusion ramp is a multiplier that is 0 on the excluded side** (`matte.py`).
+`alpha = np.where(excluded, 0.0, alpha * ramp)` where `ramp = clip(1 − 2·blur(excluded, r), 0, 1)`,
+`r = 0.004` of the photo's shorter side. It replaces a hard re-imposition *after* softening, which was
+undoing the softening one line above it. The width is about three radii rather than one — Pillow's
+`GaussianBlur` takes its radius as the sigma — so 0.004 buys a roughly 12px feather on a 1280×960
+photo, and that is the number to reason about when the constant is next argued about. The `np.where`
+is kept even though the formula already zeroes that side: `blur` round-trips through 8-bit, so the
+profile on the exclusion's own edge returns as 126/255 and the ramp as 3/255. Tiny, and harmless only
+because the `np.where` masks it. "Never paint a window" is absolute, and a constant that guarantees
+it is worth more than one that happens to hold at eight bits. `ceiling_alpha` uses the same function.
+
+**3. Round morphology** (`imaging.py`). `erode_round` is blur-and-threshold at `Φ(1)` = 0.8413, which
+is the level one sigma inside a straight edge and therefore the only threshold that makes the
+erosion distance match `erode`. Thresholding at 0.5 erodes by **nothing** — Pillow's radius is the
+sigma — which shipped, cost 0.031 of shadowed-wall recall, and passed a models-lane run first because
+straight edges are most of what a room photograph contains. The four prompt-sampling erosions in
+`segmentation/prompts.py` switched over. `dilate_round` was written and then removed: a disc kernel
+gives an isolated mask pixel 10px away a weight of ~1e-4, which vanishes in 8-bit, and that blindness
+deleted the Add tool's correction on `patterned-wallpaper-with-curtain`. `soften_boundary` therefore
+bounds its outer band with square `dilate` — which is also the honest shape, being a guided filter's
+square window — and uses `erode_round` for the core, where the corners are the point.
+
+**4. The boundary band is a blend, not a switch** (`soften_boundary`). Three zones found spatially
+from where the matte crosses its own 0.5 level, then joined by two ramps on each zone's own blurred
+field: `clip(2·blur(zone) − 1, 0, 1)` is 0 on a zone's boundary and 1 about a sigma inside, and the
+band weight is whatever the two ramps leave over. The old nested `np.where` put a full 1.0 step at the
+inner join and a full 0.0 at the outer one. The band also extends **two** radii, so the fade that
+replaces the hard outer cut sits outside the guided filter's support rather than eating into it; at one
+radius it cut the Add tool's grown matte from 0.339 to 0.040 at the tapped pixel and the correction did
+nothing. Ramping on the *zone's own* field is the part that matters: a first attempt ramped on the
+blurred `alpha ≥ 0.5` region, which never reaches 0.5 at all for a region narrower than the band — so
+every plane the Add tool grows from a single tap came out at half strength at its own tap point.
+
+**5. `REFINER_TRUST_FLOOR = 0.1`, not the proposed 0.3.** `decode_alpha` now returns
+`(alpha, iou_score)` — the graph's second output, previously named `_iou` and discarded — and below the
+floor the matte's *shape* comes from the semantic pass's probability for that surface instead of SAM
+2's logits, logged at `debug`. Everything else in `wall_alpha` is unchanged either way, so what a low
+score changes is where the edge sits and nothing about which pixels are wall. `ceiling_alpha` takes its
+own probability plane, never the wall's.
+
+The floor is 0.1 against the issue's 0.3 because the reasoning behind 0.3 — "the scores are low
+everywhere" — does not hold. They run 0.043 to 0.841 across the six fixtures, so 0.3 is a line through
+the middle of the range and falls on `windows-with-curtains` (0.227), the one fixture where the
+fallback is *worse*. Measured both ways on every labelled fixture, as shadowed-wall recall:
+
+| Photograph | score | refiner trusted | switched off |
+|---|---|---|---|
+| empty-corner | 0.043 | 0.9913 | **0.9915** |
+| dim-room-with-mirror | 0.074 | 0.7358 | **0.7513** |
+| patterned-wallpaper-with-curtain | 0.520 | 0.9997 | **1.0000** |
+| corner-with-clothesline | 0.834 | 0.9928 | **0.9935** |
+| windows-with-curtains | 0.227 | **0.8008** | 0.7725 |
+
+The fallback wins four of five and the score does not predict which, so no threshold on it separates
+them. What it can do is catch a degenerate decode, and 0.1 is where that line falls: on both fixtures
+below it the switch is an improvement, and above it the refiner is kept — including on the fixture
+where it is the better answer.
+
+**6. Full coverage at a seam** (`corrections.resolve_exclusive`). Where two planes' soft claims meet
+at a seam, the winner takes `min(1, a + b)`; elsewhere it keeps `max`. Summing everywhere would
+double-count the border of a shared exclusion, so the seam test also requires the two confident
+interiors to be disjoint, and treats a pixel reading exactly 0.5 as belonging to neither — a contour
+belongs to neither side, and that is the one pixel the union exists for. Used by `add_plane`,
+`add_ceiling_plane` and preparation's wall/ceiling resolution, replacing logic that was duplicated and
+one-directional: the wall was never zeroed where the ceiling won. Deciding *which* plane wins stays
+with the caller. The rule is recorded in design-decisions §6, which had it open.
+
+**Performance.** The issue estimated step 1's added work at about 30 ms; it is **284 ms** — the
+memory half of the estimate was right (five float planes at 1280×960 is 24.6 MB against the predicted
+25 MB) and the time half was an order of magnitude out, because Pillow's bilinear resize of a mode-`F`
+image costs roughly 57 ms per plane at that size. Immaterial against the thirty-second per-photo
+budget (measured preparation is 13.4 s median on `corner-with-clothesline`), but the estimate was
+worth checking rather than repeating. Note also that `spikes/latency`'s gate measures only the render
+loop — `linearize_u8_lut` through `encode_lut` — so no change in `segmentation/` can appear in it at
+all; there is no preparation gate to pass or fall back from (technical difficulty #20).
+
+**Measured:** fast lane 269 passed (252 existing plus 17 new); models lane 38 passed, 1 skipped; no
+regression on any `measured.toml` metric at any of the six steps. New unit tests in `tests/segmentation/` measure
+`edge_on_grid_fraction` on a synthetic diagonal — no razor edge on the matte at all, against a
+nearest-neighbour control on the same input at 0.70 — plus the exclusion invariant, band continuity,
+`erode_round`'s calibration, and `resolve_exclusive` in both its cases.
+
+## 54. `mirror` with `wall` as runner-up is held to a 0.10 floor, not exempt, and the curtains pay 0.010 for it
+
+**Ticket:** #48 · **Contributor:** Aniket Ghorpade (code written by an agent) · **Date:** 2026-10-09
+
+**Decided:** the #31 wall-confidence floor (0.9) no longer applies to a pixel whose coarse argmax is
+`mirror` and whose runner-up is `wall`. That pixel is held to `FLOOR_EXEMPT_CONFIDENCE_FLOOR = 0.10`
+instead (`segmentation/matte.py`). The exporter writes the floor-exempt classes to `runtime.json`
+under their own `floor_exempt_classes` key, never inside `classes`, so nothing can read one as an
+exclusion. `SemanticRegions.floor_exempt` (the plane #51 left all-False) is decided on the 128×128
+grid, like #51's claimed/unclaimed gate, because `mirror` is not a relevant class. A `runtime.json`
+from before this change has no key and exempts nothing. `EXCLUDED_CLASSES` is unchanged.
+
+**Why not what the ticket said.** Decision 3 in `docs/bugs/README.md` was "exempt `mirror`, then
+re-measure". Re-measuring rejected the outright exemption. This checkpoint calls sunlit wall `mirror`,
+but it also calls night window glass and lit curtains `mirror`: 48% of `windows-with-curtains`'
+labelled not-wall. Every rule that lets the first back in lets some of the second in too. All of
+these were measured after #51, as page-6 darker-quarter recall against `windows-with-curtains`
+leakage (0.271 and 0.191 under the plain floor):
+
+| Rule | Page-6 recall | Curtains leakage |
+|---|---|---|
+| every `mirror` pixel, no floor (the ticket) | 0.927 | 0.264 |
+| every `mirror` pixel, floor 0.10 / 0.15 / 0.20 | 0.927 / 0.829 / 0.723 | 0.213 / 0.207 / 0.204 |
+| `mirror` regions touching argmax-wall | 0.927 | 0.264 (every region touches) |
+| `mirror` within 1 / 2 / 4 grid cells of wall | 0.354 / 0.437 / 0.624 | 0.198 / 0.203 / 0.213 |
+| `mirror` only where bright (several thresholds) | at most 0.380 | 0.200 to 0.230 |
+| **`wall` runner-up, floor 0.10** | **0.906** | **0.210** |
+
+The brightness rule failed for a reason worth recording. The "sunlit" wall on page 6 is not bright in
+the photograph: its `mirror` cells have a median luminance of 0.30, against 0.77 for the window-lit
+wall the camera exposed for. So sunlit wall and night glass do not separate on brightness, and
+design-decisions §5 ("semantic, never photometric") needed no exception. The runner-up rule is the
+model's own second guess, so it is semantic.
+
+**Accepted cost.** No rule found keeps `windows-with-curtains` at 0.20 and brings the wall back. The
+repository owner accepted 0.210 on 2026-10-09, and `measured.toml` records it as a deliberate
+regression rather than a re-recorded baseline. `corner-with-clothesline` leakage rises about 0.006,
+inside its tolerance. Real mirrors: on both stock fixtures the checkpoint does not call the mirror
+`mirror` at all, so this change paints no more of either (0.044 and 0.993, both unchanged). The cost
+decision 3 accepted is real but has not shown up on any fixture yet.
+
+**Measured** (before → after, every labelled fixture after #51):
+
+| Fixture | Change |
+|---|---|
+| `blue-wall-sunlit` (page 6) | IoU 0.693 → 0.855; darkest-quarter recall 0.271 → 0.906; leakage 0.145 → 0.193; `sunlit_wall_recall` 0.995 both |
+| `windows-with-curtains` | leakage 0.191 → 0.210; shadowed-wall recall 0.801 → 0.886 |
+| `corner-with-clothesline` | leakage 0.352 → about 0.358 |
+| `green-room-sunlit`, `yellow-wall-sunlight-band`, both mirror fixtures, and the rest | unchanged |
+
+`sunlit_wall_recall` (the brightest tenth of the labelled wall, target 0.80) is in the ratchet as the
+ticket specified, but it does not track page 6. That photo's brightest wall is the window-lit left
+wall, which was never deleted, so it reads 0.995 before and after. Darkest-quarter recall is the
+number that moved. The metric still earns its place: the yellow wall scores 0.000 on it.
+
+**Not fixed here.** The sunlit yellow wall (page 7) is called `wardrobe` (66%), not `mirror`, so no
+variant of this rule touches it. #60 tracks it, along with its withheld plane label. The green room
+(page 4's room, photographed again) already scored 1.0 sunlit recall under the plain floor. Its bug
+is the render half, #52.
+
+**Not changed:** `models/manifest.toml`. No pinned upstream file moved, and the slow lane's cache key
+already hashes `tools/export_onnx.py`, so CI rebuilds `runtime.json` by itself.
+
+**Revisit if:** `windows-with-curtains` leakage rises past 0.230 (its entry plus the ratchet's
+tolerance, where the lane fails anyway), or a real mirror is painted in a fixture. Either reopens
+decision 3.
+
+**Measured:** fast lane 278 passed; models lane 76 passed, 1 skipped. Before `measured.toml` was
+updated, the models lane failed 6: the 4 shortfalls now recorded there, and the 2 yellow-wall plane
+tests, whose label is withheld until #60.
+
 ---
-
-## 53. Stains suppressed and sun capped in render/ with tuned radii, border protection and grouped-matte-safe blurs
-
-**Ticket:** #52 · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-10-11
-
-**Decided:** `light_map_of` splits into shading/chroma, suppresses chroma fully toward room chroma and
-removes mid-frequency luminance blotch fully in log space with matte-edge and photo-border protection;
-`estimate_base_colour` votes only hue-agreeing pixels; highlights keep 30% tint with a hue-preserving
-knee; clipped pixels take room chroma. Constants: `_STAIN_SUPPRESSION=1.0` (from 0.8),
-`_STAIN_ILLUMINATION_RADIUS_FRACTION=0.20` (from 0.08), others as specified
-(`_STAIN_CHROMA_SUPPRESSION=1.0`, texture 0.004, edge 0.03, tint tol 0.06/min 500, highlight
-1.15–1.5/keep 0.30, knee 0.90, clipped 250).
-
-**Why:** starting values left the 40×40 brown-on-cream stain at ΔE00 13.2 (need <3) and the warm patch
-at b* +1.1 (need ≤0); 0.20/1.0 gives ΔE00 2.6 and b* −8.6 with L* above the wall. Log-space box blurs
-pad by replication, flattening gradients at frame edges, so photo borders are protected (ends ratio
-2.0 exact; interior 50-vs-150 within 1.2%). Matte-weighted blurs keep originals where coverage is 0,
-so a Light Map built with one plane's matte stays valid for the whole grouped Base Colour (accent
-blue plane rendered black without this). Existing gradient-exactness tests were retargeted to flat
-walls (exact) with gradients pinned within 2% in `test_issue52.py`; the saturated-blend and grouped
-ratio probes were relaxed to 0.02 and moved far from the step edge.
-
-**Before/after (synthetic, `tests/render/test_issue52.py`):** stain ΔE00 20.6→2.6 (<3); sun-base unlit
-ΔE00 8.6→0.0 (<3); blob b* +14.7→−8.6 (≤0), L* above wall; gradient ends 2.0 within 2%; texture
-0.93× (within 20%); contact 100% depth (≥80%); 1.7× strip no 255, hue 0.1° (≤5°); alpha-0
-bit-identical; flat exact; per-tap gate 50.2/111.8ms within 68/141.6ms budgets.
-
-**Consequence:** soft mid-frequency shadows weaken (accepted); stains within the edge-protect band or
-photo-border ramp suppress less; bright-peak hues compress slightly above the knee.

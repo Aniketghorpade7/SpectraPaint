@@ -109,7 +109,8 @@ Or individually:
 npm run lint
 npm run typecheck
 npm run format          # add :write to fix
-npm test                # shell logic only — see design-decisions.md §9d
+npm test                # shell logic, plus the Room Photo layout check in headless Chromium
+npm run browsers        # once: fetch the Chromium that layout check drives
 ```
 
 **Python** — from `services/inference`:

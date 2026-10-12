@@ -9,9 +9,12 @@ points that are not.
 Three decisions, each of which changes the matte:
 
 **Positive points come from the *eroded* wall, never the raw wall.** A point sampled near the
-semantic boundary may well be sitting on ceiling, because that boundary is a quarter-resolution
-staircase. One positive point in the wrong region is enough to make SAM 2 grow the mask into it,
-and it is a mistake nothing downstream can undo.
+semantic boundary may well be sitting on ceiling, because that boundary is uncertain by several
+pixels at photo scale. One positive point in the wrong region is enough to make SAM 2 grow the mask
+into it, and it is a mistake nothing downstream can undo. The erosion is :func:`erode_round`, not
+:func:`erode`: a square erosion pulls the eligible region back hardest at a region's corners, so it
+systematically favours the middle of a large area over the middle of a sliver beside a corner, and
+on the fixtures that is a whole wall plane's worth of prompt points lost.
 
 **Negative points come from the named exclusions only** — floor, ceiling, windowpane, door — and not
 from "everywhere that is not wall". Most of a photo is neither: a sofa is unlabelled, and marking it
@@ -29,7 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from spectrapaint.imaging import erode
+from spectrapaint.imaging import erode_round
 from spectrapaint.segmentation.semantic import SemanticRegions
 
 # How far inside a region a sampled point must sit, as a fraction of the photo's shorter side.
@@ -139,8 +142,8 @@ def prompts_for(regions: SemanticRegions, refiner_config: dict) -> PromptSet:
     radius = erosion_radius(shape)
 
     positive_budget = int(round(max_points * _POSITIVE_SHARE))
-    positive = sample_grid(erode(regions.wall, radius), positive_budget)
-    negative = sample_grid(erode(regions.excluded, radius), max_points - len(positive))
+    positive = sample_grid(erode_round(regions.wall, radius), positive_budget)
+    negative = sample_grid(erode_round(regions.excluded, radius), max_points - len(positive))
 
     scale = _photo_to_graph_scale(refiner_config, shape)
 
@@ -176,13 +179,13 @@ def prompts_for_ceiling(regions: SemanticRegions, refiner_config: dict) -> Promp
     radius = erosion_radius(shape)
 
     positive_budget = int(round(max_points * _POSITIVE_SHARE))
-    positive = sample_grid(erode(regions.ceiling, radius), positive_budget)
+    positive = sample_grid(erode_round(regions.ceiling, radius), positive_budget)
     # Negatives for ceiling: wall is the main thing not to leak into, plus the other exclusions
     # except ceiling itself. Build it without ceiling so a ceiling prompt's negatives do not contain
     # the very region it is trying to describe.
     other_excluded = regions.excluded & ~regions.ceiling
     ceiling_excluded = regions.wall | other_excluded
-    negative = sample_grid(erode(ceiling_excluded, radius), max_points - len(positive))
+    negative = sample_grid(erode_round(ceiling_excluded, radius), max_points - len(positive))
 
     scale = _photo_to_graph_scale(refiner_config, shape)
 

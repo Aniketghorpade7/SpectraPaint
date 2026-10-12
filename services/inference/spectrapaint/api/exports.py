@@ -15,7 +15,7 @@ from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Request, Response, status
-from PIL import Image
+from PIL import Image, ImageOps
 from pydantic import BaseModel
 
 from spectrapaint.api.errors import MALFORMED_REQUEST, SHADE_NOT_FOUND, ServiceError
@@ -200,6 +200,10 @@ def _full_targets(
 
     try:
         with Image.open(io.BytesIO(original)) as image:
+            # Same EXIF rule as ``decode_photo`` (issue #49): the full-resolution pixels must be the
+            # upright picture the mattes and the preview render were built on, or the upscaled
+            # mattes land sideways and the export disagrees with what the Dealer approved.
+            image = ImageOps.exif_transpose(image)
             rgb = image.convert("RGB")
             full_u8 = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
     except Exception:

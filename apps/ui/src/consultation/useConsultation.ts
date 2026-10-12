@@ -5,6 +5,7 @@ import type {
   MenuCommand,
   ProgressStreamEvent,
   RenderResult,
+  WallPlaneOverlay,
   WallsResult,
 } from '../../../desktop/src/bridge-types';
 import { applyExportEvent, INITIAL_EXPORT_STATE, type ExportState } from './export';
@@ -58,6 +59,12 @@ export interface ConsultationState {
   message?: string;
   /** The latest preparation message, shown while the phase is 'uploading'. */
   progressMessage?: string;
+  /**
+   * Plain language, set when the prepared photo could not be fetched (issue #49) and the raw upload
+   * is still what is on screen. Never an error screen: the photo is still usable, and the note says
+   * what to try.
+   */
+  photoNotice?: string;
 }
 
 export type RenderMode = 'realistic' | 'true_colour';
@@ -121,6 +128,9 @@ export interface Consultation {
   dismissExport: () => void;
 }
 
+const PREPARED_PHOTO_FAILED_MESSAGE =
+  'This photo could not be shown the way SpectraPaint prepared it, so the walls found may look out of place. Try loading the photo again.';
+
 /** The fallback shown before the stream's first message arrives. */
 const LOADING_MESSAGE = 'Loading your photo…';
 
@@ -169,27 +179,108 @@ export function applyProgressEvent(
 }
 
 /**
+ * What the prepared photo's arrival does to the state, as a pure function so it is testable without
+ * a DOM (docs/design-decisions.md §9d).
+ *
+ * Success swaps the raw upload for the prepared pixels. Failure keeps the placeholder but says so
+ * (``photoNotice``) — logging alone left an oriented photo misaligned with nothing on screen to
+ * tell the Dealer why. Either way only the session that asked is touched: a discard, or another
+ * photo chosen while the fetch was in flight, must not be resurrected or annotated.
+ */
+export function applyPreparedPhoto(
+  previous: ConsultationState,
+  sessionId: string,
+  prepared: string | null,
+): ConsultationState {
+  if (previous.phase !== 'ready' || previous.sessionId !== sessionId) return previous;
+  if (prepared === null) return { ...previous, photoNotice: PREPARED_PHOTO_FAILED_MESSAGE };
+  const next: ConsultationState = { ...previous, imageDataUrl: prepared };
+  delete next.photoNotice;
+  return next;
+}
+
+/** What tapping a Shade records, before the request goes out. */
+export interface ShadeTapState {
+  /** Always ``null``: the tap disarms whatever correction tool was armed. */
+  explicitTool: CorrectionTool | null;
+  render: RenderState;
+  assignments: Assignments;
+}
+
+/**
+ * What tapping a Shade means to the Consultation's state before the request goes out, as a pure
+ * function so the tap's meaning is testable without a DOM (docs/design-decisions.md §9d) — the
+ * same reasoning as `applyProgressEvent` above.
+ *
+ * Three things change, none of them reading another's new value:
+ *
+ * - **Every armed correction tool is disarmed (issue #49).** Tapping a Shade is the Dealer moving
+ *   on from correcting the walls to judging the paint. A tool left armed would hold the correction
+ *   surface over the arriving repaint — and the tool buttons are hidden while a render shows, so
+ *   the Dealer could not even disarm it except by tapping the photo. `overlayVisible` (walls.ts)
+ *   refuses to draw anything over a render regardless; this is what stops the *state* disagreeing
+ *   with the screen underneath it.
+ * - The assignment map is updated for the tapped Shade (accent.ts `nextAssignments`): every wall,
+ *   or just the selected one, with the others keeping the Shades they already have.
+ * - The render state marks the request (render.ts `applyRenderEvent`).
+ */
+export function beginShadeTap(
+  explicitTool: CorrectionTool | null,
+  render: RenderState,
+  assignments: Assignments,
+  target: PaintTarget,
+  planes: WallPlaneOverlay[],
+  shadeCode: string,
+): ShadeTapState {
+  return {
+    explicitTool: null,
+    render: applyRenderEvent(render, { type: 'requested', shadeCode }),
+    assignments: nextAssignments(assignments, target, shadeCode, planes),
+  };
+}
+
+/**
  * The Shade Code a restored snapshot repaints in.
  *
  * Undo and redo restore *state* — target and assignments — and then repaint through the normal
  * path. The render reducer pins its replies to the Shade Code of the request, and undo/redo are
- * not Shade taps, so the snapshot's own most recent code stands in: it is the Shade the restored
- * paint actually carries, and it keeps a stale reply from a superseded request from overwriting
- * the restored state (issue #50). An empty snapshot repaints nothing, so its code is never asked
- * for — the fallback only keeps the type honest.
+ * not Shade taps, so a code the restored paint carries stands in. Which one barely matters: the
+ * pin only has to tell this request's reply from a superseded request's, and a stale reply is for
+ * a different Shade than the one restored — so it is dropped. The code taken is the last in the
+ * assignment map's order, which is *not* necessarily the one tapped most recently (a targeted
+ * Shade on an already-painted wall keeps that wall's position), and nothing here relies on it
+ * being. An empty snapshot repaints nothing, so its code is never asked for — the fallback only
+ * keeps the type honest.
  */
 export function shadeCodeOf(snapshot: PaintSnapshot): string {
   const codes = Object.values(snapshot.assignments);
   return codes[codes.length - 1] ?? 'repaint';
 }
 
+/** What the screen has to do to show a restored snapshot (issue #50). */
+export type RestorePlan = 'original-photo' | 'repaint' | 'keep';
+
 /**
- * Whether a snapshot restores the original photo rather than a repaint, and the render state
- * should therefore be dropped instead of a (necessarily failing, `422 malformed_request`) empty
- * repaint requested (issue #50).
+ * What restoring `restore` over `now` means for what is on screen, for undo and redo alike.
+ *
+ * - **`original-photo`** when the restored paint carries no Shade: nothing is painted, so the
+ *   render state is dropped and the original photo returns, rather than an empty repaint being
+ *   requested (the service answers an empty assignment map with `422 malformed_request`). This holds
+ *   in *both* directions — redo can land on an empty snapshot too, after a wall choice made before
+ *   any Shade was undone and redone.
+ * - **`keep`** when only the wall choice differs: the Shades each wall carries are what the render
+ *   shows, so what is on screen is already right and a repaint would be a request for the same
+ *   picture.
+ * - **`repaint`** otherwise.
  */
-export function restoresOriginalPhoto(snapshot: PaintSnapshot): boolean {
-  return Object.keys(snapshot.assignments).length === 0;
+export function restorePlan(now: PaintSnapshot, restore: PaintSnapshot): RestorePlan {
+  const restored = Object.entries(restore.assignments);
+  if (restored.length === 0) return 'original-photo';
+  const current = now.assignments;
+  const unchanged =
+    restored.length === Object.keys(current).length &&
+    restored.every(([planeId, code]) => current[planeId] === code);
+  return unchanged ? 'keep' : 'repaint';
 }
 
 export function useConsultation(): Consultation {
@@ -274,6 +365,36 @@ export function useConsultation(): Consultation {
     );
   }, []);
 
+  // Once preparation is done, what is on screen becomes what was prepared (issue #49): the raw
+  // upload is only ever a placeholder, because an oriented phone photo is displayed rotated by
+  // Chromium — its EXIF tag honoured — while the prepared pixels already carry the orientation.
+  // Showing the raw upload after `done` would put the mattes and the repaint on a different
+  // rectangle than the one the Dealer sees. If the fetch fails, the placeholder stays, the
+  // fault is logged rather than swallowed (docs/conventions.md §5), and the Dealer is told on screen.
+  const showPreparedPhoto = useCallback(
+    async (sessionId: string) => {
+      let prepared: string | null = null;
+      try {
+        const result = await window.spectrapaint.preparedPhoto(sessionId);
+        if (result.status === 'ready') {
+          prepared = result.imageDataUrl;
+        } else {
+          console.error('[consultation] could not fetch the prepared photo:', result.message);
+        }
+      } catch (error) {
+        console.error('[consultation] could not fetch the prepared photo:', error);
+      }
+
+      setState((previous) => applyPreparedPhoto(previous, sessionId, prepared));
+
+      // The walls are fetched after the swap, so the overlay's pixel space (the mattes') is the one
+      // on screen — not the raw upload's. One request either way: the service waits for preparation
+      // rather than answering "not ready", so there is nothing to poll and nothing to retry.
+      void loadWalls(sessionId);
+    },
+    [loadWalls],
+  );
+
   const start = useCallback(async (): Promise<string | null> => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
@@ -297,9 +418,9 @@ export function useConsultation(): Consultation {
             if (event.phase === 'done') {
               unsubscribeRef.current?.();
               unsubscribeRef.current = null;
-              // The walls are known by the time preparation says done, so this is one request that
-              // resolves immediately rather than a wait the Dealer notices.
-              void loadWalls(sessionId);
+              // The prepared photo replaces the upload on screen, and the walls — known by the time
+              // preparation says done — are fetched once it is in place (issue #49).
+              void showPreparedPhoto(sessionId);
             } else if (event.phase === 'failed') {
               unsubscribeRef.current?.();
               unsubscribeRef.current = null;
@@ -327,7 +448,7 @@ export function useConsultation(): Consultation {
       });
       return null;
     }
-  }, [endSession, loadWalls]);
+  }, [endSession, showPreparedPhoto]);
 
   const discard = useCallback(() => {
     unsubscribeRef.current?.();
@@ -435,13 +556,25 @@ export function useConsultation(): Consultation {
       // back the wall that was chosen too, or the next tap would land somewhere else.
       setHistory((previous) => record(previous, { target, assignments }));
 
-      // What this tap means depends on whether a wall is selected: every wall, or that one, with the
-      // others keeping the Shades they already have.
-      const updated = nextAssignments(assignments, target, shadeCode, walls.planes);
-      setAssignments(updated);
-      void repaint(updated, shadeCode);
+      // What this tap means — the armed tool disarmed (issue #49), the assignments updated, the
+      // render marked — is computed before the request goes out, so the request and the state it
+      // records cannot disagree. `repaint` then makes the request.
+      const tap = beginShadeTap(explicitTool, render, assignments, target, walls.planes, shadeCode);
+      setExplicitTool(tap.explicitTool);
+      setRender(tap.render);
+      setAssignments(tap.assignments);
+      void repaint(tap.assignments, shadeCode);
     },
-    [state.phase, state.sessionId, assignments, target, walls.planes, repaint],
+    [
+      state.phase,
+      state.sessionId,
+      explicitTool,
+      render,
+      assignments,
+      target,
+      walls.planes,
+      repaint,
+    ],
   );
 
   const toggleBeforeAfter = useCallback(() => {
@@ -467,6 +600,31 @@ export function useConsultation(): Consultation {
   );
 
   /**
+   * Put a snapshot back on screen, for undo and redo alike (issue #50). The state is restored
+   * first; what has to be *asked of the service* is `restorePlan`'s call — a repaint only when the
+   * Shades on the walls changed, never replayed from a stored image, which is how a snapshot naming
+   * a live plane stays honest.
+   */
+  const restoreSnapshot = useCallback(
+    (now: PaintSnapshot, restore: PaintSnapshot) => {
+      setTarget(restore.target);
+      setAssignments(restore.assignments);
+      switch (restorePlan(now, restore)) {
+        case 'original-photo':
+          // Nothing painted: back to the photo the Customer's room was judged against.
+          setRender(INITIAL_RENDER_STATE);
+          break;
+        case 'repaint':
+          void repaint(restore.assignments, shadeCodeOf(restore));
+          break;
+        case 'keep':
+          break;
+      }
+    },
+    [repaint],
+  );
+
+  /**
    * Undo the last paint change — a Shade or a wall choice — within this open Consultation
    * (issue #50). Restoring a snapshot with empty `assignments` is the Consultation's own start:
    * nothing painted yet, so the render state is dropped and the original photo returns to the
@@ -481,15 +639,8 @@ export function useConsultation(): Consultation {
     if (!step) return;
 
     setHistory(step.history);
-    setTarget(step.restore.target);
-    setAssignments(step.restore.assignments);
-    if (restoresOriginalPhoto(step.restore)) {
-      // Nothing painted: back to the photo the Customer's room was judged against.
-      setRender(INITIAL_RENDER_STATE);
-    } else {
-      void repaint(step.restore.assignments, shadeCodeOf(step.restore));
-    }
-  }, [state.phase, state.sessionId, target, assignments, history, repaint]);
+    restoreSnapshot(now, step.restore);
+  }, [state.phase, state.sessionId, target, assignments, history, restoreSnapshot]);
 
   /** Redo the last undone paint change (issue #50) — the mirror of undoPaint. */
   const redoPaint = useCallback(() => {
@@ -499,12 +650,8 @@ export function useConsultation(): Consultation {
     if (!step) return;
 
     setHistory(step.history);
-    setTarget(step.restore.target);
-    setAssignments(step.restore.assignments);
-    // A snapshot in `future` always has assignments — only undoing back to the very start can
-    // produce an empty one, and redo from there is a no-op (nothing was ever in future).
-    void repaint(step.restore.assignments, shadeCodeOf(step.restore));
-  }, [state.phase, state.sessionId, target, assignments, history, repaint]);
+    restoreSnapshot(now, step.restore);
+  }, [state.phase, state.sessionId, target, assignments, history, restoreSnapshot]);
 
   const toggleRenderMode = useCallback(() => {
     const next: RenderMode = renderMode === 'realistic' ? 'true_colour' : 'realistic';

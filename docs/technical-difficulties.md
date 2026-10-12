@@ -682,9 +682,72 @@ measured, and rejected on cost in implementation decision 49.
 
 ---
 
-## 27. Issue #50 wanted hook-level tests, and the repo has no DOM/React-testing packages
+## 27. The frame fitted the tap layer but not the stage, and a greyscale matte has no alpha to read
 
-**Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-02 · **Status:** resolved by factoring, not by new dependencies
+**Ticket:** #49 · **Contributor:** Prasad K (hit by an agent) · **Date:** 2026-10-03 · **Status:**
+resolved
+
+Follow-up to [difficulty 23](#23-the-wall-overlay-never-actually-aligned-with-the-photo--consultationpicture-had-no-positioning-context).
+
+**What happened:** two defects that only a browser could see, both of which the whole test suite
+called green.
+
+The first is a direct consequence of fixing #23. The frame was given an inline `aspect-ratio` from
+the photo's own dimensions and `height: auto`, inside a flex column stage — and nothing bounded its
+*width*. A photo taller than the free space therefore made the frame grow past the stage, which
+clips it: a 3:4 portrait lost roughly half itself, a 4:3 lost its top and bottom. Nothing about
+#23's check could catch this, because #23's check measured the frame against the tap layer, and both
+were wrong together — they agreed perfectly on a box that was simply too tall. An alignment check
+proves two elements match; it says nothing about whether the thing they agree on fits.
+
+The second was in the replacement for the wash (see decision #51): the chosen wall is now marked by
+an outline, and `matteOutline` decided which pixels belonged to the wall by thresholding the
+**alpha** byte of the matte's `ImageData`. The Alpha Matte is served as an 8-bit mode-L greyscale
+PNG (`planes.py` `_encode_matte`), so a decoded matte carries coverage in R, G and B and is **alpha
+opaque on every pixel**. Thresholding alpha read 255 everywhere, saw a single wall covering the
+entire photograph, and outlined the photo's frame — a rectangle around the room — instead of the
+wall's edge. The outline would have drawn something, it would have been perfectly aligned, and it
+would have been completely wrong.
+
+**Why it was hard:** the first defect is invisible to any test that compares elements to each other,
+and the unit tests for `matteOutline` passed because their synthetic matte was built to match the
+implementation's assumption rather than the service's actual output. Difficulty 11 records the same
+class of bug arriving from the other direction — a CSS mask on a greyscale PNG failing *open* and
+brightening the whole photo. A greyscale PNG is the recurring hazard in this codebase: two features
+have now read the wrong channel off one, and each looked correct in isolation.
+
+Neither bug is reachable by seam 1 or seam 2 (conventions.md §6) — this is browser layout and image
+decoding. So the check had to be built rather than found: a temporary harness mounting the real
+`ConsultationSurface` and `useConsultation` against a scripted `window.spectrapaint`, driving the
+whole Dealer flow in-page and asserting real `getBoundingClientRect()` geometry, run across
+1280×720 and 1920×1080 × photo ratios 0.5, 0.75, 1.33 and 1.78.
+
+**Where it stands:** resolved. The stage's free space is now a size container
+(`.consultation__frame-slot`) and the frame is the largest box of the photo's ratio that fits it —
+`width: min(100cqw, calc(100cqh * var(--photo-ratio, 1)))`, height derived — so it is bounded on both
+axes and #23's invariant still holds. All 8 cells measured the frame inside the slot with overlays,
+chips and tap layer pixel-identical to it: portrait ratios height-limited (272×544 at ratio 0.5),
+landscape ratios width-limited (821×461 at ratio 1.78), nothing clipped at any size. `matteOutline`
+now thresholds the **grey level** at 128, the halfway point of the coverage range the service
+encodes, matching the `mask-mode: luminance` the wash has always used on the same bytes.
+
+The harness was first run once and deleted. Review then asked for the layout check to stay, so it is
+now `apps/ui/src/consultation/layout.test.ts` with `layoutHarness.tsx`: the same real components over
+a scripted bridge, in headless Chromium, part of `npm run check` (the one named exception in
+design-decisions.md §9d). It was confirmed to fail against the old width-only frame rule (7 of 12
+cases), and a second case — an EXIF-rotated photo whose placeholder is landscape and whose prepared
+photo is portrait — confirmed to fail without the guard that keeps the walls off the screen until the
+frame has the new image's ratio. Also kept: the four `walls.test.ts` cases that fail against the
+alpha-thresholding version — confirmed by re-introducing it — plus the measurements above. Note the
+original harness also had its own bug of the same family, worth recording
+because it is easy to repeat: it read `window.__consultation` into a local before each click, and
+`useConsultation` returns a fresh object every render, so every assertion after a click was reading
+the answer to the previous question. **A snapshot taken before a state change reports the old state,
+however carefully it was captured.**
+
+## 28. Issue #50 wanted hook-level tests, and the repo has no DOM/React-testing packages
+
+**Ticket:** #50 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-02 · **Status:** resolved by factoring, then by the browser harness
 
 **What happened:** the issue's testing plan asks for **hook-level** coverage — "apply Shade A then
 Shade B, then undo; `assignments` equal the post-A snapshot and exactly one render request is made; a
@@ -699,35 +762,102 @@ ticket's diff — exactly what isolated fresh contexts are not supposed to do to
 `docs/conventions.md` §6 restricts the vitest suite to *pure functions* anyway; a hook test needs a
 DOM, which the conventions file explicitly routes to seam 1.
 
-**Where it stands:** resolved the way `applyRenderEvent` and `applyProgressEvent` were resolved
-before it: every decision the hook makes during undo/redo was factored into pure functions —
-`history.ts` (`record`/`undo`/`redo`, the cap, the future-clearing), `shadeCodeOf` (what a restored
-repaint pins its reply to) and `restoresOriginalPhoto` (undo-to-start drops the render state rather
-than requesting a `422` empty repaint) — and `useConsultation.test.ts` states the issue's exact
-scenarios against those. The sequences themselves (the state updates between steps) are the thin
-glue the existing suites also leave untested; what a silent regression would corrupt — snapshot
-correctness, the cap, empty-snapshot handling, one-repaint-per-undo — is covered. A future ticket
-that introduces `@testing-library/react` for the whole app can restate these as true hook tests
-without changing the pure layer.
+**Where it stands:** resolved twice over. First the way `applyRenderEvent` and `applyProgressEvent`
+were resolved before it: every decision the hook makes during undo/redo was factored into pure
+functions — `history.ts` (`record`/`undo`/`redo`, the cap, the future-clearing), `shadeCodeOf` (what
+a restored repaint pins its reply to) and `restorePlan` (original photo, repaint, or keep what is on
+screen) — and `useConsultation.test.ts` states the scenarios against those.
 
----
+That left the sequences themselves untested, and review found a bug in exactly that glue: choosing a
+wall before any Shade, then Undo, then Redo, asked the service to paint nothing and showed a failed
+repaint — `redoPaint` lacked the empty-snapshot guard `undoPaint` had, and the pure layer could not
+see it. By then the repo had a real-browser harness (design-decisions.md §9d, technical difficulty
+#27), and it renders the real `useConsultation`. So `undo.test.ts` runs the issue's scenarios as true
+hook tests: two Shades then Undo leaves the post-A paint with exactly one more render request; a
+split clears the history; Undo in the Catalogue search box acts on the text; and the wall-choice
+round trip makes no request at all. The scripted bridge answers an empty paint the way the service
+does (`malformed_request`), so that bug fails the test rather than hiding behind a lenient mock.
+Confirmed by reintroducing it: two cases fail. One trap worth recording: a test that fires a menu
+command straight after a state change races React's commit and hits the previous render's handler —
+tests wait for the published `canUndo` first, which is what a real menu click is ordered after.
 
-## 29. Grouped Base Colour reuse turned the accent blue plane black
+## 29. The matte's edges were the semantic grid's edges, and every layer above it preserved them faithfully
 
-**Ticket:** #52 · **Contributor:** Chauhan Anamika Abhimanu (hit by an agent) · **Date:** 2026-10-11 ·
-**Status:** resolved
+**What it looked like.** Square, stair-stepped paint edges and square holes on pages 2, 4, 5, 6 and 7
+of the bug report's PDF, with 75–84% of razor edges sitting exactly on 128-grid lines. A Door's eye
+reads it as an artefact of image processing; what it actually was is arithmetic — a value that was
+quantised early and then carefully preserved by four layers that had no reason to suspect it.
 
-**What happened:** `tests/api/test_renders.py::test_two_wall_planes_carry_different_shades_in_one_request`
-failed with right pixel `(0, 0, 0)`: the blue accent plane rendered black. `render_many` caches one
-Light Map per Base Colour group using the first plane's matte; the new matte-weighted stain blurs
-returned 0 where coverage was 0 (the other plane), and with `_STAIN_CHROMA_SUPPRESSION=1.0` the
-chroma became 0 there.
+**The mechanism, in four parts.**
 
-**Why it was hard:** without stain suppression the Light Map was valid everywhere (plain division),
-so reuse across grouped planes was safe and nothing documented the assumption. Matte weighting
-introduced a valid-only-inside-matte Light Map silently; the failure looked like a grouping or
-Shade-decode bug, not a blur-coverage bug.
+1. SegFormer returns logits at stride 4. The pipeline argmaxed them on that 128×128 grid and
+   upsampled the resulting **labels** nearest-neighbour, so every boundary became a staircase of
+   10-px steps. `semantic.py`'s docstring called this "expected" and assigned it to SAM 2 and the
+   refinement pass.
+2. That claim was checkable and did not hold. On the photographs in the bug report, SAM 2's
+   single-mask logits are within ±2 of a constant on 77–100% of pixels and its `iou_scores` are
+   0.00–0.04 (on the six labelled fixtures the score runs 0.043–0.841 — the range
+   `REFINER_TRUST_FLOOR` was measured against) — the refiner barely shapes the matte on those
+   photographs, so the semantic grid is what actually sets its edge.
+3. The grid masks were then written into the matte as hard 0/1, and the exclusion was **re-imposed
+   after softening** (`matte.py`), which overwrote every soft edge the softening had just produced.
+4. The softening added squares of its own: 3×3 rank-filter morphology, and a three-zone
+   `np.where` that put a full 1.0 step where the band met the core and a full 0.0 step where it met
+   the exterior.
 
-**Where it stands:** resolved in `_matte_weighted_blur_3`: where blurred weight has no coverage the
-original value is kept, so a Light Map stays valid for the whole group. See implementation-decision
-53.
+Each layer is individually defensible. That is the difficulty: nothing here looks like a mistake in
+isolation, and every one of them preserved the artefact faithfully enough that fixing only one
+produced no visible change.
+
+**Deciding at photo resolution instead.** The fix is to upsample the *probabilities* bilinearly and
+take the argmax at the photo's own resolution, so the boundary follows a smooth contour. An average
+of two probabilities is still a probability; an average of two class indices is a class that does not
+exist.
+
+**Where it stood:** the first attempt argmaxed the five relevant planes outright, and the models lane
+answered in the negative three times over — each time with a number rather than an opinion, which is
+what made the next attempt a different one rather than a larger one.
+
+| gate | what the lane said |
+| --- | --- |
+| flat five-way argmax | `corner-with-clothesline` leakage 0.338 → 0.391, `windows-with-curtains` shadowed-wall recall −0.034, and the Add tool could no longer grow a plane at a wall pixel the matte had missed |
+| gate on `1 − Σ relevant` | shadowed-wall recall back to 0.769 — 145 classes collectively own the softmax tail, so a shadowed wall at 0.3 is beaten 145 times over by a total of 0.7, comes back *unclaimed*, and stops being exempt from the confidence floor |
+| gate on the best *single* other class, at photo resolution | two failures, and for a reason worth keeping: it smooths the wall↔unclaimed boundary, which nothing quantises anyway, while flipping a few wall→exclusion pixels that the grid decision had called wall — and exclusion is absolute, so those become unpaintable by a correction tap |
+| coarse claim, fine winner (kept) | 38 passed, no regression |
+
+The last row is not a compromise; it is the documented behaviour from the start. A pixel of sofa is
+*unclaimed* — the module has always said so — and argmaxing five planes outright forces every pixel
+of every unlisted class onto the nearest of them, which is the first row. The residual grid-shaped
+boundary is the claimed↔unclaimed one, and it is left on the grid on purpose, because an unclaimed
+pixel is neither restored, nor zeroed, nor deleted: it keeps SAM 2's own soft value.
+
+**Two ways the obvious fix was wrong in its own turn, both caught by measuring rather than reading.**
+
+- Round morphology is meant to stop a band's square corners, and `erode_round` first shipped erasing
+  by *nothing*. Pillow's `GaussianBlur(radius)` takes the radius as the standard deviation, so a
+  half-plane blurs to exactly 0.5 on its own edge and thresholding there removes no pixels at all. It
+  was also written with the comparison inverted, and it survived a full models-lane run: on straight
+  edges — which is most of what a room photograph contains — "erodes by nearly zero" is
+  indistinguishable from "round erosion barely matters". It cost 0.031 of `windows-with-curtains`'
+  shadowed-wall recall. The threshold is now `Φ(1)`, chosen because it is the level one sigma inside a
+  straight edge, which is the only definition that makes it match `erode`.
+- A disc kernel is blind to small features in a way a square is not. Blurring with sigma 26 gives an
+  **isolated** mask pixel 10px away a weight of about 1e-4, which rounds to zero in 8-bit and
+  disappears. `soften_boundary`'s outer band is therefore bounded with square morphology — which is
+  also the honest shape, because the thing being bounded is a guided filter's square window — while
+  the core uses the round version, where the corners are what matters. Switching that one call deleted
+  the Add tool's correction on `patterned-wallpaper-with-curtain` outright.
+
+**And one place the issue's own prescription did not survive contact.** `REFINER_TRUST_FLOOR` was
+specified as 0.3, on the reasoning that SAM 2's `iou_scores` are low everywhere. They are not: they
+run from 0.043 to 0.841 across the six fixtures, so 0.3 is a line through the middle of the range
+rather than a floor, and it lands on the one fixture where the fallback is *worse*. Measured both ways
+on every labelled fixture, the fallback wins on four of five and loses on one — so the score does not
+predict which matte is better and no threshold on it separates them. What it can do is catch a
+degenerate decode, which is where 0.1 sits.
+
+**Where it stands:** resolved. The matte's boundary is decided at photo resolution from upsampled
+probabilities, the exclusion fades out instead of being re-imposed, the band blends continuously
+instead of stepping, and the seam between two planes takes the union rather than the higher claim. The
+`synthetic diagonal` unit test measures `edge_on_grid_fraction` on the matte and finds **no razor edge
+at all** along the boundary, against a nearest-neighbour control on the same input that scores 0.70.

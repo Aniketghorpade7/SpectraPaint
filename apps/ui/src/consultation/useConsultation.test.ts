@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ProgressStreamEvent } from '../../../desktop/src/bridge-types';
-import { ALL_WALLS, type PaintTarget } from './accent';
-import { type PaintSnapshot, INITIAL_PAINT_HISTORY, redo, record, undo } from './history';
+import type {
+  CorrectionTool,
+  ProgressStreamEvent,
+  WallPlaneOverlay,
+} from '../../../desktop/src/bridge-types';
+import { ALL_WALLS, type Assignments, type PaintTarget } from './accent';
+import type { PaintSnapshot } from './history';
+import { INITIAL_RENDER_STATE, type RenderState } from './render';
 import {
+  applyPreparedPhoto,
   applyProgressEvent,
-  restoresOriginalPhoto,
+  beginShadeTap,
+  restorePlan,
   shadeCodeOf,
   type ConsultationState,
 } from './useConsultation';
@@ -71,74 +78,132 @@ describe('applyProgressEvent', () => {
   });
 });
 
-/**
- * Issue #50's hook-level behaviour, minus the DOM: the hook's decisions are factored into pure
- * functions (`shadeCodeOf`, `restoresOriginalPhoto`) plus the pure `history` module, so the
- * sequences the hook performs are stated here without mounting React — the same reasoning that
- * put `applyRenderEvent` and `applyProgressEvent` outside the hook.
- */
+describe('beginShadeTap', () => {
+  const plane: WallPlaneOverlay = {
+    planeId: 'wall_plane_1',
+    surface: 'wall',
+    coverage: 0.4,
+    photoWidth: 640,
+    photoHeight: 480,
+    bounds: { left: 0, top: 0, right: 640, bottom: 480 },
+    matteDataUrl: 'data:image/png;base64,AAAA',
+  };
+  const otherPlane: WallPlaneOverlay = {
+    ...plane,
+    planeId: 'wall_plane_2',
+    bounds: { left: 320, top: 0, right: 640, bottom: 480 },
+  };
+  const planes = [plane, otherPlane];
 
-twoShadesThenUndoAt('all walls', ALL_WALLS);
+  function tap(
+    explicitTool: CorrectionTool | null,
+    render: RenderState = INITIAL_RENDER_STATE,
+    assignments: Assignments = {},
+    target: PaintTarget = ALL_WALLS,
+  ) {
+    return beginShadeTap(explicitTool, render, assignments, target, planes, 'BLU001');
+  }
 
-twoShadesThenUndoAt('one wall', { kind: 'plane', planeId: 'plane_1' });
-
-function twoShadesThenUndoAt(name: string, target: PaintTarget): void {
-  describe(`two Shades applied, then undo (${name})`, () => {
-    const before: PaintSnapshot = { target, assignments: {} };
-    const postA: PaintSnapshot = { target, assignments: { plane_1: 'AP-2140' } };
-    const postB: PaintSnapshot = { target, assignments: { plane_1: 'AP-2150' } };
-
-    it('restores the post-A snapshot, and the repaint carries the restored Shade', () => {
-      // applyShade A records what the paint was before the tap (nothing painted yet);
-      // applyShade B records post-A. Now is post-B.
-      let history = record(INITIAL_PAINT_HISTORY, before);
-      history = record(history, postA);
-      const step = undo(history, postB);
-      expect(step).not.toBeNull();
-      expect(step?.restore).toEqual(postA);
-      // Exactly one repaint is requested, for the restored state — with the Shade the restored
-      // paint actually carries, which is what the render reducer pins the reply to.
-      expect(shadeCodeOf(step!.restore)).toBe('AP-2140');
-    });
-
-    it('redo puts shade B back, and can then go no further', () => {
-      let history = record(INITIAL_PAINT_HISTORY, before);
-      history = record(history, postA);
-      const undone = undo(history, postB)!;
-      const redone = redo(undone.history, postB);
-      expect(redone?.restore).toEqual(postB);
-      expect(shadeCodeOf(redone!.restore)).toBe('AP-2150');
-      expect(redo(redone!.history, redone!.restore)).toBeNull();
-    });
-  });
-}
-
-describe('undoing to the Consultation start (issue #50)', () => {
-  it('returns to the original photo instead of requesting an empty repaint', () => {
-    const empty: PaintSnapshot = { target: ALL_WALLS, assignments: {} };
-    const history = record(INITIAL_PAINT_HISTORY, empty);
-    const step = undo(history, { target: ALL_WALLS, assignments: { plane_1: 'AP-2140' } });
-
-    expect(restoresOriginalPhoto(step!.restore)).toBe(true);
-    // An empty snapshot must never reach the render request: the service answers an empty
-    // assignment map with `422 malformed_request`.
-    expect(step!.restore.assignments).toEqual({});
+  it('disarms every armed correction tool — tapping a Shade ends correcting (issue #49)', () => {
+    for (const tool of ['add', 'add-ceiling', 'split', 'merge'] as const) {
+      expect(tap(tool).explicitTool).toBeNull();
+    }
+    expect(tap(null).explicitTool).toBeNull();
   });
 
-  it('keeps the repaint when the restored snapshot still carries Shades', () => {
-    const painted: PaintSnapshot = { target: ALL_WALLS, assignments: { plane_1: 'AP-2140' } };
-    expect(restoresOriginalPhoto(painted)).toBe(false);
+  it('marks the render requested for the tapped Shade', () => {
+    const next = tap(null);
+
+    expect(next.render.phase).toBe('rendering');
+    expect(next.render.shadeCode).toBe('BLU001');
+  });
+
+  it('paints every wall with the tapped Shade when no wall is selected', () => {
+    const next = tap(null);
+
+    expect(next.assignments).toEqual({ wall_plane_1: 'BLU001', wall_plane_2: 'BLU001' });
+  });
+
+  it('keeps the other walls’ Shades when one wall is selected', () => {
+    const next = tap(
+      null,
+      INITIAL_RENDER_STATE,
+      { wall_plane_2: 'RED002' },
+      {
+        kind: 'plane',
+        planeId: 'wall_plane_1',
+      },
+    );
+
+    expect(next.assignments).toEqual({ wall_plane_2: 'RED002', wall_plane_1: 'BLU001' });
   });
 });
 
-describe('a correction clears the history (issue #50)', () => {
-  it('leaves nothing to undo, so canUndo is false with no stale plane to replay onto', () => {
-    // What correctWallsAt's success path does: setHistory(INITIAL_PAINT_HISTORY) drops every
-    // snapshot, because a split or merge can retire the plane id a snapshot names.
-    const retired = { ...INITIAL_PAINT_HISTORY };
-    expect(retired.past).toHaveLength(0);
-    expect(retired.future).toHaveLength(0);
-    expect(undo(retired, { target: ALL_WALLS, assignments: { plane_1: 'AP-2140' } })).toBeNull();
-    expect(redo(retired, { target: ALL_WALLS, assignments: { plane_1: 'AP-2140' } })).toBeNull();
+describe('applyPreparedPhoto', () => {
+  const ready: ConsultationState = {
+    phase: 'ready',
+    sessionId: 'session-1',
+    imageDataUrl: 'data:image/jpeg;base64,RAW',
+  };
+
+  it('swaps the raw upload for the prepared photo (issue #49)', () => {
+    const next = applyPreparedPhoto(ready, 'session-1', 'data:image/png;base64,PREPARED');
+    expect(next.imageDataUrl).toBe('data:image/png;base64,PREPARED');
+    expect(next.photoNotice).toBeUndefined();
+  });
+
+  it('keeps the placeholder and tells the Dealer when the prepared photo could not be fetched', () => {
+    const next = applyPreparedPhoto(ready, 'session-1', null);
+    expect(next.imageDataUrl).toBe('data:image/jpeg;base64,RAW');
+    expect(next.photoNotice).toBeTruthy();
+    // Plain language: no technique, no route, no status code (docs/conventions.md §5).
+    expect(next.photoNotice).not.toMatch(/exif|png|http|\d{3}/i);
+  });
+
+  it('clears an earlier notice once the prepared photo does arrive', () => {
+    const failed = applyPreparedPhoto(ready, 'session-1', null);
+    const next = applyPreparedPhoto(failed, 'session-1', 'data:image/png;base64,PREPARED');
+    expect(next.photoNotice).toBeUndefined();
+  });
+
+  it('leaves another session, or a discarded one, alone', () => {
+    expect(applyPreparedPhoto(ready, 'session-2', 'data:image/png;base64,X')).toBe(ready);
+    expect(applyPreparedPhoto(ready, 'session-2', null)).toBe(ready);
+    const idle: ConsultationState = { phase: 'idle' };
+    expect(applyPreparedPhoto(idle, 'session-1', 'data:image/png;base64,X')).toBe(idle);
+  });
+});
+
+describe('shadeCodeOf', () => {
+  it('names a Shade the restored paint actually carries', () => {
+    expect(shadeCodeOf({ target: ALL_WALLS, assignments: { plane_1: 'AP-2140' } })).toBe('AP-2140');
+  });
+});
+
+describe('restorePlan (issue #50)', () => {
+  const painted = (code: string, target: PaintTarget = ALL_WALLS): PaintSnapshot => ({
+    target,
+    assignments: { wall_plane_1: code, wall_plane_2: code },
+  });
+  const empty = (target: PaintTarget = ALL_WALLS): PaintSnapshot => ({ target, assignments: {} });
+  const chosen: PaintTarget = { kind: 'plane', planeId: 'wall_plane_1' };
+
+  it('returns to the original photo when the restored paint carries no Shade', () => {
+    expect(restorePlan(painted('AP-2140'), empty())).toBe('original-photo');
+  });
+
+  it('does so on redo too — a wall chosen before any Shade, undone and redone, lands on an empty paint', () => {
+    // The state undo left behind is {chosen, no Shades}; redo restores exactly that. An empty
+    // repaint would fail with `422 malformed_request`, so it must be the original photo instead.
+    expect(restorePlan(empty(), empty(chosen))).toBe('original-photo');
+  });
+
+  it('repaints when the Shades on the walls differ', () => {
+    expect(restorePlan(painted('AP-2150'), painted('AP-2140'))).toBe('repaint');
+    expect(restorePlan(empty(), painted('AP-2140'))).toBe('repaint');
+  });
+
+  it('keeps what is on screen when only the wall choice differs — no request for the same picture', () => {
+    expect(restorePlan(painted('AP-2140', chosen), painted('AP-2140'))).toBe('keep');
   });
 });

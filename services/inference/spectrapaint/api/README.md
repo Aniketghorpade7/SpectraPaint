@@ -3,6 +3,7 @@
     GET    /health                                -> { status }
     POST   /sessions              (photo upload) -> { session_id }
     GET    /sessions/{id}/events                  (progress stream)
+    GET    /sessions/{id}/photo/png               (the prepared photo, before any render) (issue #49)
     GET    /sessions/{id}/planes                  -> { planes, note, quality_note }
     POST   /sessions/{id}/planes  { x, y }         (Add a missed wall)
     POST   /sessions/{id}/planes/split { x, y }    (Split a merged corner)

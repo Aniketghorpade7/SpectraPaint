@@ -26,7 +26,7 @@
 
 import type { MenuItemConstructorOptions } from 'electron';
 
-export type MenuCommand = 'undo' | 'redo';
+import type { MenuCommand } from './bridge-types';
 
 /** The ids of the two items whose enabled state the renderer may drive (issue #50). */
 export const MENU_UNDO_ITEM_ID = 'undo';

@@ -28,6 +28,12 @@ Concretely:
   against whatever is next to it
 - **Pick one appearance and stay there.** No light/dark toggle in V1 — a changing surround changes
   perceived colour, which defeats the point
+- **Selection is shown by an outline or a chip, never by a wash on the wall being judged.** The
+  wash is for *all* the walls equally, as a faint "here is what was found". The moment one of them
+  gets a stronger mark of its own, that wall is the one the Customer is judging and the mark
+  corrupts its colour — a white selection mark made the chosen wall paler than its neighbours, so
+  the Dealer picked a Shade against a colour that was never on the wall. Use a neutral grey line
+  along the surface's own edge, with a contrasting halo so it reads on light and dark alike.
 
 The only saturated colour on screen should be **the paint**, and the Shade swatches.
 

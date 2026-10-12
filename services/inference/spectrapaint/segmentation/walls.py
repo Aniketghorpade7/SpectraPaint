@@ -132,8 +132,8 @@ def planes_from(
             "no point sits far enough inside the wall region to prompt the refiner with"
         )
 
-    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
-    alpha = wall_alpha(photo_u8, regions, refined)
+    refined, iou_score = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    alpha = wall_alpha(photo_u8, regions, refined, iou_score)
 
     # Single-plane guard: the matte as a whole must still cover enough.
     single = WallPlane(plane_id=FIRST_WALL_PLANE_ID, alpha=alpha)
@@ -226,8 +226,8 @@ def ceiling_from(
     prompts = prompts_for_ceiling(regions, graphs.refiner_decoder.config)
     if prompts.positive_count == 0:
         return None
-    refined = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
-    alpha = ceiling_alpha(photo_u8, regions, refined)
+    refined, iou_score = decode_alpha(graphs, features, prompts, photo_u8.shape[:2])
+    alpha = ceiling_alpha(photo_u8, regions, refined, iou_score)
     candidate = WallPlane(plane_id=CEILING_PLANE_ID, alpha=alpha, surface="ceiling")
     if candidate.coverage < MINIMUM_CEILING_FRACTION:
         return None
