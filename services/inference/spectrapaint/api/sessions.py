@@ -90,6 +90,12 @@ class SessionRegistry:
         # (issue #49). The pixels never change after preparation — corrections only replace Wall
         # Planes — so the one encode serves the photo route and the auto-save alike.
         self._photo_pngs: dict[str, bytes] = {}
+        # The render preparation (grouped Base Colours, Light Maps, light tint) per live
+        # session, keyed by the fingerprint of the plane set it was built from (issue #52
+        # review 1). Estimating bases and deriving Light Maps costs seconds on a real
+        # photo; a Shade tap must never pay it again. A correction replaces the planes,
+        # so the fingerprint stops matching and the next tap rebuilds exactly once.
+        self._render_preps: dict[str, tuple[tuple, object]] = {}
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
@@ -134,6 +140,39 @@ class SessionRegistry:
             self._photo_pngs[session_id] = encoded
         return encoded
 
+    def render_preparation(
+        self,
+        session_id: str,
+        photo: PreparedPhoto,
+        planes: list[tuple[str, np.ndarray, str]],
+    ) -> object:
+        """The session's render preparation for these planes, built once and reused.
+
+        ``planes`` is ``(plane_id, alpha, surface)`` in the request's order. The
+        fingerprint covers ids, surfaces, shapes and matte bytes, so a correction
+        (or a different plane subset, as an Accent Wall request uses) rebuilds;
+        an identical repeat tap reuses. Returns
+        :class:`spectrapaint.render.engine.RenderPreparation`. Imported lazily so
+        this module never depends on render/ at import time (conventions §3
+        keeps the maths in render/).
+        """
+        from spectrapaint.render.engine import render_preparation_of
+
+        fingerprint = tuple(
+            (plane_id, surface, alpha.shape, hash(np.ascontiguousarray(alpha).tobytes()))
+            for plane_id, alpha, surface in planes
+        )
+        cached = self._render_preps.get(session_id)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        preparation = render_preparation_of(
+            photo.linear,
+            [np.asarray(alpha) for _, alpha, _ in planes],
+            [surface for _, _, surface in planes],
+        )
+        self._render_preps[session_id] = (fingerprint, preparation)
+        return preparation
+
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
         """Store what preparation produced, once per consultation.
 
@@ -173,6 +212,7 @@ class SessionRegistry:
         self._consultations.pop(session_id, None)
         self._originals.pop(session_id, None)
         self._photo_pngs.pop(session_id, None)
+        self._render_preps.pop(session_id, None)
         return True
 
 

@@ -365,3 +365,42 @@ def test_the_contract_is_exactly_the_documented_surface(client: TestClient) -> N
             actual.add((route.path, frozenset(methods - {"HEAD"})))
 
     assert actual == expected
+
+
+def test_the_render_preparation_is_cached_per_session_per_plane_set() -> None:
+    """Review 1: repeat Shade taps reuse the once-per-photo preparation.
+
+    The registry builds the render preparation (grouped bases, Light Maps,
+    tint) on the first tap with a plane set and returns the identical object
+    on a repeat tap; changed planes (a correction) rebuild. Pinned by object
+    identity rather than milliseconds, so a future change that recomputes per
+    tap fails here instead of silently slowing every tap 4×.
+    """
+    import numpy as np
+
+    from spectrapaint.api.preparation import PreparedPhoto
+
+    registry = sessions.SessionRegistry(lambda contents: [])
+    linear = np.full((24, 32, 3), 0.5, dtype=np.float32)
+    srgb = np.full((24, 32, 3), 128, dtype=np.uint8)
+    alpha = np.ones((24, 32, 1), dtype=np.float32)
+    photo = PreparedPhoto(linear=linear, srgb=srgb, planes=(), note=None)
+
+    first = registry.render_preparation("s1", photo, [("wall-1", alpha, "wall")])
+    second = registry.render_preparation("s1", photo, [("wall-1", alpha, "wall")])
+    assert second is first
+
+    moved = alpha.copy()
+    moved[0, 0, 0] = 0.0  # a correction's new matte: same id, different pixels
+    third = registry.render_preparation("s1", photo, [("wall-1", moved, "wall")])
+    assert third is not first
+
+    other_session = registry.render_preparation("s2", photo, [("wall-1", alpha, "wall")])
+    assert other_session is not first
+
+    # Ending a live session evicts its cache: a later tap rebuilds, never reads
+    # a deleted session's preparation.
+    live = registry.create(b"not-a-photo-but-create-does-not-decode")
+    live_first = registry.render_preparation(live, photo, [("wall-1", alpha, "wall")])
+    assert registry.delete(live) is True
+    assert registry.render_preparation(live, photo, [("wall-1", alpha, "wall")]) is not live_first

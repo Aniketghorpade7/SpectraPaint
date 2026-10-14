@@ -321,3 +321,24 @@ def test_an_accent_wall_leaves_no_dark_seam_between_the_planes(
         f"a pixel across the join is darker than both walls ({min(across):.1f} against "
         f"{floor:.1f}) — the planes are compositing twice"
     )
+
+
+def test_a_repeat_tap_returns_the_same_bytes_from_the_cached_preparation(
+    client: TestClient,
+) -> None:
+    """Review 1, end to end: the second identical tap reuses the session cache.
+
+    Two taps with the same assignments must return byte-identical PNGs — the
+    cached Light Map path renders deterministically — which fails if a tap
+    ever recomputes (or skips) the preparation. The timing proof lives in
+    tests/render/test_issue52.py; this pins the contract-level behaviour.
+    """
+
+    session_id = upload(client, png_of(NEUTRAL_ROOM_SRGB))
+
+    first = render(client, session_id, shade_code="PS-1001")
+    second = render(client, session_id, shade_code="PS-1001")
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.content == first.content

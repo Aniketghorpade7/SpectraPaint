@@ -110,6 +110,9 @@ def test_the_night_fixture_repainted_pale_degrades_gracefully() -> None:
 
     # Repaint pale and check that every pixel stays finite and non-negative in linear;
     # highlights above 1 are expected and are tamed by the rolloff before encode.
+    # The rolloff is weighted by matte coverage (nit 6), so the ≤1 bound holds
+    # on fully-opaque wall; soft-edge pixels may stay above 1 in linear and are
+    # clipped by the encode, which the byte check below covers.
     from spectrapaint.render.colour import lab_to_linear_rgb
 
     pale = lab_to_linear_rgb(np.array([90.0, 0.0, 0.0], dtype=np.float64))
@@ -119,7 +122,7 @@ def test_the_night_fixture_repainted_pale_degrades_gracefully() -> None:
     assert (composite >= 0.0).all()
     rolled = _highlight_rolloff(composite, alpha)
     assert np.isfinite(rolled).all()
-    assert (rolled <= 1.0 + 1e-6).all()
+    assert (rolled[alpha[..., 0] == 1.0] <= 1.0 + 1e-6).all()
 
     # Full render end-to-end.
     out = render(

@@ -1959,11 +1959,11 @@ knee; clipped pixels take room chroma. Constants: `_STAIN_SUPPRESSION=1.0` (from
 **Why:** starting values left the 40×40 brown-on-cream stain at ΔE00 13.2 (need <3) and the warm patch
 at b* +1.1 (need ≤0); 0.20/1.0 gives ΔE00 2.6 and b* −8.6 with L* above the wall. Log-space box blurs
 pad by replication, flattening gradients at frame edges, so photo borders are protected (ends ratio
-2.0 exact; interior 50-vs-150 within 1.2%). Matte-weighted blurs keep originals where coverage is 0,
+2.0 exact). Matte-weighted blurs keep originals where coverage is 0,
 so a Light Map built with one plane's matte stays valid for the whole grouped Base Colour (accent
-blue plane rendered black without this). Existing gradient-exactness tests were retargeted to flat
-walls (exact) with gradients pinned within 2% in `test_issue52.py`; the saturated-blend and grouped
-ratio probes were relaxed to 0.02 and moved far from the step edge.
+blue plane rendered black without this). Gradient-exactness is kept exactly by the amplitude
+gate added in review (##56 below): smooth ramps sit below it and return the plain division
+bit-for-bit, so the original 1e-5 tests were restored with new alongside cases.
 
 **Before/after (synthetic, `tests/render/test_issue52.py`):** stain ΔE00 20.6→2.6 (<3); sun-base unlit
 ΔE00 8.6→0.0 (<3); blob b* +14.7→−8.6 (≤0), L* above wall; gradient ends 2.0 within 2%; texture
@@ -1977,3 +1977,71 @@ photo-border ramp suppress less; bright-peak hues compress slightly above the kn
 the fixture tests in `tests/fixtures/test_light_map_fixtures.py` were updated in the same merge to
 pin the new design (noise floor plus bounded mean change, rolloff-aware night bound, blend weight
 directly).
+
+---
+
+## 56. Review fixes: per-session render cache, amplitude-gated suppression, restored tests, sunlit fixtures
+
+**Ticket:** #52 (review of #62) · **Contributor:** Chauhan Anamika Abhimanu (code written by an agent) · **Date:** 2026-10-14
+
+**1. Every tap recomputed everything (~3.1 s, review blocking 1).** `render_many`
+re-estimated Base Colours and re-derived Light Maps on every call, and the
+renders endpoint calls it per Shade tap. Measured on a 1280×963 photo:
+`light_map_of` 187 ms → 2,610 ms after #52 (14×), `render()` 77 → 179 ms, one
+tap ~700 ms → ~3,100 ms — while the latency gate timed multiply/composite/encode
+on a precomputed map, so none of it was visible.
+
+**Decided:** `render_preparation_of` (grouped bases, per-group Light Maps,
+realistic tint — pure, in `render/`) plus a per-session cache in
+`SessionRegistry` fingerprinted by plane ids, surfaces, shapes and matte bytes
+(`sessions.render_preparation`). `render_many` takes it as `_preparation`; a
+correction's new planes miss the fingerprint and rebuild exactly once, session
+end evicts. Repeat taps recompute nothing (proven by spy-counter and timing
+tests, and by identical-bytes repeat renders at the API level).
+
+**Gate:** `bench_tap` now times the true production tap —
+multiply–composite–rolloff–encode — and the baseline is re-recorded for the new
+definition (0.9 MP 34.0 → 108.8 ms, 2 MP 70.8 → 242.0 ms, same 2.0× budgets
+217.6/484.0; recorded locally, CI is the arbiter). The one-time preparation
+cost is printed by the bench but gated functionally (the cache tests), not by
+milliseconds. Rolloff itself was reworked to touch only over-knee pixels
+(copy + indexed scale, still out-of-place and pure), so highlight-free renders
+pay a max plus a memcpy.
+
+**2. Constants vs lighting (review 2).** `_STAIN_SUPPRESSION = 1.0` and
+`_STAIN_ILLUMINATION_RADIUS_FRACTION = 0.20` stand: the issue's starting values
+provably cannot meet the acceptance budgets (0.8 leaves the synthetic stain at
+ΔE00 13.2 against <3). What changed is *selectivity*: both refinements are now
+amplitude-gated (`_BLOTCH_PRESERVE_BELOW = 0.06` / `_SUPPRESS_ABOVE = 0.15`,
+`_CHROMA_PRESERVE_BELOW = 0.03` / `_SUPPRESS_ABOVE = 0.10`, smoothstep ramps).
+Measured: perfect ramps peak at 0.046 blotch / 0.0 chroma (kept bit-exact),
+the synthetic stain at 0.69 / 0.31 (fully removed). Gentle lighting is kept
+exactly; only stain-scale deviations are removed. New pin:
+`test_a_real_shadow_keeps_its_depth` — dim-room's chair-shadow fan keeps 0.52
+of its log-depth (≥0.40), so ghosting cannot silently worsen.
+
+**3. Loosened tests restored (review 3).** The four synthetic exactness cases
+are back verbatim (gradient division, saturated shading at 1e-5, mid-blend
+with gradient, grouped ratio at columns 15/45 and rtol 1e-3) and pass via the
+gate; the relaxed forms stay as new alongside cases (flat-wall exactness,
+large-gradient 2%, flat-cast blend, frame-edge ratio). The empty-corner exact
+check stays replaced: a real photo's deviations peak at |blotch| 4.06, so no
+suppression of any strength keeps it bit-exact — the contract promises
+exactness for clean synthetic input, pinned by the flat-wall tests.
+
+**4. Sunlit fixtures (review 4).** New `tests/render/test_issue52_fixtures.py`:
+page-6 wall stays blue (b* ≤ 0, brighter in sun; measured −7.5/−3.0), green
+room and sunlight band keep the orange Shade's hue within 5° (measured 0.9°,
+0.0°) and read brighter in the sun.
+
+**5. Dealer visuals (review 5).** Still manual and pending: a real damp-patch
+photo, plus page-4 and page-6 sunlit photos at normal viewing size. The
+synthetic stain (ΔE00 2.6) and the fixture hue tests above are the automated
+proxies.
+
+**Nit 6:** the rolloff is now weighted by matte coverage — full strength at
+alpha 1, identity at alpha 0 (bit-identical outside preserved), smooth
+between. Measured effect small, as predicted.
+
+**Measured:** fast lane 287 + new (engine 4, issue52 2, fixtures 4, api 2);
+gate budgets re-recorded above; slow lane re-run on push.

@@ -17,11 +17,30 @@ no network, no models -- which is what makes tests/render/ fast and
 deterministic.
 """
 
+from dataclasses import dataclass, field
+
 import numpy as np
 
 from spectrapaint.imaging import box_mean, erode
 from spectrapaint.render.colour import srgb_to_linear
 from spectrapaint.render.luts import encode_srgb
+
+
+@dataclass(frozen=True)
+class RenderPreparation:
+    """The once-per-photo work a Shade tap reuses (issue #52 review 1).
+
+    Grouped Base Colours (one per plane), one Light Map per Base Colour group,
+    and the room's realistic light tint — all derived from the photo and its
+    Wall Plane mattes alone, never from a Shade. A Shade tap then only does
+    multiply–composite–rolloff–encode, which is what the latency gate measures.
+    Immutable snapshot: callers must not mutate the arrays (``render_many``
+    never does).
+    """
+
+    bases: tuple[np.ndarray, ...]
+    light_maps: dict[tuple[float, float, float], np.ndarray]
+    light_tint: np.ndarray = field(compare=False)
 
 
 def light_map_of(
@@ -43,8 +62,11 @@ def light_map_of(
     * **Stain suppression (issue #52, decision 1).** The Light Map is split into ``shading``
       (HxW brightness) and ``chroma`` (HxWx3, about 1 on a clean wall). Chroma deviations are
       pulled toward the room's large-scale chroma and mid-frequency luminance blotches are
-      scaled back in log space, with contact shadows near the matte edge protected. Lighting,
-      shadows and texture are kept; stains and patches are removed before repainting.
+      scaled back in log space, with contact shadows near the matte edge protected. Both
+      refinements are amplitude-gated: deviations below ``_BLOTCH_PRESERVE_BELOW`` /
+      ``_CHROMA_PRESERVE_BELOW`` are kept exactly, so smooth gradients and a flat wall still
+      return the plain division bit-for-bit; only stain-scale deviations are removed.
+      Lighting, shadows and texture are kept; stains and patches are removed before repainting.
     * **Capped sun tint (issue #52, decision 2).** In highlights only
       (``_HIGHLIGHT_START``–``_HIGHLIGHT_FULL`` on shading) a bounded share ``_SUN_TINT_KEEP``
       of the chroma deviation is kept; the rest is brightness only. Sunlit patches read as the
@@ -100,18 +122,25 @@ def light_map_of(
     alpha_f = _alpha_hw(alpha)
 
     # Large-scale room chroma: bounce light and window cast survive; a stain's hue does not.
+    # Amplitude-gated (review 2/3): uniform chroma (a smooth gradient or cast) is
+    # kept exactly, so the plain division survives where there is nothing to fix.
     room_chroma = _matte_weighted_blur_3(chroma, alpha_f, illum_radius)
+    chroma_deviation = np.abs(chroma - room_chroma).max(axis=-1)
+    chroma_gate = _smoothstep(_CHROMA_PRESERVE_BELOW, _CHROMA_SUPPRESS_ABOVE, chroma_deviation)
     chroma_out = (
-        1.0 - _STAIN_CHROMA_SUPPRESSION
-    ) * chroma + _STAIN_CHROMA_SUPPRESSION * room_chroma
+        chroma + (room_chroma - chroma) * (_STAIN_CHROMA_SUPPRESSION * chroma_gate)[..., None]
+    )
 
     # --- Mid-frequency luminance blotch suppression in log space (issue #52 B). ---
+    # Amplitude-gated like chroma: the log-curvature of a smooth ramp sits below
+    # _BLOTCH_PRESERVE_BELOW and is kept exactly; stain-scale blotches are removed.
     log_s = np.log(np.maximum(shading, 1e-6))
     illumination = _matte_weighted_blur_3(log_s, alpha_f, illum_radius)
     fine = log_s - _matte_weighted_blur_3(log_s, alpha_f, texture_radius)
     blotch = log_s - illumination - fine
+    blotch_gate = _smoothstep(_BLOTCH_PRESERVE_BELOW, _BLOTCH_SUPPRESS_ABOVE, np.abs(blotch))
     protect = _edge_protection(alpha_f, shading.shape)
-    strength = _STAIN_SUPPRESSION * (1.0 - protect)
+    strength = _STAIN_SUPPRESSION * (1.0 - protect) * blotch_gate
     shading_out = np.exp(illumination + fine + (1.0 - strength) * blotch)
 
     # --- Clipped photo pixels carry no chroma (issue #52 F): keep shading. ---
@@ -393,8 +422,10 @@ def _highlight_rolloff(composite: np.ndarray, matte: np.ndarray) -> np.ndarray:
 
     Where the peak channel exceeds the knee, all three channels scale by one
     factor along ``knee + (1-knee)*(1-exp(-(peak-knee)/(1-knee)))`` toward 1.0,
-    so hue is kept and no channel hard-clips to 255. Only inside the matte
-    (``matte > 0``); ``alpha == 0`` pixels are bit-identical to today.
+    so hue is kept and no channel hard-clips to 255. The correction is weighted
+    by the matte's coverage: fully-wall pixels roll off fully, ``alpha == 0``
+    pixels are bit-identical to today, and soft-edge pixels land in between
+    (review nit 6).
     """
     matte_hw = np.asarray(matte, dtype=np.float32)
     if matte_hw.ndim == 3:
@@ -402,14 +433,22 @@ def _highlight_rolloff(composite: np.ndarray, matte: np.ndarray) -> np.ndarray:
     inside = matte_hw > 0.0
     if not inside.any():
         return composite
-    peak = composite.max(axis=-1, keepdims=True)
-    over = (peak > _HIGHLIGHT_KNEE) & inside[..., None]
-    if not over.any():
+    peak_hw = composite.max(axis=-1)
+    mask = inside & (peak_hw > _HIGHLIGHT_KNEE)
+    if not mask.any():
         return composite
+    # Only the over-knee pixels pay for exp: the rest are copied untouched, so a
+    # render with no highlights costs a max plus a memcpy. Out-of-place, so the
+    # caller's array is never mutated (conventions: pure).
+    out = composite.copy()
     knee = _HIGHLIGHT_KNEE
-    scaled = knee + (1.0 - knee) * (1.0 - np.exp(-(peak - knee) / (1.0 - knee)))
-    factor = np.where(over, scaled / np.maximum(peak, 1e-6), 1.0)
-    return composite * factor
+    over_peak = peak_hw[mask]
+    scaled = knee + (1.0 - knee) * (1.0 - np.exp(-(over_peak - knee) / (1.0 - knee)))
+    weight = np.asarray(matte_hw[mask], dtype=np.float64)
+    out[mask] *= (1.0 + (scaled / np.maximum(over_peak, 1e-6) - 1.0) * weight)[..., None].astype(
+        composite.dtype, copy=False
+    )
+    return out
 
 
 def render(
@@ -431,11 +470,51 @@ def render(
     return (encoded * 255.0 + 0.5).astype(np.uint8)
 
 
+def render_preparation_of(
+    linear_photo: np.ndarray,
+    alphas: list[np.ndarray],
+    surfaces: list[str] | None = None,
+) -> RenderPreparation:
+    """The once-per-photo half of :func:`render_many` (issue #52 review 1).
+
+    Estimates one Base Colour per group of planes sharing the same existing
+    paint and derives one Light Map per group, plus the room's realistic light
+    tint. Pure, like everything else here; the service computes this once per
+    plane set and caches it per session, so a Shade tap never pays for it
+    again. :func:`render_many` without ``_preparation`` computes exactly this
+    inline, so the two paths agree by construction.
+    """
+    if surfaces is None:
+        surfaces = ["wall"] * len(alphas)
+    grouped_bases = _grouped_base_colours(linear_photo, alphas, surfaces)
+
+    # Compute Light Map once per unique Base Colour group, then reuse for all
+    # planes in that group.
+    light_map_cache: dict[tuple[float, float, float], np.ndarray] = {}
+    for base_colour in grouped_bases:
+        # Use tuple of values as key for reliable caching (arrays with same
+        # values should share Light Map computation)
+        base_key = tuple(base_colour.flat)
+        if base_key not in light_map_cache:
+            # Use the first alpha that maps to this base_colour for the Light Map
+            # Find index of first occurrence of this base colour
+            idx = next(i for i, bc in enumerate(grouped_bases) if tuple(bc.flat) == base_key)
+            light_map_cache[base_key] = light_map_of(linear_photo, base_colour, alphas[idx])
+
+    return RenderPreparation(
+        bases=tuple(grouped_bases),
+        light_maps=light_map_cache,
+        light_tint=estimate_light_tint(linear_photo),
+    )
+
+
 def render_many(
     linear_photo: np.ndarray,
     plane_targets: list[tuple[np.ndarray, np.ndarray]],
     light_tint: np.ndarray,
     surfaces: list[str] | None = None,
+    *,
+    _preparation: RenderPreparation | None = None,
 ) -> np.ndarray:
     """Recolour several Paintable Planes (walls and ceilings), each with its own Shade.
 
@@ -460,7 +539,10 @@ def render_many(
     The Light Map is computed **once per photo per Base Colour group** (not per
     tap), so a Shade change is just multiply–composite–encode. ``surfaces``
     carries ``wall``/``ceiling`` per plane; when omitted every plane is treated
-    as ``wall`` for backward compat with existing tests.
+    as ``wall`` for backward compat with existing tests. Pass ``_preparation``
+    (from :func:`render_preparation_of` for the same photo and planes) to reuse
+    the once-per-photo work: the service caches it per session, so taps two,
+    three, … never re-estimate or re-derive anything.
     """
     if not plane_targets:
         encoded = encode_srgb(np.ascontiguousarray(linear_photo))
@@ -469,21 +551,10 @@ def render_many(
     alphas = [alpha for alpha, _ in plane_targets]
     if surfaces is None:
         surfaces = ["wall"] * len(alphas)
-    grouped_bases = _grouped_base_colours(linear_photo, alphas, surfaces)
-
-    # Compute Light Map once per unique Base Colour group, then reuse for all
-    # planes in that group. This is the "once per photo" preparation the spec
-    # describes; the per-tap work is only multiply–composite–encode.
-    light_map_cache: dict[tuple[float, float, float], np.ndarray] = {}
-    for base_colour in grouped_bases:
-        # Use tuple of values as key for reliable caching (arrays with same
-        # values should share Light Map computation)
-        base_key = tuple(base_colour.flat)
-        if base_key not in light_map_cache:
-            # Use the first alpha that maps to this base_colour for the Light Map
-            # Find index of first occurrence of this base colour
-            idx = next(i for i, bc in enumerate(grouped_bases) if tuple(bc.flat) == base_key)
-            light_map_cache[base_key] = light_map_of(linear_photo, base_colour, alphas[idx])
+    if _preparation is None:
+        _preparation = render_preparation_of(linear_photo, alphas, surfaces)
+    grouped_bases = list(_preparation.bases)
+    light_map_cache = _preparation.light_maps
 
     result_linear = linear_photo.copy()
     for (alpha, target_shade), base_colour in zip(plane_targets, grouped_bases, strict=True):
@@ -648,7 +719,7 @@ _STAIN_CHROMA_SUPPRESSION = 1.0
 # corner falloff) and kept; smaller is a candidate blotch. Starting value 0.08
 # left a 40×40 stain at ΔE00 13.2; tuned to 0.20 for ΔE00 2.6 on the same probe.
 # Larger flattens illumination more, but photo-border protection keeps the frame
-# ends exact and interior gradients stay within 2%.
+# ends exact and the amplitude gate below keeps smooth gradients exact.
 _STAIN_ILLUMINATION_RADIUS_FRACTION = 0.20
 # Of the shorter side: structure smaller than this is "texture" (roller grain)
 # and kept. Smaller keeps finer grain but lets fine stains survive.
@@ -657,6 +728,19 @@ _STAIN_TEXTURE_RADIUS_FRACTION = 0.004
 # boundaries, so suppression ramps from 0 at the edge to full this far inside.
 # Wider keeps more shadow but lets edge-near stains survive.
 _STAIN_EDGE_PROTECT_RADIUS_FRACTION = 0.03
+
+# Amplitude gates on the two stain refinements (review 2/3: keep gentle
+# lighting exactly). A perfect synthetic gradient's mid-frequency blotch peaks
+# at 0.046 in log space and its chroma deviation is 0.0, while the synthetic
+# brown stain peaks at 0.69 and 0.31 — so deviations at or below PRESERVE are
+# kept bit-for-bit (smooth ramps still return the plain division exactly) and
+# only stain-scale deviations are removed, ramping up to full at SUPPRESS.
+# Lower preserves more lighting but lets faint stains survive; higher removes
+# more at the cost of flattening gentle shading.
+_BLOTCH_PRESERVE_BELOW = 0.06
+_BLOTCH_SUPPRESS_ABOVE = 0.15
+_CHROMA_PRESERVE_BELOW = 0.03
+_CHROMA_SUPPRESS_ABOVE = 0.10
 
 # Tint-space Euclidean distance a pixel's tint (rgb/luma) may lie from the
 # wall's median tint and still vote for the Base Colour. Tighter rejects more

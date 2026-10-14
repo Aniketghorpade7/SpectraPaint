@@ -6,6 +6,7 @@ matte, and ``lab_to_linear_rgb`` for the Shade. Fast lane, no models.
 """
 
 import numpy as np
+import pytest
 
 from spectrapaint.render.colour import lab_to_linear_rgb, srgb_to_linear
 from spectrapaint.render.engine import (
@@ -276,3 +277,93 @@ def test_flat_clean_wall_still_exact_division() -> None:
     photo = np.broadcast_to(base, (16, 16, 3)).astype(np.float32).copy()
     got = light_map_of(photo, base)
     assert np.allclose(got, photo / base, atol=1e-5)
+
+
+def test_a_repeat_tap_reuses_the_preparation_and_recomputes_nothing() -> None:
+    """Review 1: the per-tap path must not re-estimate or re-derive anything.
+
+    ``render_preparation_of`` does the once-per-photo work; ``render_many``
+    with ``_preparation`` must call neither the base-colour grouping nor the
+    Light Map derivation again, and must return exactly what the uncached path
+    returns. A spy counter pins the mechanism (not the milliseconds), so this
+    cannot regress silently the way the old gate did.
+    """
+    import spectrapaint.render.engine as engine
+
+    rng = np.random.default_rng(3)
+    linear = rng.random((48, 64, 3), dtype=np.float32)
+    alpha = np.ones((48, 64, 1), dtype=np.float32)
+    shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
+    tint = np.ones(3, dtype=np.float32)
+
+    calls = {"grouped": 0, "light_map": 0}
+    real_grouped = engine._grouped_base_colours
+    real_light_map = engine.light_map_of
+
+    def count_grouped(photo, alphas, surfaces=None):
+        calls["grouped"] += 1
+        return real_grouped(photo, alphas, surfaces)
+
+    def count_light_map(photo, base, alpha=None):
+        calls["light_map"] += 1
+        return real_light_map(photo, base, alpha)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(engine, "_grouped_base_colours", count_grouped)
+    monkeypatch.setattr(engine, "light_map_of", count_light_map)
+    try:
+        plain = engine.render_many(linear, [(alpha, shade)], tint)
+        first = dict(calls)
+        assert first["grouped"] >= 1 and first["light_map"] >= 1
+
+        prep = engine.render_preparation_of(linear, [alpha], ["wall"])
+        calls["grouped"] = 0
+        calls["light_map"] = 0
+        cached = engine.render_many(linear, [(alpha, shade)], tint, _preparation=prep)
+        assert calls == {"grouped": 0, "light_map": 0}
+        assert np.array_equal(cached, plain)
+
+        # A second Shade on the same preparation also recomputes nothing.
+        other = np.array([0.30, 0.40, 0.60], dtype=np.float32)
+        cached2 = engine.render_many(linear, [(alpha, other)], tint, _preparation=prep)
+        assert calls == {"grouped": 0, "light_map": 0}
+        assert not np.array_equal(cached2, plain)
+    finally:
+        monkeypatch.undo()
+
+
+def test_a_cached_tap_costs_a_fraction_of_a_full_recompute() -> None:
+    """Review 1: timing guard that the cached tap is the cheap path.
+
+    Medians over repeats with a 1/2 threshold: a full recompute does grouping
+    plus Light Map derivation (seconds at photo scale even on this synthetic
+    input), a cached tap does multiply–composite–rolloff–encode only. The gap
+    is an order of magnitude, so 1/2 cannot flake on a busy machine the way an
+    absolute millisecond budget would.
+    """
+    import time
+
+    import spectrapaint.render.engine as engine
+
+    rng = np.random.default_rng(4)
+    linear = rng.random((240, 320, 3), dtype=np.float32)
+    alpha = np.ones((240, 320, 1), dtype=np.float32)
+    shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
+    tint = np.ones(3, dtype=np.float32)
+
+    def median_ms(fn, repeats=5):
+        for _ in range(2):
+            fn()
+        samples = []
+        for _ in range(repeats):
+            start = time.perf_counter()
+            fn()
+            samples.append((time.perf_counter() - start) * 1000.0)
+        return float(np.median(samples))
+
+    full_ms = median_ms(lambda: engine.render_many(linear, [(alpha, shade)], tint))
+    prep = engine.render_preparation_of(linear, [alpha], ["wall"])
+    cached_ms = median_ms(
+        lambda: engine.render_many(linear, [(alpha, shade)], tint, _preparation=prep)
+    )
+    assert cached_ms < full_ms / 2.0
