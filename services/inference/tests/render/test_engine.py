@@ -32,13 +32,30 @@ def _linear_photo(shape=(9, 12, 3), seed=0) -> np.ndarray:
 def test_light_map_is_the_per_pixel_division() -> None:
     """A clean photograph of a neutral wall gets exactly ``photo / base``, untouched.
 
-    The robustness refinements (#9) must degrade to the plain division when they have nothing to
-    fix: a neutral base never triggers the saturation blend, and a noise-free photo measures below
-    the noise floor, so no smoothing runs.
+    The robustness refinements (#9, #52) must degrade to the plain division when they have
+    nothing to fix: a neutral base never triggers the saturation blend, smooth gradients sit
+    below the stain-suppression amplitude gate, and a noise-free photo measures below the
+    noise floor, so no smoothing runs.
     """
     base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
     shading = np.linspace(0.6, 1.0, 12, dtype=np.float32)[None, :, None]
     linear = np.broadcast_to(base[None, None, :] * shading, (9, 12, 3)).copy()
+
+    got = light_map_of(linear, base)
+
+    assert got.shape == linear.shape
+    assert np.allclose(got, linear / base, atol=1e-5)
+
+
+def test_light_map_of_a_flat_clean_wall_is_exact_division() -> None:
+    """The same contract on a flat wall (issue #52's exactness case).
+
+    A flat wall has no blotch at all, so stain suppression is exactly the
+    identity here rather than just below the gate — the docstring contract in
+    the ``light_map_of`` docstring, pinned where a gradient cannot hide it.
+    """
+    base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    linear = np.broadcast_to(base, (9, 12, 3)).astype(np.float32).copy()
 
     got = light_map_of(linear, base)
 
@@ -51,7 +68,9 @@ def test_light_map_blends_to_single_brightness_as_the_base_saturates() -> None:
 
     A deep pink base has green and blue near zero; dividing those channels amplifies sensor
     noise into speckle (#9). Blending to luma-over-luma keeps the shading and discards the
-    poisoned channels, so a noise-free input comes back as exactly its own shading.
+    poisoned channels, so a noise-free input comes back as exactly its own shading: the
+    ramp's log-curvature sits below the stain-suppression amplitude gate, which keeps it
+    exactly.
     """
     deep_pink = np.array([0.60, 0.06, 0.06], dtype=np.float32)
     shading = np.linspace(0.6, 1.0, 32, dtype=np.float32)
@@ -60,6 +79,26 @@ def test_light_map_blends_to_single_brightness_as_the_base_saturates() -> None:
     got = light_map_of(linear, deep_pink)
 
     assert np.allclose(got[..., 0], shading[None, :], atol=1e-5)
+    assert np.allclose(got[..., 0], got[..., 1], atol=1e-6)
+    assert np.allclose(got[..., 1], got[..., 2], atol=1e-6)
+
+
+def test_light_map_preserves_a_large_gradient_within_two_percent() -> None:
+    """Issue #52's gradient guard, alongside the exact small-ramp case above.
+
+    On photographic scales the illumination blur legitimately reshapes a long
+    ramp near its ends (replication padding reads as a false blotch, held only
+    by the photo-border ramp), so the rendered luminance ratio between the ends
+    of a 2:1 gradient is pinned within 2% rather than 1e-5 — the same property
+    test_issue52's illumination test pins through a repaint.
+    """
+    paint = np.array([0.60, 0.06, 0.06], dtype=np.float32)
+    shading = np.linspace(0.6, 1.0, 400, dtype=np.float32)
+    linear = np.broadcast_to(paint[None, None, :] * shading[None, :, None], (60, 400, 3)).copy()
+
+    got = light_map_of(linear, paint)
+
+    assert np.allclose(got[..., 0], shading[None, :], rtol=0.02, atol=0.02)
     assert np.allclose(got[..., 0], got[..., 1], atol=1e-6)
     assert np.allclose(got[..., 1], got[..., 2], atol=1e-6)
 
@@ -73,6 +112,32 @@ def test_light_map_of_a_moderately_saturated_wall_lies_between_the_two_extremes(
     base = np.array([0.45, 0.25, 0.22], dtype=np.float32)
     shading = np.linspace(0.6, 1.0, 16, dtype=np.float32)[None, :, None]
     linear = np.broadcast_to(base[None, None, :] * shading, (16, 16, 3)).copy()
+    linear[..., 2] *= 1.15  # a smooth cast the division follows and brightness cannot
+
+    got = light_map_of(linear, base)
+
+    pure_division = linear / base
+    luma = linear @ BT709_LUMA.astype(np.float32)
+    luma_base = float(base @ BT709_LUMA.astype(np.float32))
+    pure_brightness = np.broadcast_to((luma / luma_base)[..., None], linear.shape)
+
+    low = np.minimum(pure_division, pure_brightness)
+    high = np.maximum(pure_division, pure_brightness)
+    assert (got >= low - 1e-5).all() and (got <= high + 1e-5).all()
+    differs_division = np.abs(got - pure_division) > 1e-4
+    differs_brightness = np.abs(got - pure_brightness) > 1e-4
+    assert differs_division.any() and differs_brightness.any()
+
+
+def test_light_map_of_a_flat_cast_wall_lies_between_the_two_extremes() -> None:
+    """Issue #52's flat-wall companion to the gradient blend test above.
+
+    Same mid-saturation blend on a flat wall carrying a uniform cast: no
+    gradient means no blotch at all, so the between-check holds with the
+    suppression path fully engaged rather than gated off.
+    """
+    base = np.array([0.45, 0.25, 0.22], dtype=np.float32)
+    linear = np.broadcast_to(base, (16, 16, 3)).astype(np.float32).copy()
     linear[..., 2] *= 1.15  # a smooth cast the division follows and brightness cannot
 
     got = light_map_of(linear, base)
@@ -206,8 +271,13 @@ def test_render_returns_srgb_uint8_of_the_same_shape() -> None:
 
 
 def test_alpha_1_output_is_light_map_times_shade_times_tint_encoded() -> None:
-    """With alpha=1 the composite is exactly new_wall, then one encode."""
-    linear = _linear_photo()
+    """With alpha=1 the composite is exactly new_wall, then one encode.
+
+    Kept below the issue #52 highlight knee (_HIGHLIGHT_KNEE) so the
+    hue-preserving roll-off does not engage here; bright-peak behaviour is
+    pinned separately in test_issue52.py.
+    """
+    linear = (_linear_photo() * 0.5).astype(np.float32)
     alpha = np.ones((9, 12, 1), dtype=np.float32)
     base = np.array([0.55, 0.52, 0.48], dtype=np.float32)
     shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
@@ -443,6 +513,43 @@ def test_same_paint_two_planes_keep_relative_brightness_after_grouped_recolour()
     # And the encoded PNG must still show left brighter than right (not flattened)
     assert int(out[20, 15, 0]) > int(out[20, 45, 0]) + 5
     assert int(out[20, 15, 1]) > int(out[20, 45, 1]) + 5
+
+
+def test_same_paint_two_planes_keep_relative_brightness_at_the_frame_edge() -> None:
+    """Issue #52's edge companion to the grouped-recolour test above.
+
+    Same 1.6× setup probed at columns 5/55, next to the frame border: the
+    photo-border protection ramp holds the illumination blur's replication
+    edge, so the ratio survives there too, within the 2% the long-ramp guard
+    above allows.
+    """
+    from spectrapaint.render.engine import composite_linear, light_map_of, new_wall_of
+
+    base_true = np.array([0.55, 0.52, 0.48], dtype=np.float32)
+    shade = np.array([0.78, 0.70, 0.58], dtype=np.float32)
+    tint = np.ones(3, dtype=np.float32)
+
+    linear = np.zeros((40, 60, 3), dtype=np.float32)
+    linear[:, :30] = base_true * 0.8
+    linear[:, 30:] = base_true * 0.5
+    alpha_left = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_left[:, :30] = 1.0
+    alpha_right = np.zeros((40, 60, 1), dtype=np.float32)
+    alpha_right[:, 30:] = 1.0
+
+    from spectrapaint.render.engine import render_many
+
+    out = render_many(linear, [(alpha_left, shade), (alpha_right, shade)], tint)
+    grouped_base = base_true * 0.8  # 90th percentile picks the brighter plane
+    light_map = light_map_of(linear, grouped_base)
+    composite = composite_linear(
+        linear, np.ones((40, 60, 1), dtype=np.float32), new_wall_of(light_map, shade, tint)
+    )
+    left_lin = composite[20, 5]
+    right_lin = composite[20, 55]
+    assert np.allclose(left_lin, (0.8 / 0.5) * right_lin, rtol=0.02)
+    assert int(out[20, 5, 0]) > int(out[20, 55, 0]) + 5
+    assert int(out[20, 5, 1]) > int(out[20, 55, 1]) + 5
 
 
 def test_accent_wall_planes_keep_separate_base_colours() -> None:

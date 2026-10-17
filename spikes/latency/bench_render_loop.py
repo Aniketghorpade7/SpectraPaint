@@ -59,7 +59,9 @@ from time import perf_counter  # noqa: E402
 import numpy as np  # noqa: E402
 
 from spectrapaint.execution_profile import execution_profile  # noqa: E402
+from spectrapaint.render.engine import _highlight_rolloff  # noqa: E402
 from spectrapaint.render.engine import light_map_of as _light_map_of  # noqa: E402
+from spectrapaint.render.engine import render_preparation_of as _render_preparation_of  # noqa: E402
 
 # Resolutions worth distinguishing. A modern phone shoots 12MP; the preview
 # candidates are what we would use while the dealer browses shades.
@@ -170,17 +172,21 @@ def bench(width, height):
 
     results["encode_pow"] = time_it(lambda: linear_to_srgb_pow(composited.copy()))
     results["encode_lut"] = time_it(lambda: linear_to_srgb_lut(composited.copy()))
+    results["rolloff"] = time_it(lambda: _highlight_rolloff(composited.copy(), alpha))
 
     # ---- the whole per-tap path ----------------------------------------
+    # The production tap (issue #52 review 1): multiply–composite–rolloff–encode
+    # on the Light Map the session cache prepared once. The gate measures this,
+    # not just the pre-#52 core, so the highlight knee cannot regress unseen.
     def full_tap_pow():
         w = light_map * target_shade * light_tint
         c = alpha * w + (1.0 - alpha) * linear
-        return linear_to_srgb_pow(c)
+        return linear_to_srgb_pow(_highlight_rolloff(c, alpha))
 
     def full_tap_lut():
         w = light_map * target_shade * light_tint
         c = alpha * w + (1.0 - alpha) * linear
-        return linear_to_srgb_lut(c)
+        return linear_to_srgb_lut(_highlight_rolloff(c, alpha))
 
     results["TAP_TOTAL_pow"] = time_it(full_tap_pow)
     results["TAP_TOTAL_lut"] = time_it(full_tap_lut)
@@ -197,8 +203,11 @@ def bench_tap(width, height):
     stage measurement found to be the bottleneck, and it is the one a functional
     test cannot see regress.
 
-    The Light Map is now computed once per photo during preparation (not per tap), so the
-    per-tap path is multiply–composite–encode only.
+    The Light Map is computed once per photo and cached per session
+    (``render_preparation_of`` + the session registry, issue #52 review 1), so
+    the per-tap path is multiply–composite–rolloff–encode on the cached map —
+    the rolloff is included deliberately, so the highlight knee cannot regress
+    unseen.
     """
     rng = np.random.default_rng(0)
     linear = rng.random((height, width, 3), dtype=np.float32)
@@ -211,12 +220,32 @@ def bench_tap(width, height):
     light_map = _light_map_of(linear, base_colour, alpha)
 
     def full_tap_lut():
-        # Per-tap path: multiply–composite–encode
+        # Per-tap path: multiply–composite–rolloff–encode
         w = light_map * target_shade * light_tint
         c = alpha * w + (1.0 - alpha) * linear
-        return linear_to_srgb_lut(c)
+        return linear_to_srgb_lut(_highlight_rolloff(c, alpha))
 
     return time_it(full_tap_lut)
+
+
+def bench_first_render(width, height):
+    """Median milliseconds for the first tap's once-per-photo work at this size.
+
+    Informational only (no gate): base-colour grouping plus Light Map
+    derivation for one plane, i.e. what the session cache computes once and
+    every later tap reuses. Printed by the bench so the one-time cost stays
+    visible; the regression guard for it is functional (the cache tests fail
+    if a tap ever pays this again), not a millisecond budget, because absolute
+    seconds vary with hardware far more than the tap path does.
+    """
+    rng = np.random.default_rng(1)
+    linear = rng.random((height, width, 3), dtype=np.float32)
+    alpha = np.ones((height, width, 1), dtype=np.float32)
+
+    def prepare():
+        return _render_preparation_of(linear, [alpha], ["wall"])
+
+    return time_it(prepare, repeats=3, warmup=1)
 
 
 def load_baseline(path=BASELINE_PATH):
@@ -377,6 +406,12 @@ def main():
         )
 
     print()
+    print("Once-per-photo preparation (grouped bases + Light Map + tint, cached per session):")
+    for label, w, h in RESOLUTIONS:
+        first = bench_first_render(w, h)
+        print(f"{label:<38} {first:>10.0f}ms (paid once, then cached)")
+
+    print()
     print("Per-stage breakdown (milliseconds, median):")
     print()
     stages = [
@@ -385,6 +420,7 @@ def main():
         "light_map",
         "multiply",
         "composite",
+        "rolloff",
         "encode_pow",
         "encode_lut",
     ]

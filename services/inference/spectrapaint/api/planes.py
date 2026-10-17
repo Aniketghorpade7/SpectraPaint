@@ -31,6 +31,7 @@ module is only the HTTP translation, same division as everywhere else in ``api/`
 """
 
 import io
+from dataclasses import replace
 
 import numpy as np
 from fastapi import APIRouter, Request, Response, status
@@ -79,7 +80,20 @@ async def list_planes(request: Request, session_id: str) -> dict[str, object]:
     """
 
     prepared = await require_photo(request, session_id)
+    # What the UI asks for once the walls are found, or a reopened Consultation is on screen: the
+    # first Shade tap's once-per-photo work starts behind it (issue #52 review).
+    request.app.state.session_registry.warm_render_preparation(session_id, prepared)
     return _planes_response(prepared, prepared.planes, prepared.note)
+
+
+def _warm(
+    request: Request, session_id: str, prepared: PreparedPhoto, planes: tuple[WallPlane, ...]
+) -> None:
+    """Start the render preparation for a correction's new planes, so the next Shade tap is not the
+    one that pays for it (issue #52 review)."""
+    request.app.state.session_registry.warm_render_preparation(
+        session_id, replace(prepared, planes=planes)
+    )
 
 
 def _planes_response(
@@ -186,6 +200,7 @@ async def add_wall(request: Request, session_id: str, body: TapPoint) -> dict[st
 
     updated = order_left_to_right((new_plane, *adjusted_existing))
     job.replace_planes(updated)
+    _warm(request, session_id, prepared, updated)
     return _planes_response(prepared, updated, None)
 
 
@@ -242,6 +257,7 @@ async def add_ceiling(request: Request, session_id: str, body: TapPoint) -> dict
     ceiling_planes = tuple(p for p in (new_plane, *adjusted_existing) if p.surface == "ceiling")
     updated = (*wall_sorted, *ceiling_planes)
     job.replace_planes(updated)
+    _warm(request, session_id, prepared, updated)
     return _planes_response(prepared, updated, None)
 
 
@@ -266,6 +282,7 @@ async def split_wall(request: Request, session_id: str, body: TapPoint) -> dict[
     remaining = [plane for plane in prepared.planes if plane.plane_id != target.plane_id]
     updated = order_left_to_right((first, second, *remaining))
     require_job(request, session_id).replace_planes(updated)
+    _warm(request, session_id, prepared, updated)
     return _planes_response(prepared, updated, None)
 
 
@@ -293,6 +310,7 @@ async def merge_walls(request: Request, session_id: str, body: TapPoint) -> dict
     ]
     updated = order_left_to_right((merged, *remaining))
     require_job(request, session_id).replace_planes(updated)
+    _warm(request, session_id, prepared, updated)
     return _planes_response(prepared, updated, None)
 
 

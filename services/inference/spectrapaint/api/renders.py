@@ -35,7 +35,7 @@ from spectrapaint.api.sessions import require_photo
 from spectrapaint.catalogue import Catalogue
 from spectrapaint.execution_profile import execution_profile
 from spectrapaint.render.colour import lab_to_linear_rgb
-from spectrapaint.render.engine import estimate_light_tint, render_many
+from spectrapaint.render.engine import render_many
 from spectrapaint.segmentation.walls import WallPlane
 
 router = APIRouter(prefix="/sessions", tags=["renders"])
@@ -100,7 +100,18 @@ async def create_render(
 
     targets = _assignments(prepared, body.assignments)
 
-    light_tint = estimate_light_tint(prepared.linear) if body.mode == "realistic" else _NEUTRAL_TINT
+    # The once-per-photo work (grouped Base Colours, Light Maps, light tint) is
+    # cached per session per plane set (issue #52 review 1): the first tap with
+    # these planes pays for it, repeat taps reuse it, and a correction's new
+    # planes rebuild it once. Without this every tap re-estimated and
+    # re-derived everything (~3 s on a real photo instead of ~0.2 s).
+    registry = request.app.state.session_registry
+    preparation = registry.render_preparation(
+        session_id,
+        prepared,
+        [(plane.plane_id, plane.alpha, plane.surface) for plane, _ in targets],
+    )
+    light_tint = preparation.light_tint if body.mode == "realistic" else _NEUTRAL_TINT
 
     # Build per-plane linear targets; the maths lives in render/ (conventions §3).
     # The Lab values travel alongside, because a stored Render must say which real,
@@ -123,7 +134,9 @@ async def create_render(
         plane_targets.append((plane.alpha, target_shade))
         surfaces.append(plane.surface)
 
-    rendered = render_many(prepared.linear, plane_targets, light_tint, surfaces)
+    rendered = render_many(
+        prepared.linear, plane_targets, light_tint, surfaces, _preparation=preparation
+    )
 
     png_bytes = _encode_png(rendered)
 

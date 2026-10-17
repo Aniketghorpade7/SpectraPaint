@@ -325,11 +325,14 @@ both darker *and* less colourful. Overwrite the colour channels uniformly and ev
 at full chroma, so the wall looks flat, plasticky and stuck-on. Multiplication attenuates chroma in
 shadow automatically; the Lab shortcut cannot.
 
-**Honest caveat on the premise:** "all variation is lighting" is true for *large-scale* variation.
-Genuine reflectance defects — stains, patches, previous touch-ups — are **not** lighting, and §5
-deliberately keeps them inside the wall region. They ride through the light map and get re-tinted by
-the new shade. That is knowingly accepted, and is arguably correct behaviour anyway: a stain on a
-repainted wall would be covered, so re-tinting it is closer to truth than preserving it.
+**Stains are suppressed (issue #52, decision 1).** "All variation is lighting" holds for
+*large-scale* variation, but genuine reflectance defects — stains, patches, previous touch-ups —
+are not lighting. The repaint promises "your wall, freshly painted", so the Light Map is split
+into shading and chroma and mid-frequency luminance blotches and local chroma deviations are
+removed band-limitedly: room light, shadows, gradients and fine texture are kept, stains are not.
+No Dealer slider in V1; the strength is a named constant. Accepted cost: soft contact shadows
+(behind furniture, under a shelf) live in the same mid-frequency band and weaken somewhat;
+contact shadows at matte occluders survive via edge protection.
 
 ### The room's light colour must be added back
 
@@ -371,6 +374,13 @@ minority case degrades safely.
 
 **Open:** the blend curve, and whether the transition is visible on two similar walls landing either
 side of it.
+
+**Highlight exception (issue #52, decision 2).** Above `_HIGHLIGHT_START` only `_SUN_TINT_KEEP`
+(30%) of the chroma deviation is kept; the rest is brightness only. Sunlit patches read as the
+chosen Shade, brighter and at most slightly warm, never a different colour. A hue-preserving
+soft knee above `_HIGHLIGHT_KNEE` compresses over-bright peaks to 1.0 without shifting hue;
+`encode_srgb`'s clip stays as the last-resort guard. Clipped photo pixels (≥ `_CLIPPED_LEVEL`)
+carry no chroma: they take the local room chroma and keep their shading.
 
 ### Noise: clean the light map in proportion to how noisy it is
 
@@ -459,6 +469,9 @@ The base colour is an **RGB triple**, not a scalar. Derivation:
 0. Use **only fully-opaque pixels** of the alpha matte, eroded inward from the boundary. Partially
    covered edge pixels are contaminated by whatever lies behind the wall and would pollute the
    estimate.
+0b. Keep **only hue-agreeing pixels** (issue #52): tint `rgb/luma` within `_BASE_TINT_TOLERANCE`
+    of the wall's median tint, falling back to all pixels below `_BASE_MIN_AGREEING`. Sun-coloured
+    pixels cannot enter the percentile band while sun covers less than half the wall.
 1. Rank the group's wall pixels by **luminance**.
 2. Take pixels around the **~90th percentile** — "the wall in full light". Skipping the top few
    percent avoids being fooled by blown-out spots and shiny reflections.

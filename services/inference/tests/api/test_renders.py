@@ -11,6 +11,7 @@ tests/api/test_walls.py.
 """
 
 import io
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -321,3 +322,56 @@ def test_an_accent_wall_leaves_no_dark_seam_between_the_planes(
         f"a pixel across the join is darker than both walls ({min(across):.1f} against "
         f"{floor:.1f}) — the planes are compositing twice"
     )
+
+
+def test_a_repeat_tap_returns_the_same_bytes_from_the_cached_preparation(
+    client: TestClient,
+) -> None:
+    """Review 1, end to end: the second identical tap reuses the session cache.
+
+    Two taps with the same assignments must return byte-identical PNGs — the
+    cached Light Map path renders deterministically — which fails if a tap
+    ever recomputes (or skips) the preparation. The timing proof lives in
+    tests/render/test_issue52.py; this pins the contract-level behaviour.
+    """
+
+    session_id = upload(client, png_of(NEUTRAL_ROOM_SRGB))
+
+    first = render(client, session_id, shade_code="PS-1001")
+    second = render(client, session_id, shade_code="PS-1001")
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.content == first.content
+
+
+def test_the_prepared_photo_route_starts_the_warm_up_before_any_tap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #52 review, end to end: the request the UI makes the moment preparation is done warms
+    the render work, so the first Shade tap neither repeats it nor is the one that pays for it."""
+    from spectrapaint.render import engine
+
+    builds: list[int] = []
+    real = engine.render_preparation_of
+
+    def counting(*args, **kwargs):
+        builds.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "render_preparation_of", counting)
+    session_id = upload(client, png_of(NEUTRAL_ROOM_SRGB))
+
+    assert client.get(f"/sessions/{session_id}/photo/png", headers=auth()).status_code == 200
+    # Before any tap: the warm-up runs by itself, in the background.
+    deadline = time.monotonic() + 10
+    while not builds and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert builds, "no tap has been made, yet nothing started the once-per-photo work"
+
+    first = render(client, session_id, shade_code="PS-1001")
+    second = render(client, session_id, shade_code="PS-1002")
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert len(builds) == 1, "both taps should have used the one warm-up, not made their own"
