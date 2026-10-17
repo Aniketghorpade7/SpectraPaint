@@ -17,7 +17,10 @@ clears memory only; the stored Consultation, its photo and every Render stay.
 
 import io
 import json
+import logging
+import threading
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import Future
 from typing import Annotated
 from uuid import uuid4
 
@@ -54,6 +57,9 @@ _MESSAGE_UNSUPPORTED_IMAGE = (
 # Derived from the limit itself, so retuning the cap cannot leave the message saying otherwise.
 _MESSAGE_PHOTO_TOO_LARGE = f"That photo is too large. Please choose one under {MAX_UPLOAD_MB} MB."
 _MESSAGE_SESSION_NOT_FOUND = "This consultation is no longer available. Please start a new one."
+
+
+logger = logging.getLogger(__name__)
 
 
 class SessionRegistry:
@@ -95,7 +101,13 @@ class SessionRegistry:
         # review 1). Estimating bases and deriving Light Maps costs seconds on a real
         # photo; a Shade tap must never pay it again. A correction replaces the planes,
         # so the fingerprint stops matching and the next tap rebuilds exactly once.
-        self._render_preps: dict[str, tuple[tuple, object]] = {}
+        # Each entry is a Future, so a request that arrives while the background warm-up
+        # (``warm_render_preparation``) is still running waits for it instead of repeating it.
+        self._render_preps: dict[str, tuple[tuple, Future]] = {}
+        self._render_prep_lock = threading.Lock()
+        # Which plane set a warm-up was last started for, by the identity of its mattes, so asking
+        # again for the same planes (every photo/planes request does) costs nothing.
+        self._warmed: dict[str, tuple[int, ...]] = {}
 
     def create(self, contents: bytes) -> str:
         session_id = uuid4().hex
@@ -140,6 +152,32 @@ class SessionRegistry:
             self._photo_pngs[session_id] = encoded
         return encoded
 
+    @staticmethod
+    def _fingerprint(planes: list[tuple[str, np.ndarray, str]]) -> tuple:
+        return tuple(
+            (plane_id, surface, alpha.shape, hash(np.ascontiguousarray(alpha).tobytes()))
+            for plane_id, alpha, surface in planes
+        )
+
+    @staticmethod
+    def _build_preparation(
+        future: Future, photo: PreparedPhoto, planes: list[tuple[str, np.ndarray, str]]
+    ) -> None:
+        """Do the once-per-photo work and settle ``future`` with it (or with the failure)."""
+        from spectrapaint.render.engine import render_preparation_of
+
+        try:
+            future.set_result(
+                render_preparation_of(
+                    photo.linear,
+                    [np.asarray(alpha) for _, alpha, _ in planes],
+                    [surface for _, _, surface in planes],
+                )
+            )
+        except BaseException as failure:
+            future.set_exception(failure)
+            raise
+
     def render_preparation(
         self,
         session_id: str,
@@ -151,27 +189,74 @@ class SessionRegistry:
         ``planes`` is ``(plane_id, alpha, surface)`` in the request's order. The
         fingerprint covers ids, surfaces, shapes and matte bytes, so a correction
         (or a different plane subset, as an Accent Wall request uses) rebuilds;
-        an identical repeat tap reuses. Returns
+        an identical repeat tap reuses — including one that arrives while the
+        background warm-up for the same planes is still running, which it waits
+        for rather than duplicating. Returns
         :class:`spectrapaint.render.engine.RenderPreparation`. Imported lazily so
         this module never depends on render/ at import time (conventions §3
         keeps the maths in render/).
         """
-        from spectrapaint.render.engine import render_preparation_of
+        fingerprint = self._fingerprint(planes)
+        with self._render_prep_lock:
+            cached = self._render_preps.get(session_id)
+            if cached is not None and cached[0] == fingerprint:
+                future = cached[1]
+                owner = False
+            else:
+                future = Future()
+                self._render_preps[session_id] = (fingerprint, future)
+                owner = True
 
-        fingerprint = tuple(
-            (plane_id, surface, alpha.shape, hash(np.ascontiguousarray(alpha).tobytes()))
-            for plane_id, alpha, surface in planes
-        )
-        cached = self._render_preps.get(session_id)
-        if cached is not None and cached[0] == fingerprint:
-            return cached[1]
-        preparation = render_preparation_of(
-            photo.linear,
-            [np.asarray(alpha) for _, alpha, _ in planes],
-            [surface for _, _, surface in planes],
-        )
-        self._render_preps[session_id] = (fingerprint, preparation)
-        return preparation
+        if owner:
+            self._build_preparation(future, photo, planes)
+            return future.result()
+
+        try:
+            return future.result()
+        except Exception:
+            # The warm-up failed; a request must not inherit that. Build it here, for real, so any
+            # fault surfaces on the request that needs it (conventions §5: no silent recovery).
+            logger.warning("the render warm-up failed; building it on the request", exc_info=True)
+            retry: Future = Future()
+            with self._render_prep_lock:
+                self._render_preps[session_id] = (fingerprint, retry)
+            self._build_preparation(retry, photo, planes)
+            return retry.result()
+
+    def warm_render_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
+        """Start the once-per-photo render work in the background, for the photo's whole plane set.
+
+        The first Shade tap used to pay it (seconds on a real photo). It is done instead while the
+        Dealer is looking at the walls that were just found — the photo and planes requests the UI
+        makes the moment preparation is done, and a correction's new planes — so that tap finds it
+        ready, or waits only for what is left of it. Idempotent per plane set; a no-op with no
+        planes. A request for a *different* plane set (an Accent Wall's subset) still rebuilds, as
+        grouped Base Colours depend on the set.
+        """
+        if not photo.planes:
+            return
+        marker = tuple(id(plane.alpha) for plane in photo.planes)
+        with self._render_prep_lock:
+            if self._warmed.get(session_id) == marker:
+                return
+            self._warmed[session_id] = marker
+
+        planes = [(plane.plane_id, plane.alpha, plane.surface) for plane in photo.planes]
+        fingerprint = self._fingerprint(planes)
+        with self._render_prep_lock:
+            cached = self._render_preps.get(session_id)
+            if cached is not None and cached[0] == fingerprint:
+                return
+            future: Future = Future()
+            self._render_preps[session_id] = (fingerprint, future)
+
+        def run() -> None:
+            try:
+                self._build_preparation(future, photo, planes)
+            except Exception:
+                logger.warning("the render warm-up failed", exc_info=True)
+
+        threading.Thread(target=run, name="spectrapaint-render-warmup", daemon=True).start()
 
     def persist_preparation(self, session_id: str, photo: PreparedPhoto) -> None:
         """Store what preparation produced, once per consultation.
@@ -213,6 +298,7 @@ class SessionRegistry:
         self._originals.pop(session_id, None)
         self._photo_pngs.pop(session_id, None)
         self._render_preps.pop(session_id, None)
+        self._warmed.pop(session_id, None)
         return True
 
 
@@ -348,6 +434,9 @@ async def session_photo(request: Request, session_id: str) -> Response:
     """
 
     photo = await require_photo(request, session_id)
+    # The UI asks for this the moment preparation is done: the first Shade tap's once-per-photo
+    # work starts here, behind the Dealer looking at the walls (issue #52 review).
+    _registry(request).warm_render_preparation(session_id, photo)
     return Response(
         content=_registry(request).photo_png(session_id, photo),
         media_type="image/png",

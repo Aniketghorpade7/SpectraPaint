@@ -2045,3 +2045,22 @@ between. Measured effect small, as predicted.
 
 **Measured:** fast lane 287 + new (engine 4, issue52 2, fixtures 4, api 2);
 gate budgets re-recorded above; slow lane re-run on push.
+
+**Second review of #62 (2026-10-17).**
+
+- **The first Shade tap no longer pays the once-per-photo work.** With the session cache, repeat taps
+  cost ~140 ms on a 1280×963 photo (700 ms before #52, which recomputed on every tap), but the first
+  tap built the preparation on the request: 3.4 s there, 2 s on `blue-wall-sunlit`. It now starts in
+  the background (`SessionRegistry.warm_render_preparation`) when the Dealer is looking at the walls
+  that were just found — the prepared-photo and planes requests the UI makes the moment preparation
+  is done, and after every correction, for that correction's planes. Cached entries are Futures, so
+  a tap arriving mid-warm-up waits for what is left instead of repeating it, a failed warm-up is
+  retried on the request that needs it rather than poisoning every later tap, and asking again for
+  the same planes costs nothing. An Accent Wall request for a *subset* still builds its own, since
+  grouped Base Colours depend on the set; that case, and the per-tap matte hash the cache key
+  computes, were left alone as small.
+- **The gate baseline is honest about where it was measured.** It was re-recorded on a Windows dev PC
+  (108.8 / 242.0 ms) and labelled as if it were the runner's. The same commit measured on the CI
+  runner 103.7 / 101.5 ms and 229.1 / 218.2 ms, within 10% below, so the budgets hold there; the
+  file now says so rather than leaving a reader to wonder. The new tap number is worst-case on
+  random data (almost every pixel over the knee), which is why it reads 3× the old one.

@@ -1,11 +1,11 @@
 {
   "recorded": "2026-10-14",
-  "hardware": "Windows 11 dealer-class dev PC (issue-52 branch; CI ubuntu-latest is the arbiter — see method)",
+  "hardware": "Windows 11 dealer-class dev PC; corroborated on GitHub Actions ubuntu-latest, 2-core / 7 GB (see method)",
   "numpy": "2.5.4",
   "python": "3.12.14",
   "execution_profile": "cpu-better",
   "threshold_multiplier": 2.0,
-  "method": "Median of three consecutive runs of the same commit. Each figure is itself a median of nine timed repeats after two warm-ups. The 2026-08-17 baseline was recorded on the standard private-repo runner; this re-record was taken on a Windows dev machine because the tap definition changed (see why_tap_includes_rolloff), so CI passing against these budgets is the confirmation that the new numbers hold on the reference hardware.",
+  "method": "Median of three consecutive runs of the same commit. Each figure is itself a median of nine timed repeats after two warm-ups. The 2026-08-17 baseline was recorded on the standard private-repo runner; this re-record was taken on a Windows dev machine because the tap definition changed (see why_tap_includes_rolloff). The same commit measured on the ubuntu-latest runner in CI: 103.7 and 101.5 ms at 0.9 MP (baseline 108.8), 229.1 and 218.2 ms at 2 MP (baseline 242.0) — within 10 percent below the recorded figures, so the budgets hold on the reference hardware and the baseline is not looser there than it reads. Re-record from the runner (the gate prints its measurements when it fails) the next time the tap path changes.",
   "why_this_threshold": "Twice the baseline. Run-to-run noise is under 25 percent, so 2x does not fire by accident, and the regression that actually matters -- a 3x on the per-shade render, which would make the product unusable while every functional test stayed green -- trips it decisively. See docs/design-decisions.md sections 9b and 13.",
   "why_these_resolutions": "The preview resolutions are what the Dealer browses shades at; full resolution is a once-per-save cost and is not on the interactive path. See RESULTS.md.",
   "why_tap_includes_rolloff": "Issue #52 review 1: the production tap is multiply-composite-rolloff-encode on the session-cached Light Map, but the gate timed multiply-composite-encode only, so the highlight knee was invisible to it. The gate now times the full tap including the rolloff (worst case on random data, where most pixels exceed the knee). The pre-#52 budgets (34.0/70.8 ms) are superseded, not tightened: same 2.0x multiplier on the new definition.",

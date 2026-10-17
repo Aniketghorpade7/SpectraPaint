@@ -404,3 +404,129 @@ def test_the_render_preparation_is_cached_per_session_per_plane_set() -> None:
     live_first = registry.render_preparation(live, photo, [("wall-1", alpha, "wall")])
     assert registry.delete(live) is True
     assert registry.render_preparation(live, photo, [("wall-1", alpha, "wall")]) is not live_first
+
+
+def _warm_fixture():
+    """A registry, a one-plane photo and its plane list, for the warm-up tests below."""
+    import numpy as np
+
+    from spectrapaint.api.preparation import PreparedPhoto
+    from spectrapaint.segmentation.walls import WallPlane
+
+    alpha = np.ones((24, 32, 1), dtype=np.float32)
+    photo = PreparedPhoto(
+        linear=np.full((24, 32, 3), 0.5, dtype=np.float32),
+        srgb=np.full((24, 32, 3), 128, dtype=np.uint8),
+        planes=(WallPlane(plane_id="wall-1", alpha=alpha),),
+        note=None,
+    )
+    return sessions.SessionRegistry(lambda contents: []), photo, [("wall-1", alpha, "wall")]
+
+
+def _count_builds(monkeypatch: pytest.MonkeyPatch, gate=None) -> list[int]:
+    """Count (and optionally hold) every once-per-photo build the render engine is asked for."""
+    from spectrapaint.render import engine
+
+    builds: list[int] = []
+    real = engine.render_preparation_of
+
+    def counting(*args, **kwargs):
+        builds.append(1)
+        if gate is not None:
+            gate.wait(timeout=10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "render_preparation_of", counting)
+    return builds
+
+
+def test_a_warmed_preparation_is_what_the_first_tap_gets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #52 review: the once-per-photo work starts before the first Shade tap, and is reused.
+
+    One build in total — the warm-up's — and the tap's request returns the very object it made.
+    """
+    registry, photo, planes = _warm_fixture()
+    builds = _count_builds(monkeypatch)
+
+    registry.warm_render_preparation("s1", photo)
+    first = registry.render_preparation("s1", photo, planes)
+    second = registry.render_preparation("s1", photo, planes)
+
+    assert second is first
+    assert len(builds) == 1
+
+
+def test_a_tap_that_arrives_mid_warm_up_waits_for_it_instead_of_repeating_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    registry, photo, planes = _warm_fixture()
+    gate = threading.Event()
+    builds = _count_builds(monkeypatch, gate)
+
+    registry.warm_render_preparation("s1", photo)
+    results: list[object] = []
+    tap = threading.Thread(
+        target=lambda: results.append(registry.render_preparation("s1", photo, planes))
+    )
+    tap.start()
+    tap.join(timeout=0.3)
+    assert tap.is_alive(), "the tap should be waiting for the warm-up, not building its own"
+
+    gate.set()
+    tap.join(timeout=10)
+    assert len(results) == 1
+    assert len(builds) == 1
+
+
+def test_warming_the_same_planes_again_is_free_and_new_planes_warm_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import numpy as np
+
+    from spectrapaint.segmentation.walls import WallPlane
+
+    registry, photo, planes = _warm_fixture()
+    builds = _count_builds(monkeypatch)
+
+    registry.warm_render_preparation("s1", photo)
+    registry.render_preparation("s1", photo, planes)
+    registry.warm_render_preparation("s1", photo)  # every photo/planes request does this
+    registry.render_preparation("s1", photo, planes)
+    assert len(builds) == 1
+
+    # A correction's new matte warms again, once.
+    from dataclasses import replace
+
+    moved = planes[0][1].copy()
+    moved[0, 0, 0] = 0.0
+    corrected = replace(photo, planes=(WallPlane(plane_id="wall-1", alpha=np.asarray(moved)),))
+    registry.warm_render_preparation("s1", corrected)
+    registry.render_preparation("s1", corrected, [("wall-1", moved, "wall")])
+    assert len(builds) == 2
+
+
+def test_a_failed_warm_up_is_retried_on_the_request_that_needs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A warm-up that blew up must not make every later tap fail with its stale error."""
+    from spectrapaint.render import engine
+
+    registry, photo, planes = _warm_fixture()
+    real = engine.render_preparation_of
+    attempts: list[int] = []
+
+    def flaky(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("the warm-up's own failure")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "render_preparation_of", flaky)
+
+    registry.warm_render_preparation("s1", photo)
+    preparation = registry.render_preparation("s1", photo, planes)
+
+    assert preparation is not None
+    assert len(attempts) == 2
